@@ -4,7 +4,6 @@ import org.example.email.ImapAppendService;
 import org.example.kalkulationsprogramm.domain.EmailSignature;
 import org.example.kalkulationsprogramm.domain.OooReplyLog;
 import org.example.kalkulationsprogramm.domain.OutOfOfficeSchedule;
-import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.example.kalkulationsprogramm.repository.OooReplyLogRepository;
 import org.example.kalkulationsprogramm.repository.OutOfOfficeScheduleRepository;
 import org.example.kalkulationsprogramm.service.mail.HtmlMailSender;
@@ -20,6 +19,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -30,7 +30,6 @@ class OutOfOfficeResponderTest {
     private HtmlMailSender mailSender;
     private SystemSettingsService systemSettingsService;
     private ImapAppendService imapAppendService;
-    private KundeRepository kundeRepository;
     private OooReplyLogRepository replyLogRepository;
     private OutOfOfficeResponder responder;
 
@@ -46,15 +45,13 @@ class OutOfOfficeResponderTest {
         mailSender = mock(HtmlMailSender.class);
         systemSettingsService = mock(SystemSettingsService.class);
         imapAppendService = mock(ImapAppendService.class);
-        kundeRepository = mock(KundeRepository.class);
         replyLogRepository = mock(OooReplyLogRepository.class);
         when(systemSettingsService.getSmtpUsername()).thenReturn("info@example.com");
-        when(kundeRepository.existsByKundenEmail(anyString())).thenReturn(true);
         when(replyLogRepository.existsByScheduleIdAndSenderAddressIgnoreCase(anyLong(), anyString()))
                 .thenReturn(false);
 
         responder = new OutOfOfficeResponder(repository, emailSignatureService, mailSender,
-                systemSettingsService, imapAppendService, kundeRepository, replyLogRepository);
+                systemSettingsService, imapAppendService, replyLogRepository);
     }
 
     private OutOfOfficeSchedule activeSchedule() {
@@ -115,7 +112,6 @@ class OutOfOfficeResponderTest {
 
         verifyNoInteractions(mailSender);
         verifyNoInteractions(repository);
-        verifyNoInteractions(kundeRepository);
     }
 
     @Test
@@ -129,13 +125,16 @@ class OutOfOfficeResponderTest {
     }
 
     @Test
-    void skipsWhenSenderIsNotKunde() {
-        when(kundeRepository.existsByKundenEmail(anyString())).thenReturn(false);
+    void sendsAutoReplyEvenForUnknownExternalSender() throws Exception {
+        // Auto-Reply geht an alle Absender, nicht nur an bekannte Kunden.
+        OutOfOfficeSchedule schedule = activeSchedule();
+        when(repository.findFirstByActiveTrueAndStartAtLessThanEqualAndEndAtGreaterThanEqualOrderByStartAtDesc(any(), any()))
+                .thenReturn(Optional.of(schedule));
 
         responder.handleIncomingEmail(incoming("fremder@unbekannt.de", "Hallo"));
 
-        verifyNoInteractions(mailSender);
-        verifyNoInteractions(repository);
+        verify(mailSender).send(eq("info@example.com"), eq("fremder@unbekannt.de"),
+                anyString(), anyString(), anyMap());
     }
 
     @Test

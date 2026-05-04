@@ -7,7 +7,6 @@ import org.example.kalkulationsprogramm.domain.EmailSignature;
 import org.example.kalkulationsprogramm.domain.OooReplyLog;
 import org.example.kalkulationsprogramm.domain.OutOfOfficeSchedule;
 import org.example.email.ImapAppendService;
-import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.example.kalkulationsprogramm.repository.OooReplyLogRepository;
 import org.example.kalkulationsprogramm.repository.OutOfOfficeScheduleRepository;
 import org.example.kalkulationsprogramm.util.EmailHtmlSanitizer;
@@ -46,7 +45,6 @@ public class OutOfOfficeResponder {
     private final HtmlMailSender mailSender;
     private final SystemSettingsService systemSettingsService;
     private final ImapAppendService imapAppendService;
-    private final KundeRepository kundeRepository;
     private final OooReplyLogRepository replyLogRepository;
 
     /**
@@ -67,13 +65,15 @@ public class OutOfOfficeResponder {
      * Versendet (falls zutreffend) eine automatische Abwesenheitsantwort.
      * Trigger-Bedingungen:
      * <ul>
-     *   <li>Absender ist ein Kunde (über {@link KundeRepository}).</li>
      *   <li>E-Mail ist NICHT als Spam oder Newsletter klassifiziert.</li>
-     *   <li>E-Mail ist KEINE Auto-Reply (Auto-Submitted/Precedence/List-Id).</li>
+     *   <li>E-Mail ist KEINE Auto-Reply (Auto-Submitted/Precedence/List-Id) und
+     *       der Absender ist keine System-/Bounce-/Test-Adresse (Loop-Schutz).</li>
      *   <li>Es existiert ein aktiver Abwesenheitsplan, dessen Datum die
      *       <em>Sendezeit</em> der Mail einschließt (TZ Europe/Berlin).</li>
      *   <li>Innerhalb dieses Plans wurde an diesen Absender noch nicht geantwortet.</li>
      * </ul>
+     * Es gibt KEINE Beschränkung auf bekannte Kunden — die Auto-Reply geht an
+     * jeden externen Absender, sofern er die Loop-Schutz-Filter passiert.
      */
     public void handleIncomingEmail(IncomingMail incoming) {
         if (incoming == null || !StringUtils.hasText(incoming.fromAddress())) {
@@ -95,9 +95,6 @@ public class OutOfOfficeResponder {
         }
         String defaultFromAddress = systemSettingsService.getSmtpUsername();
         if (StringUtils.hasText(defaultFromAddress) && sender.equalsIgnoreCase(defaultFromAddress)) {
-            return;
-        }
-        if (!kundeRepository.existsByKundenEmail(sender)) {
             return;
         }
 

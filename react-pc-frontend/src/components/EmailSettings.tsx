@@ -282,7 +282,10 @@ export default function EmailSettings() {
                 subject: editingOoo.subject || 'Automatische Antwort: {{subject}}',
                 message: editingOoo.message || '',
                 signatureId: editingOoo.signatureId || null,
-                active: false // Always inactive manually - auto activates based on date
+                // active=true heisst "Eintrag scharf geschaltet". Ob aktuell geantwortet wird,
+                // entscheidet zusaetzlich der Datums-Filter im OutOfOfficeResponder. Abgelaufene
+                // Eintraege werden vom taeglichen deactivateExpiredSchedules-Job auf false gesetzt.
+                active: true
             };
 
             const res = await fetch('/api/email/outofoffice', {
