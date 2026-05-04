@@ -3131,6 +3131,25 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
 
 // ==================== MAIN COMPONENT ====================
 
+// Geräteübergreifender "Zuletzt aufgerufen"-Stempel via Backend.
+// Server liefert eine Map { entityId: epochMillis } und wird per POST aktualisiert.
+async function fetchProjektLastAccessed(): Promise<Record<string, number>> {
+    try {
+        const res = await fetch('/api/last-accessed/PROJEKT');
+        if (!res.ok) return {};
+        const data = await res.json();
+        return data && typeof data === 'object' ? data : {};
+    } catch {
+        return {};
+    }
+}
+
+function trackProjektAccess(id: number) {
+    fetch(`/api/last-accessed/PROJEKT/${id}`, { method: 'POST' }).catch(() => {
+        // fire-and-forget: Sortierung beim nächsten Reload bleibt einfach unverändert
+    });
+}
+
 export default function ProjektEditor() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
@@ -3161,14 +3180,19 @@ export default function ProjektEditor() {
             if (filters.status === 'bezahlt') params.set("bezahlt", "true");
             if (filters.status === 'offen') params.set("bezahlt", "false");
 
-            const res = await fetch(`/api/projekte?${params.toString()}`);
+            const [res, lastAccessed] = await Promise.all([
+                fetch(`/api/projekte?${params.toString()}`),
+                fetchProjektLastAccessed(),
+            ]);
             if (!res.ok) throw new Error("Fehler beim Laden");
             const data = await res.json();
 
-            // Projekte sortieren: offene (nicht abgeschlossene) zuerst
+            // Projekte sortieren: zuletzt aufgerufene zuerst (Stack), dann offene vor abgeschlossenen
             const sortedProjekte = Array.isArray(data.projekte) ? data.projekte : [];
             sortedProjekte.sort((a: Projekt, b: Projekt) => {
-                // Offene (abgeschlossen=false) zuerst
+                const ta = lastAccessed[String(a.id)] || 0;
+                const tb = lastAccessed[String(b.id)] || 0;
+                if (ta !== tb) return tb - ta;
                 if (a.abgeschlossen === b.abgeschlossen) return 0;
                 return a.abgeschlossen ? 1 : -1;
             });
@@ -3210,6 +3234,7 @@ export default function ProjektEditor() {
                     const res = await fetch(`/api/projekte/${projektId}`);
                     if (!res.ok) throw new Error('Fehler beim Laden der Details');
                     const data: ProjektDetail = await res.json();
+                    trackProjektAccess(data.id);
                     setSelectedProjekt(data);
                     setViewMode('detail');
                 } catch (err) {
@@ -3238,6 +3263,7 @@ export default function ProjektEditor() {
     };
 
     const handleDetail = async (projekt: Projekt) => {
+        trackProjektAccess(projekt.id);
         try {
             setLoading(true);
             const res = await fetch(`/api/projekte/${projekt.id}`);

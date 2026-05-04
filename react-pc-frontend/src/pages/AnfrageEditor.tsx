@@ -1591,6 +1591,25 @@ const AnfrageDetailView: React.FC<AnfrageDetailViewProps> = ({ anfrage, onBack, 
 };
 
 // ==================== MAIN COMPONENT ====================
+
+// Geräteübergreifender "Zuletzt aufgerufen"-Stempel via Backend.
+async function fetchAnfrageLastAccessed(): Promise<Record<string, number>> {
+    try {
+        const res = await fetch('/api/last-accessed/ANFRAGE');
+        if (!res.ok) return {};
+        const data = await res.json();
+        return data && typeof data === 'object' ? data : {};
+    } catch {
+        return {};
+    }
+}
+
+function trackAnfrageAccess(id: number) {
+    fetch(`/api/last-accessed/ANFRAGE/${id}`, { method: 'POST' }).catch(() => {
+        // fire-and-forget: Sortierung beim nächsten Reload bleibt einfach unverändert
+    });
+}
+
 export default function AnfrageEditor() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
@@ -1623,6 +1642,7 @@ export default function AnfrageEditor() {
                     const anfrageData = await anfrageRes.json();
                     const emails = emailsRes.ok ? await emailsRes.json() : [];
                     const dokumente = dokumenteRes.ok ? await dokumenteRes.json() : [];
+                    trackAnfrageAccess(anfrageData.id ?? anfrageId);
                     setSelectedAnfrage({
                         ...anfrageData,
                         emails: Array.isArray(emails) ? emails : [],
@@ -1668,16 +1688,27 @@ export default function AnfrageEditor() {
             }
             if (filters.jahr) params.set("jahr", filters.jahr);
 
-            const res = await fetch(`/api/anfragen?${params.toString()}`);
+            const [res, lastAccessed] = await Promise.all([
+                fetch(`/api/anfragen?${params.toString()}`),
+                fetchAnfrageLastAccessed(),
+            ]);
             if (!res.ok) throw new Error("Fehler beim Laden");
             const data = await res.json();
 
             // API gibt Array oder Objekt mit gesamt zurück
+            const sortByLastAccessed = (a: Anfrage, b: Anfrage) => {
+                const ta = lastAccessed[String(a.id)] || 0;
+                const tb = lastAccessed[String(b.id)] || 0;
+                return tb - ta; // zuletzt aufgerufene zuerst, sonst stabil
+            };
             if (Array.isArray(data)) {
-                setAnfragen(data);
-                setTotal(data.length);
+                const list = [...data].sort(sortByLastAccessed);
+                setAnfragen(list);
+                setTotal(list.length);
             } else {
-                setAnfragen(Array.isArray(data.anfragen) ? data.anfragen : []);
+                const list = Array.isArray(data.anfragen) ? [...data.anfragen] : [];
+                list.sort(sortByLastAccessed);
+                setAnfragen(list);
                 setTotal(typeof data.gesamt === "number" ? data.gesamt : 0);
             }
         } catch (err) {
@@ -1782,6 +1813,7 @@ export default function AnfrageEditor() {
     };
 
     const handleDetail = (anfrage: Anfrage) => {
+        trackAnfrageAccess(anfrage.id);
         loadDetails(anfrage.id);
     };
 
