@@ -227,7 +227,13 @@ public class OutOfOfficeResponder {
                 .filter(StringUtils::hasText)
                 .orElse("Ich bin vom {{start}} bis {{ende}} nicht erreichbar.");
         String message = applyTokens(template, schedule, originalSubject);
-        String htmlBody = EmailHtmlSanitizer.plainTextToHtml(message);
+        // Body-Template kann seit dem Rich-Text-Editor in EmailSettings echtes HTML
+        // sein (Absaetze, Listen, eingebettete Signatur-Tabellen). Aeltere Eintraege
+        // sind reiner Plaintext. Heuristisch unterscheiden, damit Plaintext nicht
+        // als <pre>-escaped landet und HTML nicht doppelt-escaped beim Empfaenger.
+        String htmlBody = looksLikeHtml(message)
+                ? EmailHtmlSanitizer.sanitizeDetailHtml(message)
+                : EmailHtmlSanitizer.plainTextToHtml(message);
         if (signature != null) {
             String signatureHtml = emailSignatureService.renderSignatureHtmlForEmail(signature, null);
             if (StringUtils.hasText(signatureHtml)) {
@@ -235,6 +241,14 @@ public class OutOfOfficeResponder {
             }
         }
         return htmlBody;
+    }
+
+    private static boolean looksLikeHtml(String value) {
+        if (value == null) {
+            return false;
+        }
+        // Sehr simple Heuristik: irgendein <tag> oder &nbsp;-aehnliche Entity.
+        return value.matches("(?is).*<\\s*[a-zA-Z][^>]*>.*");
     }
 
     private String applyTokens(String template, OutOfOfficeSchedule schedule, String originalSubject) {
