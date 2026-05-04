@@ -50,6 +50,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -179,7 +181,15 @@ public class AusgangsGeschaeftsDokumentService {
                     dokument.setHtmlInhalt(vorgaenger.getHtmlInhalt());
                 }
                 if (dto.getPositionenJson() == null && vorgaenger.getPositionenJson() != null) {
-                    dokument.setPositionenJson(vorgaenger.getPositionenJson());
+                    String inheritedJson = vorgaenger.getPositionenJson();
+                    // Beim Umwandeln (z.B. Angebot -> Auftragsbestaetigung) die alten
+                    // Standard-Textbausteine (VOR/NACH) entfernen. Das Frontend laedt
+                    // beim ersten Oeffnen automatisch die fuer den neuen Typ
+                    // konfigurierten Textbausteine. Leistungen und Mengen bleiben.
+                    if (vorgaenger.getTyp() != dokument.getTyp()) {
+                        inheritedJson = entferneStandardTextbausteine(inheritedJson);
+                    }
+                    dokument.setPositionenJson(inheritedJson);
                 }
                 // Kunde vom Vorgänger übernehmen falls nicht gesetzt
                 if (dokument.getKunde() == null && vorgaenger.getKunde() != null) {
@@ -971,6 +981,63 @@ public class AusgangsGeschaeftsDokumentService {
         }
 
         return summe;
+    }
+
+    /**
+     * Entfernt alle TEXT-Bloecke mit gesetzter "textbausteinRolle" (VOR/NACH) aus einem
+     * positionenJson. Wird beim Umwandeln eines Dokuments (z.B. Angebot -> AB) verwendet,
+     * damit das Frontend die fuer den neuen Typ konfigurierten Standard-Textbausteine
+     * frisch generieren kann. Leistungen, Section-Header, Subtotals und manuell
+     * hinzugefuegte Textbausteine (ohne Rolle) bleiben unveraendert erhalten.
+     */
+    private String entferneStandardTextbausteine(String positionenJson) {
+        if (positionenJson == null || positionenJson.isBlank()) return positionenJson;
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(positionenJson);
+
+            ArrayNode blocksNode;
+            ObjectNode rootObject = null;
+
+            if (root.isArray()) {
+                blocksNode = (ArrayNode) root;
+            } else if (root.isObject() && root.has("blocks") && root.get("blocks").isArray()) {
+                rootObject = (ObjectNode) root;
+                blocksNode = (ArrayNode) root.get("blocks");
+            } else {
+                return positionenJson;
+            }
+
+            ArrayNode gefiltert = mapper.createArrayNode();
+            for (JsonNode block : blocksNode) {
+                if (istStandardTextbaustein(block)) continue;
+                // Auch Kinder von SECTION_HEADER bereinigen, falls dort Textbausteine liegen
+                if (block.isObject() && block.has("children") && block.get("children").isArray()) {
+                    ArrayNode kinder = (ArrayNode) block.get("children");
+                    ArrayNode kinderGefiltert = mapper.createArrayNode();
+                    for (JsonNode kind : kinder) {
+                        if (!istStandardTextbaustein(kind)) kinderGefiltert.add(kind);
+                    }
+                    ((ObjectNode) block).set("children", kinderGefiltert);
+                }
+                gefiltert.add(block);
+            }
+
+            if (rootObject != null) {
+                rootObject.set("blocks", gefiltert);
+                return mapper.writeValueAsString(rootObject);
+            }
+            return mapper.writeValueAsString(gefiltert);
+        } catch (Exception e) {
+            log.warn("Fehler beim Entfernen der Standard-Textbausteine aus positionenJson: {}", e.getMessage());
+            return positionenJson;
+        }
+    }
+
+    private boolean istStandardTextbaustein(JsonNode block) {
+        if (block == null || !block.isObject()) return false;
+        JsonNode rolle = block.get("textbausteinRolle");
+        return rolle != null && !rolle.isNull() && !rolle.asText().isBlank();
     }
 
     /**

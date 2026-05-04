@@ -371,7 +371,15 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     }
                 }
 
-                setBlocks(current => [...current, ...mappedBlocks]);
+                setBlocks(current => {
+                    const firstNachIdx = current.findIndex(b => b.textbausteinRolle === 'NACH');
+                    if (firstNachIdx === -1) return [...current, ...mappedBlocks];
+                    return [
+                        ...current.slice(0, firstNachIdx),
+                        ...mappedBlocks,
+                        ...current.slice(firstNachIdx),
+                    ];
+                });
                 const sectionCount = mappedBlocks.filter(b => b.type === 'SECTION_HEADER').length;
                 showImportToast('success',
                     'GAEB Import erfolgreich',
@@ -673,15 +681,15 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     }, []);
 
     // --- Auto-Load Standard-Textbausteine je Dokumenttyp ---
-    // Beim Anlegen eines neuen Dokuments oder beim Wechsel des Dokumenttyps werden
-    // die in der Vorlage konfigurierten Vor-/Nachtexte automatisch als TEXT-Bloecke
-    // vor bzw. nach den Leistungen eingefuegt. Manuell hinzugefuegte Texte
-    // (textbausteinRolle == undefined) bleiben dabei erhalten.
+    // Beim Anlegen eines neuen Dokuments oder beim Umwandeln (z.B. Angebot -> AB)
+    // werden die in der Vorlage konfigurierten Vor-/Nachtexte automatisch als TEXT-Bloecke
+    // vor bzw. nach den Leistungen eingefuegt bzw. ausgetauscht. Manuell hinzugefuegte
+    // Texte (textbausteinRolle == undefined) bleiben dabei erhalten.
     const lastAppliedDefaultsTypRef = useRef<string | null>(null);
     useEffect(() => {
         if (loading) return;
-        if (dokumentId) return; // Bestehendes Dokument: keine Auto-Defaults
         if (!dokumentTyp) return;
+        if (dokument?.gebucht) return;
 
         // Warten, bis der Kontext (Kunde / Projekt) geladen ist, damit
         // {{KUNDENNAME}}, {{BAUVORHABEN}} etc. korrekt aufgeloest werden.
@@ -692,6 +700,30 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         if (!kontextBereit && !!(projektId || anfrageId)) return;
 
         if (lastAppliedDefaultsTypRef.current === dokumentTyp) return;
+
+        // Bestehendes Dokument: nur ersetzen, wenn die vorhandenen Default-Textbausteine
+        // explizit zu einem anderen Dokumenttyp gehoeren (Umwandlungs-Fall) oder gar
+        // nicht vorhanden sind und das Dokument aus einem Vorgaenger entstanden ist
+        // (Backend hat beim Umwandeln die alten Textbausteine entfernt).
+        // Legacy-Bausteine ohne Typ-Marker bleiben unangetastet, da sie user-editiert
+        // sein koennten.
+        if (dokumentId) {
+            const vorOrNach = blocks.filter(b => b.textbausteinRolle != null);
+            const hasMatchingTyp = vorOrNach.some(b => b.textbausteinDokumenttyp === dokumentTyp);
+            if (hasMatchingTyp) return;
+
+            if (vorOrNach.length === 0) {
+                // Nur fuer umgewandelte Dokumente nachgenerieren.
+                if (!dokument?.vorgaengerId) return;
+            } else {
+                const hasStaleTyp = vorOrNach.some(
+                    b => b.textbausteinDokumenttyp != null && b.textbausteinDokumenttyp !== dokumentTyp,
+                );
+                // Nur bei explizit anderem Typ-Marker ersetzen.
+                if (!hasStaleTyp) return;
+            }
+        }
+
         const typLabel = AUSGANGS_GESCHAEFTSDOKUMENT_TYPEN.find(t => t.value === dokumentTyp)?.label || dokumentTyp;
 
         let aborted = false;
@@ -725,6 +757,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         fett: false,
                         textbausteinRolle: rolle,
                         textbausteinId: item.id,
+                        textbausteinDokumenttyp: dokumentTyp,
                     };
                 };
 
@@ -732,11 +765,11 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                 const nachBlocks = data.nachtexte.map(n => buildBlock(n, 'NACH'));
 
                 lastAppliedDefaultsTypRef.current = dokumentTyp;
-                if (vorBlocks.length === 0 && nachBlocks.length === 0) return;
 
                 setBlocks(prev => {
                     // Vorhandene Default-Bloecke entfernen, manuell eingefuegte Texte bleiben
                     const cleaned = prev.filter(b => b.textbausteinRolle == null);
+                    if (vorBlocks.length === 0 && nachBlocks.length === 0) return cleaned;
                     const firstLeistungIdx = cleaned.findIndex(
                         b => b.type === 'SERVICE' || b.type === 'SECTION_HEADER',
                     );
@@ -756,7 +789,10 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
             }
         })();
         return () => { aborted = true; };
-    }, [loading, dokumentId, dokumentTyp, replacePlaceholders, kontextDaten, projektId, anfrageId]);
+        // blocks bewusst NICHT in den Deps (sonst Re-Run bei jedem Tastendruck);
+        // der Closure-Wert aus dem Render nach loadDokument reicht aus.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [loading, dokumentId, dokumentTyp, replacePlaceholders, kontextDaten, projektId, anfrageId, dokument]);
 
     const syncDocumentIdInUrl = useCallback((savedDocumentId?: number) => {
         if (!savedDocumentId) return;
@@ -1082,6 +1118,22 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         });
     }, []);
 
+    // Fuegt einen neuen Block vor dem ersten NACH-Textbaustein ein,
+    // damit neue Leistungen / Section-Header / Subtotals immer zwischen
+    // Vor- und Nachtexten landen. Wenn keine Nachtexte existieren,
+    // wird der Block ans Ende angehaengt.
+    const insertBeforeNachtexte = (prev: DocBlock[], block: DocBlock): DocBlock[] => {
+        const firstNachIdx = prev.findIndex(b => b.textbausteinRolle === 'NACH');
+        if (firstNachIdx === -1) {
+            return [...prev, block];
+        }
+        return [
+            ...prev.slice(0, firstNachIdx),
+            block,
+            ...prev.slice(firstNachIdx),
+        ];
+    };
+
     // --- Block Actions ---
     const addBlock = (type: DocBlock['type'], payload?: Partial<DocBlock>) => {
         if (isLocked) return;
@@ -1121,13 +1173,13 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
             return;
         }
 
-        setBlocks(prev => [...prev, newBlock]);
+        setBlocks(prev => insertBeforeNachtexte(prev, newBlock));
     };
 
     const handleKategorieBestaetigt = async (kategorieId: number) => {
         if (!pendingLeistungInsert || !projektId) return;
         const finalBlock = { ...pendingLeistungInsert.block, kategorieId };
-        setBlocks(prev => [...prev, finalBlock]);
+        setBlocks(prev => insertBeforeNachtexte(prev, finalBlock));
         setPendingLeistungInsert(null);
         try {
             const res = await fetch(`/api/projekte/${projektId}/produktkategorien`, {
@@ -1151,7 +1203,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
 
     const handleKategorieUeberspringen = () => {
         if (!pendingLeistungInsert) return;
-        setBlocks(prev => [...prev, pendingLeistungInsert.block]);
+        setBlocks(prev => insertBeforeNachtexte(prev, pendingLeistungInsert.block));
         setPendingLeistungInsert(null);
     };
 

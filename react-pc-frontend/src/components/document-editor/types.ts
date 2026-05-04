@@ -38,6 +38,12 @@ export interface DocBlock {
     textbausteinRolle?: 'VOR' | 'NACH';
     /** ID des verwendeten Textbausteins (zur Wiedererkennung). */
     textbausteinId?: number;
+    /**
+     * Fuer welchen Dokumenttyp dieser Default-Textbaustein erzeugt wurde.
+     * Wird beim Umwandeln (z.B. Angebot -> AB) verwendet, um veraltete
+     * Standard-Textbausteine automatisch durch die des neuen Typs zu ersetzen.
+     */
+    textbausteinDokumenttyp?: AusgangsGeschaeftsDokumentTyp;
 }
 
 export interface DocumentEditorProps {

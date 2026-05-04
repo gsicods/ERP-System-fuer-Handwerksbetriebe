@@ -207,6 +207,69 @@ class AusgangsGeschaeftsDokumentServiceTest {
         }
 
         @Test
+        void entferntStandardTextbausteineBeiTypwechselUmwandlung() {
+            mockCounterForNummer();
+            AusgangsGeschaeftsDokument vorgaenger = new AusgangsGeschaeftsDokument();
+            vorgaenger.setId(101L);
+            vorgaenger.setTyp(AusgangsGeschaeftsDokumentTyp.ANGEBOT);
+            // Vorgaenger hat: Vortext (VOR), Leistung, Nachtext (NACH)
+            vorgaenger.setPositionenJson(
+                    "{\"blocks\":["
+                            + "{\"id\":\"v1\",\"type\":\"TEXT\",\"textbausteinRolle\":\"VOR\",\"content\":\"Sehr geehrter Kunde\"},"
+                            + "{\"id\":\"s1\",\"type\":\"SERVICE\",\"title\":\"Malerarbeiten\",\"quantity\":5,\"price\":100},"
+                            + "{\"id\":\"n1\",\"type\":\"TEXT\",\"textbausteinRolle\":\"NACH\",\"content\":\"Mit freundlichen Gruessen\"}"
+                            + "],\"globalRabatt\":0}");
+            when(dokumentRepository.findById(101L)).thenReturn(Optional.of(vorgaenger));
+            when(dokumentRepository.save(any())).thenAnswer(inv -> {
+                AusgangsGeschaeftsDokument d = inv.getArgument(0);
+                d.setId(2L);
+                return d;
+            });
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG);
+            dto.setVorgaengerId(101L);
+
+            AusgangsGeschaeftsDokument result = service.erstellen(dto);
+
+            // Standard-Textbausteine entfernt, Leistung mit Menge bleibt erhalten
+            assertThat(result.getPositionenJson()).doesNotContain("textbausteinRolle");
+            assertThat(result.getPositionenJson()).doesNotContain("Sehr geehrter Kunde");
+            assertThat(result.getPositionenJson()).doesNotContain("Mit freundlichen Gruessen");
+            assertThat(result.getPositionenJson()).contains("Malerarbeiten");
+            assertThat(result.getPositionenJson()).contains("\"quantity\":5");
+        }
+
+        @Test
+        void behaeltPositionenJsonBeiGleichemTypUnveraendert() {
+            mockCounterForNummer();
+            AusgangsGeschaeftsDokument vorgaenger = new AusgangsGeschaeftsDokument();
+            vorgaenger.setId(102L);
+            vorgaenger.setTyp(AusgangsGeschaeftsDokumentTyp.ABSCHLAGSRECHNUNG);
+            String urspruenglich = "{\"blocks\":["
+                    + "{\"id\":\"v1\",\"type\":\"TEXT\",\"textbausteinRolle\":\"VOR\",\"content\":\"Hallo\"}"
+                    + "]}";
+            vorgaenger.setPositionenJson(urspruenglich);
+            when(dokumentRepository.findById(102L)).thenReturn(Optional.of(vorgaenger));
+            when(dokumentRepository.countByVorgaengerIdAndTyp(102L, AusgangsGeschaeftsDokumentTyp.ABSCHLAGSRECHNUNG))
+                    .thenReturn(0);
+            when(dokumentRepository.save(any())).thenAnswer(inv -> {
+                AusgangsGeschaeftsDokument d = inv.getArgument(0);
+                d.setId(3L);
+                return d;
+            });
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.ABSCHLAGSRECHNUNG);
+            dto.setVorgaengerId(102L);
+
+            AusgangsGeschaeftsDokument result = service.erstellen(dto);
+
+            // Gleicher Typ: Textbausteine bleiben erhalten
+            assertThat(result.getPositionenJson()).isEqualTo(urspruenglich);
+        }
+
+        @Test
         void wirftExceptionBeiDoppeltemBasisdokumentProProjekt() {
             when(dokumentRepository.existsByProjektIdAndVorgaengerIsNull(5L)).thenReturn(true);
 
