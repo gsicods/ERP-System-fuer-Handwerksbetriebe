@@ -11,6 +11,7 @@ import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
 import org.example.kalkulationsprogramm.service.AnfrageService;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
 import org.example.kalkulationsprogramm.service.DateiSpeicherService;
+import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
 import org.example.kalkulationsprogramm.service.FrontendUserProfileService;
 import org.example.kalkulationsprogramm.service.PdfAiExtractorService;
 import org.example.kalkulationsprogramm.service.ZugferdErstellService;
@@ -40,11 +41,12 @@ class AnfrageControllerTest {
         AnfrageNotizBildRepository anfrageNotizBildRepository = mock(AnfrageNotizBildRepository.class);
         MitarbeiterRepository mitarbeiterRepository = mock(MitarbeiterRepository.class);
         FrontendUserProfileService frontendUserProfileService = mock(FrontendUserProfileService.class);
+        DokumentFreigabeService dokumentFreigabeService = mock(DokumentFreigabeService.class);
 
         AnfrageController controller = new AnfrageController(anfrageService, ausgangsGeschaeftsDokumentService,
                 dateiSpeicherService, zugferdErstellService, zugferdExtractorService, pdfAiExtractorService,
                 kundeRepository, anfrageNotizRepository, anfrageNotizBildRepository, mitarbeiterRepository,
-                frontendUserProfileService);
+                frontendUserProfileService, dokumentFreigabeService);
 
         Anfrage anfrage = new Anfrage();
         anfrage.setId(42L);
@@ -76,11 +78,12 @@ class AnfrageControllerTest {
         AnfrageNotizBildRepository anfrageNotizBildRepository = mock(AnfrageNotizBildRepository.class);
         MitarbeiterRepository mitarbeiterRepository = mock(MitarbeiterRepository.class);
         FrontendUserProfileService frontendUserProfileService = mock(FrontendUserProfileService.class);
+        DokumentFreigabeService dokumentFreigabeService = mock(DokumentFreigabeService.class);
 
         AnfrageController controller = new AnfrageController(anfrageService, ausgangsGeschaeftsDokumentService,
                 dateiSpeicherService, zugferdErstellService, zugferdExtractorService, pdfAiExtractorService,
                 kundeRepository, anfrageNotizRepository, anfrageNotizBildRepository, mitarbeiterRepository,
-                frontendUserProfileService);
+                frontendUserProfileService, dokumentFreigabeService);
 
         KategorieVorschlagDto dto = new KategorieVorschlagDto();
         dto.setKategorieId(7L);

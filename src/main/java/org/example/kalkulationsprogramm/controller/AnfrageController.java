@@ -13,6 +13,7 @@ import org.example.kalkulationsprogramm.domain.Mitarbeiter;
 import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageDokumentResponseDto;
 import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageErstellenDto;
 import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageResponseDto;
+import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeStatusKurzDto;
 import org.example.kalkulationsprogramm.dto.Produktkategroie.KategorieVorschlagDto;
 import org.example.kalkulationsprogramm.dto.Projekt.ProjektErstellenDto;
 import org.example.kalkulationsprogramm.dto.Zugferd.ZugferdDaten;
@@ -23,6 +24,7 @@ import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
 import org.example.kalkulationsprogramm.service.AnfrageService;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
 import org.example.kalkulationsprogramm.service.DateiSpeicherService;
+import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
 import org.example.kalkulationsprogramm.service.FrontendUserProfileService;
 import org.example.kalkulationsprogramm.service.PdfAiExtractorService;
 import org.example.kalkulationsprogramm.service.ZugferdErstellService;
@@ -54,6 +56,27 @@ public class AnfrageController {
     private final AnfrageNotizBildRepository anfrageNotizBildRepository;
     private final MitarbeiterRepository mitarbeiterRepository;
     private final FrontendUserProfileService frontendUserProfileService;
+    private final DokumentFreigabeService dokumentFreigabeService;
+
+    /**
+     * Liefert pro angefragter Anfrage-ID die jüngste relevante digitale Freigabe
+     * (Angebot oder Auftragsbestätigung). Wird vom AnfrageEditor genutzt, um Status-
+     * Badges direkt an die Suche-Cards zu hängen.
+     */
+    @GetMapping("/freigabe-status")
+    public ResponseEntity<java.util.Map<Long, FreigabeStatusKurzDto>> freigabeStatus(@RequestParam("ids") List<Long> ids) {
+        var byAnfrageId = dokumentFreigabeService.findJuengsteProAnfrage(ids);
+        java.util.Map<Long, FreigabeStatusKurzDto> result = new java.util.HashMap<>();
+        byAnfrageId.forEach((anfrageId, freigabe) -> result.put(anfrageId, FreigabeStatusKurzDto.builder()
+                .status(freigabe.getStatus().name())
+                .dokumentArt(freigabe.getDokumentArt())
+                .dokumentNummer(freigabe.getDokumentNummer())
+                .akzeptiertAm(freigabe.getAkzeptiertAm())
+                .ablaufDatum(freigabe.getAblaufDatum())
+                .erstelltAm(freigabe.getErstelltAm())
+                .build()));
+        return ResponseEntity.ok(result);
+    }
 
     @PostMapping(value = "/zugferd/extract", consumes = { MediaType.MULTIPART_FORM_DATA_VALUE })
     public ResponseEntity<ZugferdDaten> extractZugferd(@RequestParam("datei") MultipartFile datei) {

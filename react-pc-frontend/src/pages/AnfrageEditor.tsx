@@ -88,10 +88,62 @@ const formatDate = (dateStr?: string | null) => {
 };
 
 // ==================== ANFRAGE CARD ====================
-function AnfrageCard({ anfrage, onClick, onToggleAbgeschlossen }: {
+type FreigabeStatusKurz = {
+    status: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+    dokumentArt: string;
+    dokumentNummer: string;
+    akzeptiertAm: string | null;
+    ablaufDatum: string;
+    erstelltAm: string;
+};
+
+function FreigabeBadge({ freigabe }: { freigabe: FreigabeStatusKurz }) {
+    const formatShort = (iso: string | null) => {
+        if (!iso) return '';
+        const d = new Date(iso);
+        return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
+    };
+    if (freigabe.status === 'ACCEPTED') {
+        return (
+            <span
+                title={`${freigabe.dokumentArt} ${freigabe.dokumentNummer} digital angenommen am ${formatShort(freigabe.akzeptiertAm)}`}
+                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+            >
+                <Check className="w-3 h-3" />
+                {freigabe.dokumentArt} angenommen · {formatShort(freigabe.akzeptiertAm)}
+            </span>
+        );
+    }
+    if (freigabe.status === 'PENDING') {
+        return (
+            <span
+                title={`Freigabe-Link für ${freigabe.dokumentArt} ${freigabe.dokumentNummer} versendet, gültig bis ${formatShort(freigabe.ablaufDatum)}`}
+                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+            >
+                <Mail className="w-3 h-3" />
+                {freigabe.dokumentArt} wartet auf Kunde
+            </span>
+        );
+    }
+    if (freigabe.status === 'EXPIRED') {
+        return (
+            <span
+                title={`Freigabe-Link für ${freigabe.dokumentArt} ${freigabe.dokumentNummer} ist abgelaufen`}
+                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200"
+            >
+                <X className="w-3 h-3" />
+                {freigabe.dokumentArt} – Link abgelaufen
+            </span>
+        );
+    }
+    return null;
+}
+
+function AnfrageCard({ anfrage, onClick, onToggleAbgeschlossen, freigabe }: {
     anfrage: Anfrage;
     onClick: () => void;
     onToggleAbgeschlossen?: (anfrageId: number, abgeschlossen: boolean) => void;
+    freigabe?: FreigabeStatusKurz;
 }) {
     const handleCheckboxClick = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -126,6 +178,7 @@ function AnfrageCard({ anfrage, onClick, onToggleAbgeschlossen }: {
                             )}>
                                 {anfrage.abgeschlossen ? 'Beendet' : (anfrage.projektId ? 'Projekt erstellt' : 'Offen')}
                             </span>
+                            {freigabe && <FreigabeBadge freigabe={freigabe} />}
                         </div>
                         <h3 className="font-semibold text-slate-900 mt-2 truncate text-base" title={anfrage.bauvorhaben}>
                             {anfrage.bauvorhaben || "Unbenannt"}
@@ -1614,6 +1667,7 @@ export default function AnfrageEditor() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
     const [anfragen, setAnfragen] = useState<Anfrage[]>([]);
+    const [freigabeStatusByAnfrageId, setFreigabeStatusByAnfrageId] = useState<Record<number, FreigabeStatusKurz>>({});
     const [selectedAnfrage, setSelectedAnfrage] = useState<AnfrageDetail | null>(null);
     const [loading, setLoading] = useState(false);
     const [total, setTotal] = useState(0);
@@ -1701,20 +1755,40 @@ export default function AnfrageEditor() {
                 const tb = lastAccessed[String(b.id)] || 0;
                 return tb - ta; // zuletzt aufgerufene zuerst, sonst stabil
             };
+            let resultList: Anfrage[];
             if (Array.isArray(data)) {
-                const list = [...data].sort(sortByLastAccessed);
-                setAnfragen(list);
-                setTotal(list.length);
+                resultList = [...data].sort(sortByLastAccessed);
+                setAnfragen(resultList);
+                setTotal(resultList.length);
             } else {
-                const list = Array.isArray(data.anfragen) ? [...data.anfragen] : [];
-                list.sort(sortByLastAccessed);
-                setAnfragen(list);
+                resultList = Array.isArray(data.anfragen) ? [...data.anfragen] : [];
+                resultList.sort(sortByLastAccessed);
+                setAnfragen(resultList);
                 setTotal(typeof data.gesamt === "number" ? data.gesamt : 0);
+            }
+            // Freigabe-Status (Angebot/AB digital angenommen?) für die geladenen Anfragen ziehen.
+            const ids = resultList.map(a => a.id).filter((id): id is number => typeof id === 'number');
+            if (ids.length > 0) {
+                try {
+                    const idsParam = ids.join(',');
+                    const statusRes = await fetch(`/api/anfragen/freigabe-status?ids=${encodeURIComponent(idsParam)}`);
+                    if (statusRes.ok) {
+                        const statusJson = await statusRes.json();
+                        setFreigabeStatusByAnfrageId(statusJson || {});
+                    } else {
+                        setFreigabeStatusByAnfrageId({});
+                    }
+                } catch {
+                    setFreigabeStatusByAnfrageId({});
+                }
+            } else {
+                setFreigabeStatusByAnfrageId({});
             }
         } catch (err) {
             console.error(err);
             setAnfragen([]);
             setTotal(0);
+            setFreigabeStatusByAnfrageId({});
         } finally {
             setLoading(false);
         }
@@ -1924,6 +1998,7 @@ export default function AnfrageEditor() {
                             anfrage={anfrage}
                             onClick={() => handleDetail(anfrage)}
                             onToggleAbgeschlossen={handleToggleAbgeschlossen}
+                            freigabe={freigabeStatusByAnfrageId[anfrage.id]}
                         />
                     ))}
                 </div>

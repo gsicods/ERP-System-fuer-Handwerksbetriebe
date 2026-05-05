@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import {
-    Bell, Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, X, Package
+    Bell, Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, X, Package, CheckCircle2
 } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ interface NotificationSummary {
 // ── Icon map ─────────────────────────────────────────────────────────────
 
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
-    Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, Package,
+    Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, Package, CheckCircle2,
 };
 
 const TYPE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
@@ -50,6 +50,7 @@ const TYPE_COLORS: Record<string, { bg: string; text: string; border: string }> 
     EMAILS_SUPPLIERS: { bg: 'bg-lime-50', text: 'text-lime-600', border: 'border-lime-200' },
     EMAILS_SPAM: { bg: 'bg-yellow-50', text: 'text-yellow-600', border: 'border-yellow-200' },
     EMAILS_NEWSLETTER: { bg: 'bg-sky-50', text: 'text-sky-600', border: 'border-sky-200' },
+    FREIGABEN_ANGENOMMEN: { bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-200' },
 };
 
 const RECENT_TYPE_COLORS: Record<string, string> = {
@@ -62,6 +63,7 @@ const RECENT_TYPE_COLORS: Record<string, string> = {
     TERMIN: 'text-rose-500',
     LIEFERSCHEIN: 'text-cyan-500',
     REKLAMATION: 'text-pink-500',
+    FREIGABE_ANGENOMMEN: 'text-emerald-500',
 };
 
 const RECENT_TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -74,6 +76,7 @@ const RECENT_TYPE_ICONS: Record<string, React.ComponentType<{ className?: string
     TERMIN: CalendarClock,
     LIEFERSCHEIN: Package,
     REKLAMATION: AlertTriangle,
+    FREIGABE_ANGENOMMEN: CheckCircle2,
 };
 
 // ── Dismissal helpers ────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.example.kalkulationsprogramm.domain.DokumentFreigabe;
 import org.example.kalkulationsprogramm.domain.Email;
 import org.example.kalkulationsprogramm.domain.KalenderEintrag;
 import org.example.kalkulationsprogramm.domain.LieferantDokument;
@@ -18,6 +19,7 @@ import org.example.kalkulationsprogramm.domain.ProjektGeschaeftsdokument;
 import org.example.kalkulationsprogramm.domain.ProjektNotiz;
 import org.example.kalkulationsprogramm.domain.ReklamationStatus;
 import org.example.kalkulationsprogramm.domain.Urlaubsantrag;
+import org.example.kalkulationsprogramm.repository.DokumentFreigabeRepository;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
 import org.example.kalkulationsprogramm.repository.KalenderEintragRepository;
 import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository;
@@ -50,6 +52,7 @@ public class NotificationController {
         private final KalenderEintragRepository kalenderEintragRepository;
         private final LieferantDokumentRepository lieferantDokumentRepository;
         private final LieferantReklamationRepository lieferantReklamationRepository;
+        private final DokumentFreigabeRepository dokumentFreigabeRepository;
 
         @GetMapping("/summary")
         public NotificationSummaryDto getSummary(@RequestParam(required = false) Long mitarbeiterId) {
@@ -455,6 +458,47 @@ public class NotificationController {
                                                                                                         + lieferantId
                                                                                                         + "&tab=reklamationen"
                                                                                         : "/lieferanten"));
+                                                });
+                        }
+                } catch (Exception ignored) {
+                }
+
+                // 10. Digital angenommene Angebote / Auftragsbestätigungen (letzte 7 Tage)
+                try {
+                        LocalDateTime siebenTage = LocalDateTime.now().minusDays(7);
+                        List<DokumentFreigabe> akzeptiert = dokumentFreigabeRepository
+                                        .findKuerzlichAkzeptiert(siebenTage);
+                        if (!akzeptiert.isEmpty()) {
+                                categories.add(new CategoryDto("FREIGABEN_ANGENOMMEN",
+                                                "Digital angenommen", akzeptiert.size(), "FileText",
+                                                "/anfragen"));
+
+                                akzeptiert.stream()
+                                                .limit(3)
+                                                .forEach(f -> {
+                                                        String kunde = f.getKundeName() == null
+                                                                        || f.getKundeName().isBlank()
+                                                                                        ? (f.getKundeEmail() == null
+                                                                                                        ? "Kunde"
+                                                                                                        : f.getKundeEmail())
+                                                                        : f.getKundeName();
+                                                        String art = f.getDokumentArt() == null
+                                                                        ? "Dokument"
+                                                                        : f.getDokumentArt();
+                                                        String link = f.getQuellTyp() != null && f.getQuellTyp().name()
+                                                                        .equals("PROJEKT")
+                                                                        ? "/projekte"
+                                                                        : "/anfragen";
+                                                        recentItems.add(new RecentItemDto(
+                                                                        "FREIGABE_ANGENOMMEN",
+                                                                        art + " " + (f.getDokumentNummer() == null
+                                                                                        ? "" : f.getDokumentNummer())
+                                                                                        + " angenommen",
+                                                                        "Von: " + kunde,
+                                                                        f.getAkzeptiertAm() != null
+                                                                                        ? f.getAkzeptiertAm().toString()
+                                                                                        : "",
+                                                                        link));
                                                 });
                         }
                 } catch (Exception ignored) {

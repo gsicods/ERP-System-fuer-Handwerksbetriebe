@@ -116,6 +116,29 @@ public class WebPushService {
     }
 
     /**
+     * Schickt eine generische Push-Nachricht an alle aktuell registrierten
+     * Push-Subscriptions im System. Wird z.B. ausgelöst, wenn ein Kunde ein
+     * Angebot oder eine Auftragsbestätigung digital annimmt – damit das Büro
+     * sofort benachrichtigt wird, auch wenn der ERP-Tab geschlossen ist.
+     * Fail-safe: schluckt Fehler, damit ein Push-Problem nie eine fachliche
+     * Operation (Annahme) blockiert.
+     */
+    public void notifyAll(String title, String body, String url) {
+        if (!isEnabled()) {
+            log.debug("WebPush nicht aktiv – notifyAll wird ignoriert");
+            return;
+        }
+        try {
+            List<PushSubscription> alle = pushSubscriptionRepository.findAll();
+            for (PushSubscription sub : alle) {
+                sendPush(sub, title, body, url, null, "freigabe");
+            }
+        } catch (Exception e) {
+            log.warn("notifyAll fehlgeschlagen: {}", e.getMessage());
+        }
+    }
+
+    /**
      * Subscribe a device for push notifications.
      */
     @Transactional

@@ -39,6 +39,14 @@ public interface ProjektDokumentRepository extends JpaRepository<ProjektDokument
   List<Object[]> findDokumentIdsByProjektIds(List<Long> ids);
 
   /**
+   * Liefert für eine Liste von Projekt-IDs ein Mapping
+   * [ProjektGeschaeftsdokument.id, Projekt.id], damit der DokumentFreigabeService
+   * den jüngsten Freigabe-Status pro Projekt finden kann.
+   */
+  @Query("SELECT g.id, g.projekt.id FROM ProjektGeschaeftsdokument g WHERE g.projekt.id IN :projektIds")
+  List<Object[]> findGeschaeftsdokumentIdMappingByProjektIds(@Param("projektIds") List<Long> projektIds);
+
+  /**
    * Prüft ob ein Geschäftsdokument mit der Dokumentnummer bereits existiert.
    */
   @Query("SELECT CASE WHEN COUNT(g) > 0 THEN true ELSE false END FROM ProjektGeschaeftsdokument g WHERE g.dokumentid = :dokumentid")

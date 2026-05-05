@@ -3154,6 +3154,7 @@ export default function ProjektEditor() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
     const [projekte, setProjekte] = useState<Projekt[]>([]);
+    const [freigabeStatusByProjektId, setFreigabeStatusByProjektId] = useState<Record<number, FreigabeStatusKurz>>({});
     const [selectedProjekt, setSelectedProjekt] = useState<ProjektDetail | null>(null);
     const [loading, setLoading] = useState(false);
     const [total, setTotal] = useState(0);
@@ -3199,10 +3200,30 @@ export default function ProjektEditor() {
 
             setProjekte(sortedProjekte);
             setTotal(typeof data.gesamt === "number" ? data.gesamt : 0);
+
+            // Freigabe-Status (Angebot/AB digital angenommen?) für die geladenen Projekte ziehen.
+            const ids = sortedProjekte
+                .map((p: Projekt) => p.id)
+                .filter((id: unknown): id is number => typeof id === 'number');
+            if (ids.length > 0) {
+                try {
+                    const statusRes = await fetch(`/api/projekte/freigabe-status?ids=${encodeURIComponent(ids.join(','))}`);
+                    if (statusRes.ok) {
+                        setFreigabeStatusByProjektId(await statusRes.json() || {});
+                    } else {
+                        setFreigabeStatusByProjektId({});
+                    }
+                } catch {
+                    setFreigabeStatusByProjektId({});
+                }
+            } else {
+                setFreigabeStatusByProjektId({});
+            }
         } catch (err) {
             console.error(err);
             setProjekte([]);
             setTotal(0);
+            setFreigabeStatusByProjektId({});
         } finally {
             setLoading(false);
         }
@@ -3479,6 +3500,7 @@ export default function ProjektEditor() {
                             projekt={projekt}
                             onClick={() => handleDetail(projekt)}
                             onToggleAbgeschlossen={handleToggleAbgeschlossen}
+                            freigabe={freigabeStatusByProjektId[projekt.id]}
                         />
                     ))}
                 </div>
@@ -3546,10 +3568,62 @@ export default function ProjektEditor() {
     );
 }
 
-function ProjektCard({ projekt, onClick, onToggleAbgeschlossen }: {
+type FreigabeStatusKurz = {
+    status: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+    dokumentArt: string;
+    dokumentNummer: string;
+    akzeptiertAm: string | null;
+    ablaufDatum: string;
+    erstelltAm: string;
+};
+
+function FreigabeBadge({ freigabe }: { freigabe: FreigabeStatusKurz }) {
+    const formatShort = (iso: string | null) => {
+        if (!iso) return '';
+        const d = new Date(iso);
+        return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
+    };
+    if (freigabe.status === 'ACCEPTED') {
+        return (
+            <span
+                title={`${freigabe.dokumentArt} ${freigabe.dokumentNummer} digital angenommen am ${formatShort(freigabe.akzeptiertAm)}`}
+                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+            >
+                <Check className="w-3 h-3" />
+                {freigabe.dokumentArt} angenommen · {formatShort(freigabe.akzeptiertAm)}
+            </span>
+        );
+    }
+    if (freigabe.status === 'PENDING') {
+        return (
+            <span
+                title={`Freigabe-Link für ${freigabe.dokumentArt} ${freigabe.dokumentNummer} versendet, gültig bis ${formatShort(freigabe.ablaufDatum)}`}
+                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+            >
+                <Mail className="w-3 h-3" />
+                {freigabe.dokumentArt} wartet auf Kunde
+            </span>
+        );
+    }
+    if (freigabe.status === 'EXPIRED') {
+        return (
+            <span
+                title={`Freigabe-Link für ${freigabe.dokumentArt} ${freigabe.dokumentNummer} ist abgelaufen`}
+                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200"
+            >
+                <X className="w-3 h-3" />
+                {freigabe.dokumentArt} – Link abgelaufen
+            </span>
+        );
+    }
+    return null;
+}
+
+function ProjektCard({ projekt, onClick, onToggleAbgeschlossen, freigabe }: {
     projekt: Projekt;
     onClick: () => void;
     onToggleAbgeschlossen?: (projektId: number, abgeschlossen: boolean) => void;
+    freigabe?: FreigabeStatusKurz;
 }) {
     const formatCurrency = (val?: number) =>
         new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(val || 0);
@@ -3595,6 +3669,7 @@ function ProjektCard({ projekt, onClick, onToggleAbgeschlossen }: {
                                     Beendet
                                 </span>
                             )}
+                            {freigabe && <FreigabeBadge freigabe={freigabe} />}
                         </div>
                         <h3 className="font-semibold text-slate-900 mt-2 truncate text-base" title={projekt.bauvorhaben}>
                             {projekt.bauvorhaben || "Unbenannt"}
