@@ -34,11 +34,18 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
     const canvasContainerRef = useRef<HTMLDivElement>(null);
     const pdfDocRef = useRef<any>(null);
     const renderingRef = useRef(false);
+    const pendingUrlRef = useRef<string | null>(null);
     const scrollFractionRef = useRef(0);
     const prevUrlRef = useRef<string | null>(null);
     const [pageCount, setPageCount] = useState(0);
     const [useFallback, setUseFallback] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // URL, deren Canvas-Rendering vollständig abgeschlossen ist.
+    // Solange previewUrl !== renderedUrl, läuft das Rendering noch
+    // → Skelett wird angezeigt, bis ALLE Seiten gemalt sind.
+    const [renderedUrl, setRenderedUrl] = useState<string | null>(null);
+    // iframe-Fallback: ist das aktuelle PDF im iframe geladen?
+    const [iframeLoadedUrl, setIframeLoadedUrl] = useState<string | null>(null);
 
     const handleDownload = useCallback(() => {
         if (!previewUrl) return;
@@ -47,6 +54,11 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
         a.download = 'vorschau.pdf';
         a.click();
     }, [previewUrl]);
+
+    // Self-Ref vorab deklariert, damit renderPdf sich für eine pending-URL re-aufrufen kann
+    // (Wert wird unten nach Definition gesetzt).
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    const renderPdfRef = useRef<((url: string) => Promise<void>) | null>(null);
 
     /**
      * Rendert alle Seiten des PDFs als Canvas-Elemente.
@@ -60,7 +72,11 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
         }
 
         if (!canvasContainerRef.current || !scrollContainerRef.current) return;
-        if (renderingRef.current) return;
+        // Wenn schon ein Render läuft: neueste URL merken, läuft danach automatisch
+        if (renderingRef.current) {
+            pendingUrlRef.current = url;
+            return;
+        }
         renderingRef.current = true;
         setError(null);
 
@@ -141,6 +157,10 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
                 }
             });
 
+            // Erst JETZT — nach allen Seiten + Scroll-Restore — gilt das PDF als fertig gerendert.
+            // Skelett wird ausgeblendet (siehe isRendering unten).
+            setRenderedUrl(url);
+
         } catch (err) {
             console.error('PDF Render-Fehler:', err);
             setError('PDF konnte nicht gerendert werden');
@@ -148,14 +168,25 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
             setUseFallback(true);
         } finally {
             renderingRef.current = false;
+            // Wurde während des Renderings eine neuere URL angefragt? → jetzt ausführen
+            const pending = pendingUrlRef.current;
+            if (pending && pending !== url) {
+                pendingUrlRef.current = null;
+                renderPdfRef.current?.(pending);
+            } else {
+                pendingUrlRef.current = null;
+            }
         }
     }, []);
+    renderPdfRef.current = renderPdf;
 
     // PDF rendern wenn sich die URL ändert
     useEffect(() => {
         if (!previewUrl) {
             if (canvasContainerRef.current) canvasContainerRef.current.innerHTML = '';
             setPageCount(0);
+            setRenderedUrl(null);
+            setIframeLoadedUrl(null);
             if (pdfDocRef.current) {
                 try { pdfDocRef.current.destroy(); } catch { /* ok */ }
                 pdfDocRef.current = null;
@@ -165,6 +196,7 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
 
         if (useFallback) return; // Im Fallback-Modus: iframe kümmert sich
 
+        // Skelett bleibt sichtbar, bis renderPdf fertig ist und renderedUrl=previewUrl setzt.
         renderPdf(previewUrl);
     }, [previewUrl, renderPdf, useFallback]);
 
@@ -260,13 +292,18 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
             {useFallback ? (
                 /* Fallback: iframe mit weißem Hintergrund */
                 <div className="flex-1 relative" style={{ background: 'white' }}>
-                    {(loading || !previewUrl) && <PdfLoadingSkeleton loading={loading} hasPreview={!!previewUrl} />}
+                    {/* Skelett bleibt, bis: kein Fetch mehr läuft UND iframe das aktuelle PDF geladen hat */}
+                    {(loading || !previewUrl || iframeLoadedUrl !== previewUrl) && (
+                        <PdfLoadingSkeleton loading={loading} />
+                    )}
                     {previewUrl ? (
                         <iframe
+                            key={previewUrl}
                             src={`${previewUrl}#toolbar=0&navpanes=0&view=FitH`}
                             className="w-full h-full border-none"
                             style={{ background: 'white' }}
                             title="PDF Vorschau"
+                            onLoad={() => setIframeLoadedUrl(previewUrl)}
                         />
                     ) : null}
                 </div>
@@ -277,7 +314,12 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
                     className="flex-1 overflow-y-auto overflow-x-hidden relative"
                     style={{ background: 'white' }}
                 >
-                    {(loading || (!previewUrl && !error)) && <PdfLoadingSkeleton loading={loading} hasPreview={!!previewUrl} />}
+                    {/* Skelett bleibt sichtbar, bis Canvas-Render der aktuellen URL fertig ist
+                        (renderedUrl === previewUrl). Während Fetch (loading) oder Re-Render
+                        durch Resize/Open-Animation wird ebenfalls das Skelett gezeigt. */}
+                    {!error && (loading || !previewUrl || renderedUrl !== previewUrl) && (
+                        <PdfLoadingSkeleton loading={loading || (!!previewUrl && renderedUrl !== previewUrl)} />
+                    )}
 
                     <div ref={canvasContainerRef} style={{ lineHeight: 0 }} />
 
@@ -294,12 +336,14 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
 
 /* ────────────────────────────────────────────────────────────
    Premium PDF Loading Skeleton
+   Wird so lange angezeigt, bis das PDF vollständig vom Backend
+   geladen UND clientseitig fertig gerendert ist. Komplett deckend,
+   damit kein leerer/halb gerenderter Zustand sichtbar wird.
    ──────────────────────────────────────────────────────────── */
-function PdfLoadingSkeleton({ loading, hasPreview }: { loading: boolean; hasPreview: boolean }) {
+function PdfLoadingSkeleton({ loading }: { loading: boolean }) {
     return (
         <div className={cn(
-            "absolute inset-0 z-10 flex flex-col items-center pointer-events-none transition-opacity duration-300",
-            hasPreview ? "bg-white/80 backdrop-blur-sm" : "bg-white",
+            "absolute inset-0 z-10 flex flex-col items-center pointer-events-none bg-white",
         )}>
             {/* Document skeleton */}
             <div className="w-full max-w-[90%] mt-6 flex flex-col items-center gap-6">
