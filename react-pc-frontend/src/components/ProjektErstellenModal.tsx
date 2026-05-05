@@ -759,15 +759,22 @@ export const ProjektErstellenModal: React.FC<ProjektErstellenModalProps> = ({
                     kundennummer: selectedAnfrage.kundennummer || '',
                 });
             }
+            // Projektadresse aus Anfrage vorausfüllen, wenn dort eine Objektadresse
+            // hinterlegt ist (anfrage.projektStrasse/Plz/Ort). So muss der Nutzer
+            // sie nicht erneut eintippen oder die "Kundenadresse übernehmen"-Checkbox
+            // aktivieren — sie hat sich bei der Anfrageaufnahme schon aufgemacht.
+            const hatAnfrageAdresse = !!(selectedAnfrage.projektStrasse
+                || selectedAnfrage.projektPlz
+                || selectedAnfrage.projektOrt);
             setFormData({
                 bauvorhaben: selectedAnfrage.bauvorhaben || '',
                 kunde: selectedAnfrage.kundenName || '',
                 kundennummer: selectedAnfrage.kundennummer || '',
                 kundenId: selectedAnfrage.kundenId,
                 auftragsnummer: '',
-                strasse: '',
-                plz: '',
-                ort: '',
+                strasse: hatAnfrageAdresse ? (selectedAnfrage.projektStrasse || '') : '',
+                plz: hatAnfrageAdresse ? (selectedAnfrage.projektPlz || '') : '',
+                ort: hatAnfrageAdresse ? (selectedAnfrage.projektOrt || '') : '',
                 anfrageIds: [selectedAnfrage.id],
             });
         }

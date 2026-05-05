@@ -1,6 +1,8 @@
 package org.example.kalkulationsprogramm.service;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.example.kalkulationsprogramm.domain.Anfrage;
 import org.example.kalkulationsprogramm.domain.AnfrageGeschaeftsdokument;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokumentTyp;
@@ -9,7 +11,11 @@ import org.example.kalkulationsprogramm.domain.FreigabeQuellTyp;
 import org.example.kalkulationsprogramm.domain.FreigabeStatus;
 import org.example.kalkulationsprogramm.domain.ProjektGeschaeftsdokument;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentErstellenDto;
+import org.example.kalkulationsprogramm.dto.Produktkategroie.KategorieVorschlagDto;
+import org.example.kalkulationsprogramm.dto.Projekt.ProjektErstellenDto;
+import org.example.kalkulationsprogramm.dto.ProjektProduktkategorie.ProjektProduktkategorieErfassenDto;
 import org.example.kalkulationsprogramm.repository.AnfrageDokumentRepository;
+import org.example.kalkulationsprogramm.repository.AnfrageRepository;
 import org.example.kalkulationsprogramm.repository.AusgangsGeschaeftsDokumentRepository;
 import org.example.kalkulationsprogramm.repository.DokumentFreigabeRepository;
 import org.example.kalkulationsprogramm.repository.ProjektDokumentRepository;
@@ -23,7 +29,9 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +52,7 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class DokumentFreigabeService
 {
     private static final int GUELTIGKEITS_TAGE = 14;
@@ -56,6 +65,8 @@ public class DokumentFreigabeService
     private final WebPushService webPushService;
     private final DateiSpeicherService dateiSpeicherService;
     private final AutoAuftragsbestaetigungVersandService autoAuftragsbestaetigungVersandService;
+    private final ProjektManagementService projektManagementService;
+    private final AnfrageRepository anfrageRepository;
 
     @Value("${freigabe.hash.salt:CHANGE_ME_LOCAL_ONLY}")
     private String hashSalt;
@@ -362,6 +373,11 @@ public class DokumentFreigabeService
      * und noch keine Auftragsbestätigung als Nachfolger existiert, wird automatisch eine
      * Auftragsbestätigung als Folgedokument erstellt. Inhalt, Positionen, Kunde und Projekt
      * werden vom Angebot geerbt; Standard-Textbausteine werden beim Typwechsel ausgetauscht.
+     *
+     * <p>Hängt das Angebot noch an einer Anfrage (kein Projekt), wird die Anfrage VOR der
+     * AB-Erzeugung in ein neues Projekt überführt — analog zu „Von Anfrage übernehmen" im
+     * ProjektEditor. Damit ist die {@code PROJEKTNUMMER} bei der AB-Erzeugung bereits
+     * verfügbar und wird in PDF- und E-Mail-Platzhaltern korrekt aufgelöst.</p>
      */
     private void erzeugeAutoAuftragsbestaetigungWennAngebot(DokumentFreigabe freigabe)
     {
@@ -386,6 +402,18 @@ public class DokumentFreigabeService
                 .anyMatch(n -> n.getTyp() == AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG && !n.isStorniert()))
         {
             return;
+        }
+
+        // Auto-Projekt anlegen, BEVOR die AB erzeugt wird. Sonst wäre {{PROJEKTNUMMER}}
+        // im PDF und in der E-Mail leer/„—". Das Angebot wird dabei vom Anfrage- aufs
+        // Projekt-Konto migriert (siehe AusgangsGeschaeftsDokumentService.migrateFromAnfrageToProjekt),
+        // wodurch die anschließend erzeugte AB das Projekt automatisch vom Vorgänger erbt.
+        if (angebot.getAnfrage() != null && angebot.getProjekt() == null)
+        {
+            Long anfrageId = angebot.getAnfrage().getId();
+            erzeugeAutoProjektAusAnfrage(anfrageId);
+            // Reload: Angebot ist nun am Projekt, Anfrage gelöscht.
+            angebot = ausgangsGeschaeftsDokumentRepository.findById(angebotId).orElse(angebot);
         }
 
         AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
@@ -416,6 +444,65 @@ public class DokumentFreigabeService
                 }
                 catch (Exception ignored) { /* Versand-Fehler werden im Service geloggt */ }
             }
+        }
+    }
+
+    /**
+     * Legt analog zum „Von Anfrage übernehmen"-Flow im ProjektEditor automatisch ein Projekt
+     * aus einer Anfrage an, wenn der Kunde das Angebot digital angenommen hat.
+     *
+     * <p>Übernommen werden:
+     * <ul>
+     *   <li>Bauvorhaben, Kunde, Kundennummer (aus der Anfrage)</li>
+     *   <li>Projekt-Adresse aus {@code Anfrage.projektStrasse/Plz/Ort}</li>
+     *   <li>Produktkategorien-Mapping aus den Leistungen des Angebots/der AB
+     *       (siehe {@link AusgangsGeschaeftsDokumentService#berechneKategorieVorschlagFuerAnfrage})</li>
+     *   <li>Alle Anfrage-Dokumente, Notizen, E-Mails und das Angebot selbst
+     *       (über {@link ProjektManagementService#erstelleProjekt})</li>
+     * </ul>
+     * Auftragsnummer wird automatisch vergeben, Projektart standardmäßig {@code PAUSCHAL}.
+     */
+    private void erzeugeAutoProjektAusAnfrage(Long anfrageId)
+    {
+        if (anfrageId == null) return;
+        Anfrage anfrage = anfrageRepository.findById(anfrageId).orElse(null);
+        if (anfrage == null) return;
+
+        ProjektErstellenDto dto = new ProjektErstellenDto();
+        dto.setAnfrageIds(List.of(anfrageId));
+        dto.setAnlegedatum(LocalDate.now());
+        dto.setAuftragsnummer(projektManagementService.generiereNaechsteAuftragsnummer(LocalDate.now()));
+        dto.setProjektArt("PAUSCHAL");
+
+        // Produktkategorien-Mapping aus Angebot/AB ableiten — gleiche Logik wie
+        // /api/anfragen/{id}/produktkategorien-vorschlag im ProjektErstellenModal.
+        List<KategorieVorschlagDto> vorschlaege =
+                ausgangsGeschaeftsDokumentService.berechneKategorieVorschlagFuerAnfrage(anfrageId);
+        if (vorschlaege != null && !vorschlaege.isEmpty())
+        {
+            List<ProjektProduktkategorieErfassenDto> kategorien = new ArrayList<>();
+            for (KategorieVorschlagDto v : vorschlaege)
+            {
+                ProjektProduktkategorieErfassenDto pp = new ProjektProduktkategorieErfassenDto();
+                pp.setProduktkategorieID(v.getKategorieId());
+                pp.setMenge(v.getMenge());
+                kategorien.add(pp);
+            }
+            dto.setProduktkategorien(kategorien);
+        }
+
+        try
+        {
+            projektManagementService.erstelleProjekt(
+                    dto,
+                    anfrage.getProjektStrasse(),
+                    anfrage.getProjektPlz(),
+                    anfrage.getProjektOrt(),
+                    null, null, null);
+        }
+        catch (Exception e)
+        {
+            log.warn("Auto-Projektanlage aus Anfrage {} fehlgeschlagen: {}", anfrageId, e.getMessage());
         }
     }
 
