@@ -43,6 +43,8 @@ export interface EmailComposeFormProps {
     replyEmailId?: number;
     /** Pre-attached files (e.g. generated PDF from DocumentEditor) */
     initialAttachments?: File[];
+    /** Vom Benutzer im Pop-up gewählte Gültigkeit des digitalen Annahme-Links (nur Angebote). */
+    gueltigkeitTage?: number;
     onSuccess?: () => void;
     variant?: 'default' | 'modal';
     /** Existing draft ID to resume editing */
@@ -155,6 +157,7 @@ export function EmailComposeForm({
     replyQuote,
     replyEmailId,
     initialAttachments,
+    gueltigkeitTage,
     onSuccess,
     draftId: initialDraftId,
 }: EmailComposeFormProps) {
@@ -465,6 +468,7 @@ export function EmailComposeForm({
                     dokumentnummer: dokument.rechnungsnummer || '',
                     betrag: formatBetrag(dokument.rechnungsbetrag),
                     benutzer: currentUser?.displayName || '',
+                    gueltigkeitTage: gueltigkeitTage ?? null,
                 };
             } else if (effectiveProjekt) {
                 // Projekt-Kontext (Prop oder vom Backend geladenes Projekt)
@@ -483,6 +487,7 @@ export function EmailComposeForm({
                     faelligkeitsdatum: dokument.faelligkeitsdatum || '',
                     betrag: formatBetrag(dokument.rechnungsbetrag),
                     benutzer: currentUser?.displayName || '',
+                    gueltigkeitTage: gueltigkeitTage ?? null,
                 };
             } else {
                 return; // Kein Kontext verfügbar
@@ -507,7 +512,7 @@ export function EmailComposeForm({
         } catch (err) {
             console.error('Template konnte nicht geladen werden:', err);
         }
-    }, [effectiveProjekt, anfrage, signature, isAnfrageContext]);
+    }, [effectiveProjekt, anfrage, signature, isAnfrageContext, gueltigkeitTage]);
 
     // Initialisierung - nur einmal beim Mount
     useEffect(() => {

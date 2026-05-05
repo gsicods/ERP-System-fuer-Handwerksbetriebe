@@ -32,6 +32,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
@@ -56,7 +57,13 @@ import java.util.stream.Collectors;
 @Slf4j
 public class DokumentFreigabeService
 {
-    private static final int GUELTIGKEITS_TAGE = 14;
+    /** Default-Gültigkeit in Tagen, wenn der Aufrufer keine eigene Wahl trifft. */
+    public static final int DEFAULT_GUELTIGKEITS_TAGE = 14;
+    /** Untere und obere Grenze für vom Anwender gewählte Gültigkeitstage. */
+    private static final int MIN_GUELTIGKEITS_TAGE = 1;
+    private static final int MAX_GUELTIGKEITS_TAGE = 365;
+
+    private static final DateTimeFormatter ABLAUF_DATUM_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
     private final DokumentFreigabeRepository repository;
     private final AnfrageDokumentRepository anfrageDokumentRepository;
@@ -82,8 +89,18 @@ public class DokumentFreigabeService
     @Transactional
     public DokumentFreigabe erstelleFuerAnfrage(AnfrageGeschaeftsdokument dokument, String kundeName, String kundeEmail)
     {
+        return erstelleFuerAnfrage(dokument, kundeName, kundeEmail, DEFAULT_GUELTIGKEITS_TAGE);
+    }
+
+    /**
+     * Wie {@link #erstelleFuerAnfrage(AnfrageGeschaeftsdokument, String, String)},
+     * aber mit individuell gewählter Gültigkeitsdauer in Tagen.
+     */
+    @Transactional
+    public DokumentFreigabe erstelleFuerAnfrage(AnfrageGeschaeftsdokument dokument, String kundeName, String kundeEmail, int gueltigkeitTage)
+    {
         revokeAltePendingFreigaben(FreigabeQuellTyp.ANFRAGE, dokument.getId());
-        DokumentFreigabe freigabe = baseFreigabe();
+        DokumentFreigabe freigabe = baseFreigabe(gueltigkeitTage);
         freigabe.setQuellTyp(FreigabeQuellTyp.ANFRAGE);
         freigabe.setQuellDokumentId(dokument.getId());
         freigabe.setDokumentNummer(dokument.getDokumentid());
@@ -103,8 +120,18 @@ public class DokumentFreigabeService
     @Transactional
     public DokumentFreigabe erstelleFuerProjekt(ProjektGeschaeftsdokument dokument, String kundeName, String kundeEmail)
     {
+        return erstelleFuerProjekt(dokument, kundeName, kundeEmail, DEFAULT_GUELTIGKEITS_TAGE);
+    }
+
+    /**
+     * Wie {@link #erstelleFuerProjekt(ProjektGeschaeftsdokument, String, String)},
+     * aber mit individuell gewählter Gültigkeitsdauer in Tagen.
+     */
+    @Transactional
+    public DokumentFreigabe erstelleFuerProjekt(ProjektGeschaeftsdokument dokument, String kundeName, String kundeEmail, int gueltigkeitTage)
+    {
         revokeAltePendingFreigaben(FreigabeQuellTyp.PROJEKT, dokument.getId());
-        DokumentFreigabe freigabe = baseFreigabe();
+        DokumentFreigabe freigabe = baseFreigabe(gueltigkeitTage);
         freigabe.setQuellTyp(FreigabeQuellTyp.PROJEKT);
         freigabe.setQuellDokumentId(dokument.getId());
         freigabe.setDokumentNummer(dokument.getDokumentid());
@@ -131,9 +158,13 @@ public class DokumentFreigabeService
      * Erzeugt den HTML-Block für die E-Mail, der den Freigabe-Link enthält.
      * Wird sowohl beim E-Mail-Versand als auch bei der Template-Vorschau genutzt.
      */
-    public static String buildFreigabeBlockHtml(String url, String dokumentArt)
+    public static String buildFreigabeBlockHtml(String url, String dokumentArt, int gueltigkeitTage, LocalDateTime ablaufDatum)
     {
         String art = dokumentArt == null || dokumentArt.isBlank() ? "Dokument" : dokumentArt;
+        String tageText = gueltigkeitTage == 1 ? "1 Tag" : gueltigkeitTage + " Tage";
+        String ablaufText = ablaufDatum != null
+                ? "Der Link ist " + tageText + " gültig (bis zum " + ablaufDatum.format(ABLAUF_DATUM_FORMAT) + ")."
+                : "Der Link ist " + tageText + " gültig.";
         return "<div style=\"margin:24px 0;padding:16px 18px;border-left:3px solid #500010;background:#fafafa;font-family:Arial,Helvetica,sans-serif;\">"
                 + "<p style=\"margin:0 0 6px 0;font-weight:600;color:#1e293b;\">" + art + " digital prüfen und annehmen</p>"
                 + "<p style=\"margin:0 0 10px 0;color:#475569;line-height:1.45;\">"
@@ -141,7 +172,7 @@ public class DokumentFreigabeService
                 + "</p>"
                 + "<p style=\"margin:0;\"><a href=\"" + url + "\" style=\"color:#500010;font-weight:600;text-decoration:underline;\">"
                 + url + "</a></p>"
-                + "<p style=\"margin:8px 0 0 0;color:#94a3b8;font-size:13px;\">Der Link ist 14 Tage gültig.</p>"
+                + "<p style=\"margin:8px 0 0 0;color:#94a3b8;font-size:13px;\">" + ablaufText + "</p>"
                 + "</div>";
     }
 
@@ -153,8 +184,18 @@ public class DokumentFreigabeService
     @Transactional
     public DokumentFreigabe erstelleFuerAusgangsGeschaeftsDokument(AusgangsGeschaeftsDokument dok, String kundeEmail, String pdfDateiname)
     {
+        return erstelleFuerAusgangsGeschaeftsDokument(dok, kundeEmail, pdfDateiname, DEFAULT_GUELTIGKEITS_TAGE);
+    }
+
+    /**
+     * Wie {@link #erstelleFuerAusgangsGeschaeftsDokument(AusgangsGeschaeftsDokument, String, String)},
+     * aber mit individuell gewählter Gültigkeitsdauer in Tagen.
+     */
+    @Transactional
+    public DokumentFreigabe erstelleFuerAusgangsGeschaeftsDokument(AusgangsGeschaeftsDokument dok, String kundeEmail, String pdfDateiname, int gueltigkeitTage)
+    {
         revokeAltePendingFreigaben(FreigabeQuellTyp.AUSGANGS_DOKUMENT, dok.getId());
-        DokumentFreigabe freigabe = baseFreigabe();
+        DokumentFreigabe freigabe = baseFreigabe(gueltigkeitTage);
         freigabe.setQuellTyp(FreigabeQuellTyp.AUSGANGS_DOKUMENT);
         freigabe.setQuellDokumentId(dok.getId());
         freigabe.setDokumentNummer(dok.getDokumentNummer());
@@ -220,7 +261,19 @@ public class DokumentFreigabeService
     @Transactional
     public Optional<String> erstelleFreigabeBlockFuerDokument(Long dokumentId, boolean isAnfrage, String recipient, String pdfDateiname)
     {
+        return erstelleFreigabeBlockFuerDokument(dokumentId, isAnfrage, recipient, pdfDateiname, DEFAULT_GUELTIGKEITS_TAGE);
+    }
+
+    /**
+     * Wie {@link #erstelleFreigabeBlockFuerDokument(Long, boolean, String, String)},
+     * aber mit individuell gewählter Gültigkeitsdauer in Tagen.
+     * Werte außerhalb [1; 365] werden auf den Default zurückgesetzt.
+     */
+    @Transactional
+    public Optional<String> erstelleFreigabeBlockFuerDokument(Long dokumentId, boolean isAnfrage, String recipient, String pdfDateiname, int gueltigkeitTage)
+    {
         if (dokumentId == null) return Optional.empty();
+        int tage = clampGueltigkeitTage(gueltigkeitTage);
         try
         {
             // Neues System: AusgangsGeschaeftsDokument (DocumentEditor)
@@ -229,8 +282,8 @@ public class DokumentFreigabeService
             {
                 AusgangsGeschaeftsDokument agd = agdOpt.get();
                 if (!istAngebotOderABTyp(agd.getTyp())) return Optional.empty();
-                DokumentFreigabe freigabe = erstelleFuerAusgangsGeschaeftsDokument(agd, recipient, pdfDateiname);
-                return Optional.of(buildFreigabeBlockHtml(buildPublicUrl(freigabe), typZuBezeichnung(agd.getTyp())));
+                DokumentFreigabe freigabe = erstelleFuerAusgangsGeschaeftsDokument(agd, recipient, pdfDateiname, tage);
+                return Optional.of(buildFreigabeBlockHtml(buildPublicUrl(freigabe), typZuBezeichnung(agd.getTyp()), tage, freigabe.getAblaufDatum()));
             }
 
             // Fallback: altes System
@@ -243,8 +296,8 @@ public class DokumentFreigabeService
                             AnfrageGeschaeftsdokument gesDoc = (AnfrageGeschaeftsdokument) d;
                             String kundeName = gesDoc.getAnfrage() != null && gesDoc.getAnfrage().getKunde() != null
                                     ? gesDoc.getAnfrage().getKunde().getName() : null;
-                            DokumentFreigabe freigabe = erstelleFuerAnfrage(gesDoc, kundeName, recipient);
-                            return buildFreigabeBlockHtml(buildPublicUrl(freigabe), gesDoc.getGeschaeftsdokumentart());
+                            DokumentFreigabe freigabe = erstelleFuerAnfrage(gesDoc, kundeName, recipient, tage);
+                            return buildFreigabeBlockHtml(buildPublicUrl(freigabe), gesDoc.getGeschaeftsdokumentart(), tage, freigabe.getAblaufDatum());
                         });
             }
             else
@@ -256,8 +309,8 @@ public class DokumentFreigabeService
                             ProjektGeschaeftsdokument gesDoc = (ProjektGeschaeftsdokument) d;
                             String kundeName = gesDoc.getProjekt() != null && gesDoc.getProjekt().getKundenId() != null
                                     ? gesDoc.getProjekt().getKundenId().getName() : null;
-                            DokumentFreigabe freigabe = erstelleFuerProjekt(gesDoc, kundeName, recipient);
-                            return buildFreigabeBlockHtml(buildPublicUrl(freigabe), gesDoc.getGeschaeftsdokumentart());
+                            DokumentFreigabe freigabe = erstelleFuerProjekt(gesDoc, kundeName, recipient, tage);
+                            return buildFreigabeBlockHtml(buildPublicUrl(freigabe), gesDoc.getGeschaeftsdokumentart(), tage, freigabe.getAblaufDatum());
                         });
             }
         }
@@ -265,6 +318,12 @@ public class DokumentFreigabeService
         {
             return Optional.empty();
         }
+    }
+
+    private static int clampGueltigkeitTage(int tage)
+    {
+        if (tage < MIN_GUELTIGKEITS_TAGE || tage > MAX_GUELTIGKEITS_TAGE) return DEFAULT_GUELTIGKEITS_TAGE;
+        return tage;
     }
 
     private static boolean istAngebotOderABTyp(AusgangsGeschaeftsDokumentTyp typ)
@@ -648,12 +707,13 @@ public class DokumentFreigabeService
         return a.getErstelltAm().isAfter(b.getErstelltAm()) ? a : b;
     }
 
-    private DokumentFreigabe baseFreigabe()
+    private DokumentFreigabe baseFreigabe(int gueltigkeitTage)
     {
+        int tage = clampGueltigkeitTage(gueltigkeitTage);
         DokumentFreigabe freigabe = new DokumentFreigabe();
         freigabe.setUuid(UUID.randomUUID().toString());
         freigabe.setErstelltAm(LocalDateTime.now());
-        freigabe.setAblaufDatum(LocalDateTime.now().plusDays(GUELTIGKEITS_TAGE));
+        freigabe.setAblaufDatum(LocalDateTime.now().plusDays(tage));
         freigabe.setStatus(FreigabeStatus.PENDING);
         return freigabe;
     }

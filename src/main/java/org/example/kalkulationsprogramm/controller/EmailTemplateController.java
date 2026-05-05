@@ -53,8 +53,11 @@ public class EmailTemplateController {
                 boolean isAnfrage = Boolean.TRUE.equals(request.getIsAnfrage());
                 String recipient = request.getRecipient() != null ? request.getRecipient() : "";
                 String pdfDateiname = request.getPdfDateiname();
+                int gueltigkeitTage = request.getGueltigkeitTage() != null
+                        ? request.getGueltigkeitTage()
+                        : DokumentFreigabeService.DEFAULT_GUELTIGKEITS_TAGE;
                 body += dokumentFreigabeService
-                        .erstelleFreigabeBlockFuerDokument(request.getDokumentId(), isAnfrage, recipient, pdfDateiname)
+                        .erstelleFreigabeBlockFuerDokument(request.getDokumentId(), isAnfrage, recipient, pdfDateiname, gueltigkeitTage)
                         .orElse("");
             }
 
@@ -183,6 +186,8 @@ public class EmailTemplateController {
         private String recipient;
         /** Dateiname der gespeicherten PDF (UUID.pdf) für die Freigabe-Seite */
         private String pdfDateiname;
+        /** Vom Anwender gewählte Gültigkeitsdauer des Freigabe-Links in Tagen (nur bei Angebot). */
+        private Integer gueltigkeitTage;
     }
 
     @Data

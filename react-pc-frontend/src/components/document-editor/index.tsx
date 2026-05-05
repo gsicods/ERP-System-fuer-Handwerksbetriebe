@@ -48,6 +48,7 @@ import { KategorieBestaetigenDialog } from './KategorieBestaetigenDialog';
 import { EmailComposeModal } from '../EmailComposeModal';
 import { anredeEnumToText } from '../EmailComposeForm';
 import { EmailFormatDialog, type PdfFormat } from './EmailFormatDialog';
+import { EmailValidityDialog } from './EmailValidityDialog';
 import { useToast } from '../ui/toast';
 
 interface ImportedGaebBlock {
@@ -251,6 +252,10 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     // Email Versand State
     const [showEmailModal, setShowEmailModal] = useState(false);
     const [showFormatDialog, setShowFormatDialog] = useState(false);
+    const [showValidityDialog, setShowValidityDialog] = useState(false);
+    const [pendingFormat, setPendingFormat] = useState<PdfFormat | null>(null);
+    /** Vom Benutzer im Pop-up gewählte Gültigkeit des Annahme-Links (nur Angebote). */
+    const [gueltigkeitTage, setGueltigkeitTage] = useState<number | null>(null);
     const [emailLoading, setEmailLoading] = useState(false);
     const [emailAttachments, setEmailAttachments] = useState<File[]>([]);
     const [emailBody, setEmailBody] = useState<string>('');
@@ -1509,7 +1514,29 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         setShowFormatDialog(true);
     };
 
-    const handleFormatSelected = async (format: PdfFormat) => {
+    const handleFormatSelected = (format: PdfFormat) => {
+        // Bei Angeboten muss vor dem Versand die Gültigkeit des Annahme-Links
+        // gewählt werden. Bei allen anderen Dokumenttypen gibt es keinen
+        // Freigabe-Link, also direkt weiter zur PDF-Erzeugung.
+        if (dokumentTyp === 'ANGEBOT') {
+            setPendingFormat(format);
+            setShowFormatDialog(false);
+            setShowValidityDialog(true);
+            return;
+        }
+        void prepareAndOpenEmail(format, null);
+    };
+
+    const handleValidityConfirmed = (tage: number) => {
+        setGueltigkeitTage(tage);
+        setShowValidityDialog(false);
+        const format = pendingFormat;
+        if (format) {
+            void prepareAndOpenEmail(format, tage);
+        }
+    };
+
+    const prepareAndOpenEmail = async (format: PdfFormat, tage: number | null) => {
         setEmailLoading(true);
         try {
             // 1. Auto-Save wenn nötig – Rückgabewert liefert aktuelle ID (React-State ist async)
@@ -1593,6 +1620,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         isAnfrage: !!anfrageId,
                         recipient: kontextDaten.kundenEmails?.[0] ?? null,
                         pdfDateiname: pdfDateiname,
+                        gueltigkeitTage: tage,
                     })
                 });
                 if (templateRes.ok) {
@@ -2320,6 +2348,18 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                 loading={emailLoading}
             />
 
+            {/* Gültigkeitsdauer-Auswahl (nur Angebote) */}
+            <EmailValidityDialog
+                isOpen={showValidityDialog}
+                onClose={() => {
+                    setShowValidityDialog(false);
+                    setPendingFormat(null);
+                    setEmailLoading(false);
+                }}
+                onConfirm={handleValidityConfirmed}
+                defaultTage={gueltigkeitTage ?? 14}
+            />
+
             {/* E-Mail Versand Modal */}
             <EmailComposeModal
                 isOpen={showEmailModal}
@@ -2342,6 +2382,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                 initialRecipient={kontextDaten.kundenEmails?.[0]}
                 initialSubject={emailSubject}
                 initialBody={emailBody}
+                gueltigkeitTage={gueltigkeitTage ?? undefined}
                 onSuccess={async () => {
                     // Versanddatum setzen (Buchung erfolgte bereits vor E-Mail-Vorbereitung)
                     if (dokument?.id) {
@@ -2361,6 +2402,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     setShowEmailModal(false);
                     setEmailAttachments([]);
                     setEmailBody('');
+                    setGueltigkeitTage(null);
+                    setPendingFormat(null);
                 }}
             />
         </div>

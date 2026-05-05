@@ -57,7 +57,6 @@ export function LivePreviewPanel({ previewUrl, loading, stale, onRefresh, isOpen
 
     // Self-Ref vorab deklariert, damit renderPdf sich für eine pending-URL re-aufrufen kann
     // (Wert wird unten nach Definition gesetzt).
-    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
     const renderPdfRef = useRef<((url: string) => Promise<void>) | null>(null);
 
     /**
