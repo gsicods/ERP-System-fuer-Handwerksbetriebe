@@ -100,7 +100,7 @@ public class AusgangsGeschaeftsDokumentAudit {
     private boolean digitalAngenommen;
 
     /** SHA-256-Hash des HTML-Inhalts; erkennt nachträgliche Manipulation. */
-    @Column(name = "inhalt_hash", length = 64)
+    @Column(name = "inhalt_hash", columnDefinition = "CHAR(64)")
     private String inhaltHash;
 
     // ============== Änderungs-Metadaten ==============
