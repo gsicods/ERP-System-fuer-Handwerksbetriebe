@@ -40,7 +40,7 @@ public class AusgangsGeschaeftsDokumentAudit {
     private Long dokumentId;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
+    @Column(nullable = false, length = 20, columnDefinition = "VARCHAR(20)")
     private AusgangsGeschaeftsDokumentAuditAktion aktion;
 
     // ============== Snapshot der Daten zum Zeitpunkt der Aktion ==============
@@ -49,7 +49,7 @@ public class AusgangsGeschaeftsDokumentAudit {
     private String dokumentNummer;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 30)
+    @Column(nullable = false, length = 30, columnDefinition = "VARCHAR(30)")
     private AusgangsGeschaeftsDokumentTyp typ;
 
     private LocalDate datum;
