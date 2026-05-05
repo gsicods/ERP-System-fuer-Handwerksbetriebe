@@ -13,6 +13,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -91,6 +92,17 @@ public class FreigabeInternalController
             log.warn("PDF zur Freigabe {} nicht ladbar: {}", uuid, e.getMessage());
             return ResponseEntity.notFound().build();
         }
+    }
+
+    /**
+     * Löscht die temporär gespeicherte PDF einer abgelaufenen Freigabe.
+     * Wird von der Internetseite aufgerufen, wenn der Freigabe-Link abgelaufen ist.
+     */
+    @DeleteMapping("/{uuid}/pdf")
+    public ResponseEntity<Void> loeschePdf(@PathVariable String uuid)
+    {
+        freigabeService.loeschePdfFuerFreigabe(uuid);
+        return ResponseEntity.noContent().build();
     }
 
     /**

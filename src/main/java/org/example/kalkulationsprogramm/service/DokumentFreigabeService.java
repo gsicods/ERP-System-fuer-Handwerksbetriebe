@@ -52,6 +52,7 @@ public class DokumentFreigabeService
     private final ProjektDokumentRepository projektDokumentRepository;
     private final AusgangsGeschaeftsDokumentRepository ausgangsGeschaeftsDokumentRepository;
     private final WebPushService webPushService;
+    private final DateiSpeicherService dateiSpeicherService;
 
     @Value("${freigabe.hash.salt:CHANGE_ME_LOCAL_ONLY}")
     private String hashSalt;
@@ -129,9 +130,11 @@ public class DokumentFreigabeService
 
     /**
      * Erzeugt einen Freigabe-Token für ein AusgangsGeschaeftsDokument (neues Dokumentsystem).
+     * Die PDF-Datei wird beim E-Mail-Versand serverseitig gespeichert und hier eingetragen.
+     * Nach Ablauf der Freigabe wird sie über {@link #loeschePdfFuerFreigabe(String)} bereinigt.
      */
     @Transactional
-    public DokumentFreigabe erstelleFuerAusgangsGeschaeftsDokument(AusgangsGeschaeftsDokument dok, String kundeEmail)
+    public DokumentFreigabe erstelleFuerAusgangsGeschaeftsDokument(AusgangsGeschaeftsDokument dok, String kundeEmail, String pdfDateiname)
     {
         DokumentFreigabe freigabe = baseFreigabe();
         freigabe.setQuellTyp(FreigabeQuellTyp.AUSGANGS_DOKUMENT);
@@ -139,7 +142,7 @@ public class DokumentFreigabeService
         freigabe.setDokumentNummer(dok.getDokumentNummer());
         freigabe.setDokumentArt(typZuBezeichnung(dok.getTyp()));
         freigabe.setDokumentBetrag(dok.getBetragBrutto());
-        freigabe.setDokumentDatei(null); // PDFs werden on-demand generiert
+        freigabe.setDokumentDatei(pdfDateiname);
 
         String bauvorhaben = null;
         String kundeName = null;
@@ -172,13 +175,32 @@ public class DokumentFreigabeService
     }
 
     /**
+     * Löscht die gespeicherte PDF einer abgelaufenen Freigabe vom Datenträger.
+     * Wird von der Internetseite aufgerufen, wenn die Freigabe abgelaufen ist.
+     */
+    @Transactional
+    public void loeschePdfFuerFreigabe(String uuid)
+    {
+        repository.findByUuid(uuid).ifPresent(freigabe ->
+        {
+            String dateiname = freigabe.getDokumentDatei();
+            if (dateiname != null && !dateiname.isBlank())
+            {
+                dateiSpeicherService.loescheDokumentPdfByDateiname(dateiname);
+                freigabe.setDokumentDatei(null);
+                repository.save(freigabe);
+            }
+        });
+    }
+
+    /**
      * Erstellt einen Freigabe-Token für ein Dokument (per ID) und gibt den fertigen
      * HTML-Block zurück, der in die E-Mail-Vorlage eingebettet werden kann.
      * Sucht zuerst im neuen System (AusgangsGeschaeftsDokument), dann im alten.
      * Nur für Angebote und Auftragsbestätigungen – bei anderen Typen wird Optional.empty() zurückgegeben.
      */
     @Transactional
-    public Optional<String> erstelleFreigabeBlockFuerDokument(Long dokumentId, boolean isAnfrage, String recipient)
+    public Optional<String> erstelleFreigabeBlockFuerDokument(Long dokumentId, boolean isAnfrage, String recipient, String pdfDateiname)
     {
         if (dokumentId == null) return Optional.empty();
         try
@@ -189,7 +211,7 @@ public class DokumentFreigabeService
             {
                 AusgangsGeschaeftsDokument agd = agdOpt.get();
                 if (!istAngebotOderABTyp(agd.getTyp())) return Optional.empty();
-                DokumentFreigabe freigabe = erstelleFuerAusgangsGeschaeftsDokument(agd, recipient);
+                DokumentFreigabe freigabe = erstelleFuerAusgangsGeschaeftsDokument(agd, recipient, pdfDateiname);
                 return Optional.of(buildFreigabeBlockHtml(buildPublicUrl(freigabe), typZuBezeichnung(agd.getTyp())));
             }
 

@@ -290,12 +290,14 @@ class AusgangsGeschaeftsDokumentControllerTest {
         @Test
         @DisplayName("Speichert PDF erfolgreich")
         void speichertPdfErfolgreich() throws Exception {
-            doNothing().when(service).speicherePdfFuerDokument(eq(1L), any(byte[].class));
+            given(service.speicherePdfFuerDokument(eq(1L), any(byte[].class)))
+                    .willReturn("abc123.pdf");
 
             mockMvc.perform(post("/api/ausgangs-dokumente/1/pdf-speichern")
                             .contentType(MediaType.APPLICATION_OCTET_STREAM)
                             .content(new byte[]{0x25, 0x50, 0x44, 0x46}))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.dateiname").value("abc123.pdf"));
         }
 
         @Test

@@ -1538,15 +1538,27 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
 
             const blob = await response.blob();
 
-            // PDF serverseitig speichern für Offene Posten Ansicht
-            if (showFinalizationPrompt && dokument?.id) {
+            // PDF serverseitig speichern:
+            // - Immer für Angebote/AB → Dateiname wird an Freigabe-Token gehängt
+            // - Nur bei Buchung für Rechnungen → Offene-Posten-Ansicht
+            let pdfDateiname: string | null = null;
+            const brauchtPdfSpeicherung = aktiveDokumentId && (
+                dokumentTyp === 'ANGEBOT' ||
+                dokumentTyp === 'AUFTRAGSBESTAETIGUNG' ||
+                showFinalizationPrompt
+            );
+            if (brauchtPdfSpeicherung) {
                 try {
                     const arrayBuffer = await blob.arrayBuffer();
-                    await fetch(`/api/ausgangs-dokumente/${dokument.id}/pdf-speichern`, {
+                    const saveRes = await fetch(`/api/ausgangs-dokumente/${aktiveDokumentId}/pdf-speichern`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/pdf' },
                         body: arrayBuffer
                     });
+                    if (saveRes.ok) {
+                        const saved = await saveRes.json() as { dateiname?: string };
+                        pdfDateiname = saved.dateiname ?? null;
+                    }
                 } catch (e) {
                     console.warn('PDF konnte nicht serverseitig gespeichert werden:', e);
                 }
@@ -1576,6 +1588,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         dokumentId: aktiveDokumentId,
                         isAnfrage: !!anfrageId,
                         recipient: kontextDaten.kundenEmails?.[0] ?? null,
+                        pdfDateiname: pdfDateiname,
                     })
                 });
                 if (templateRes.ok) {

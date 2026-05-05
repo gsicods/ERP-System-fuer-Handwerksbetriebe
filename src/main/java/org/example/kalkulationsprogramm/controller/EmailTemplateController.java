@@ -50,8 +50,9 @@ public class EmailTemplateController {
                     && request.getDokumentId() != null) {
                 boolean isAnfrage = Boolean.TRUE.equals(request.getIsAnfrage());
                 String recipient = request.getRecipient() != null ? request.getRecipient() : "";
+                String pdfDateiname = request.getPdfDateiname();
                 body += dokumentFreigabeService
-                        .erstelleFreigabeBlockFuerDokument(request.getDokumentId(), isAnfrage, recipient)
+                        .erstelleFreigabeBlockFuerDokument(request.getDokumentId(), isAnfrage, recipient, pdfDateiname)
                         .orElse("");
             }
 
@@ -178,6 +179,8 @@ public class EmailTemplateController {
         private Boolean isAnfrage;
         /** Empfänger-E-Mail für die Freigabe-Zuordnung */
         private String recipient;
+        /** Dateiname der gespeicherten PDF (UUID.pdf) für die Freigabe-Seite */
+        private String pdfDateiname;
     }
 
     @Data

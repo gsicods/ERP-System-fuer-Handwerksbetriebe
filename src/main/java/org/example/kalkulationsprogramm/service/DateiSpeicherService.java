@@ -1570,6 +1570,17 @@ public class DateiSpeicherService {
         }
     }
 
+    public void loescheDokumentPdfByDateiname(String dateiname) {
+        if (dateiname == null || dateiname.isBlank()) return;
+        try {
+            Path pfad = dokumentenSpeicherplatz.resolve(dateiname).normalize();
+            if (!pfad.startsWith(dokumentenSpeicherplatz)) return;
+            Files.deleteIfExists(pfad);
+        } catch (Exception e) {
+            log.warn("Freigabe-PDF konnte nicht gelöscht werden: {}", dateiname, e);
+        }
+    }
+
     public Resource ladeDokumentAlsResource(String dateiname) {
         try {
             // Try all storage locations in order

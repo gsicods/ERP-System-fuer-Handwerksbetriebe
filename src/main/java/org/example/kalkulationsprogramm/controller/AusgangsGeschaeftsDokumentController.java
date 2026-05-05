@@ -132,8 +132,8 @@ public class AusgangsGeschaeftsDokumentController {
             if (pdfBytes == null || pdfBytes.length == 0) {
                 return ResponseEntity.badRequest().body("Keine PDF-Daten erhalten");
             }
-            service.speicherePdfFuerDokument(id, pdfBytes);
-            return ResponseEntity.ok().build();
+            String dateiname = service.speicherePdfFuerDokument(id, pdfBytes);
+            return ResponseEntity.ok(java.util.Map.of("dateiname", dateiname));
         } catch (RuntimeException e) {
             log.error("Fehler beim Speichern der PDF für Dokument {}: {}", id, e.getMessage(), e);
             return ResponseEntity.badRequest().body(e.getMessage());

@@ -661,7 +661,7 @@ public class AusgangsGeschaeftsDokumentService {
      * direkt auf die PDF-Datei verweist (statt auf den Document-Editor).
      */
     @Transactional
-    public void speicherePdfFuerDokument(Long dokumentId, byte[] pdfBytes) {
+    public String speicherePdfFuerDokument(Long dokumentId, byte[] pdfBytes) {
         AusgangsGeschaeftsDokument dokument = dokumentRepository.findById(dokumentId)
                 .orElseThrow(() -> new RuntimeException("Dokument nicht gefunden: " + dokumentId));
 
@@ -693,6 +693,7 @@ public class AusgangsGeschaeftsDokumentService {
                     projektDokumentRepository.save(g);
                     log.info("PDF für Offenen Posten {} gespeichert: {}", g.getDokumentid(), gespeicherterDateiname);
                 });
+        return gespeicherterDateiname;
     }
 
     /**
