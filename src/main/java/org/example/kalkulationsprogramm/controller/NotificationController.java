@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.example.kalkulationsprogramm.domain.AnfrageGeschaeftsdokument;
+import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
 import org.example.kalkulationsprogramm.domain.DokumentFreigabe;
 import org.example.kalkulationsprogramm.domain.Email;
 import org.example.kalkulationsprogramm.domain.KalenderEintrag;
@@ -19,6 +21,8 @@ import org.example.kalkulationsprogramm.domain.ProjektGeschaeftsdokument;
 import org.example.kalkulationsprogramm.domain.ProjektNotiz;
 import org.example.kalkulationsprogramm.domain.ReklamationStatus;
 import org.example.kalkulationsprogramm.domain.Urlaubsantrag;
+import org.example.kalkulationsprogramm.repository.AnfrageDokumentRepository;
+import org.example.kalkulationsprogramm.repository.AusgangsGeschaeftsDokumentRepository;
 import org.example.kalkulationsprogramm.repository.DokumentFreigabeRepository;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
 import org.example.kalkulationsprogramm.repository.KalenderEintragRepository;
@@ -53,6 +57,8 @@ public class NotificationController {
         private final LieferantDokumentRepository lieferantDokumentRepository;
         private final LieferantReklamationRepository lieferantReklamationRepository;
         private final DokumentFreigabeRepository dokumentFreigabeRepository;
+        private final AusgangsGeschaeftsDokumentRepository ausgangsGeschaeftsDokumentRepository;
+        private final AnfrageDokumentRepository anfrageDokumentRepository;
 
         @GetMapping("/summary")
         public NotificationSummaryDto getSummary(@RequestParam(required = false) Long mitarbeiterId) {
@@ -471,7 +477,7 @@ public class NotificationController {
                         if (!akzeptiert.isEmpty()) {
                                 categories.add(new CategoryDto("FREIGABEN_ANGENOMMEN",
                                                 "Digital angenommen", akzeptiert.size(), "FileText",
-                                                "/anfragen"));
+                                                "/anfragen?freigabe=accepted"));
 
                                 akzeptiert.stream()
                                                 .limit(3)
@@ -485,10 +491,7 @@ public class NotificationController {
                                                         String art = f.getDokumentArt() == null
                                                                         ? "Dokument"
                                                                         : f.getDokumentArt();
-                                                        String link = f.getQuellTyp() != null && f.getQuellTyp().name()
-                                                                        .equals("PROJEKT")
-                                                                        ? "/projekte"
-                                                                        : "/anfragen";
+                                                        String link = freigabeZuInstanzLink(f);
                                                         recentItems.add(new RecentItemDto(
                                                                         "FREIGABE_ANGENOMMEN",
                                                                         art + " " + (f.getDokumentNummer() == null
@@ -520,6 +523,45 @@ public class NotificationController {
         }
 
         // ---- Helper ----
+
+        /**
+         * Löst aus einer Freigabe den Deep-Link auf die konkrete Anfrage- oder Projekt-Instanz auf.
+         * Fallback ist der bisherige Listen-Link, damit der Klick nie ins Leere geht.
+         */
+        private String freigabeZuInstanzLink(DokumentFreigabe f) {
+                if (f == null || f.getQuellTyp() == null) return "/anfragen";
+                try {
+                        switch (f.getQuellTyp()) {
+                                case AUSGANGS_DOKUMENT: {
+                                        AusgangsGeschaeftsDokument dok = ausgangsGeschaeftsDokumentRepository
+                                                        .findById(f.getQuellDokumentId()).orElse(null);
+                                        if (dok == null) return "/anfragen";
+                                        if (dok.getAnfrage() != null) {
+                                                return "/anfragen?anfrageId=" + dok.getAnfrage().getId();
+                                        }
+                                        if (dok.getProjekt() != null) {
+                                                return "/projekte?projektId=" + dok.getProjekt().getId();
+                                        }
+                                        return "/anfragen";
+                                }
+                                case ANFRAGE: {
+                                        return anfrageDokumentRepository.findById(f.getQuellDokumentId())
+                                                        .filter(d -> d instanceof AnfrageGeschaeftsdokument)
+                                                        .map(d -> (AnfrageGeschaeftsdokument) d)
+                                                        .filter(g -> g.getAnfrage() != null)
+                                                        .map(g -> "/anfragen?anfrageId=" + g.getAnfrage().getId())
+                                                        .orElse("/anfragen");
+                                }
+                                case PROJEKT:
+                                        // Projekt-Detail wird nicht über Query-Param geroutet; Liste reicht.
+                                        return "/projekte";
+                                default:
+                                        return "/anfragen";
+                        }
+                } catch (Exception ignored) {
+                        return "/anfragen";
+                }
+        }
 
         private void addEmailCategory(List<CategoryDto> categories, List<RecentItemDto> recentItems,
                         List<Email> allEmails, String type, String label, String folder) {

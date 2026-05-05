@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
     Calendar,
     Check,
@@ -8,9 +8,11 @@ import {
     FileText,
     GitBranch,
     Lock,
+    Mail,
     Plus,
     Trash2,
     User,
+    X,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { cn } from '../lib/utils';
@@ -107,6 +109,31 @@ export function DokumentHierarchie({
 
     // Dokumenttyp-Dialog
     const [showDokumentTypDialog, setShowDokumentTypDialog] = useState(false);
+
+    // Freigabe-Status pro Dokument-ID (digital angenommen / wartet / abgelaufen)
+    type FreigabeStatusKurz = {
+        status: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+        dokumentArt: string;
+        dokumentNummer: string;
+        akzeptiertAm: string | null;
+        ablaufDatum: string;
+    };
+    const [freigabeStatus, setFreigabeStatus] = useState<Record<number, FreigabeStatusKurz>>({});
+
+    useEffect(() => {
+        const ids = ausgangsDokumente
+            .map(d => d.id)
+            .filter((id): id is number => typeof id === 'number');
+        if (ids.length === 0) {
+            setFreigabeStatus({});
+            return;
+        }
+        const idsParam = ids.join(',');
+        fetch(`/api/ausgangs-dokumente/freigabe-status?ids=${encodeURIComponent(idsParam)}`)
+            .then(res => (res.ok ? res.json() : {}))
+            .then(data => setFreigabeStatus(data || {}))
+            .catch(() => setFreigabeStatus({}));
+    }, [ausgangsDokumente]);
 
     // Prüfen ob bereits ein Basisdokument (Root ohne Vorgänger) existiert
     const hasBasisdokument = useMemo(
@@ -337,11 +364,61 @@ export function DokumentHierarchie({
                                         Gebucht
                                     </span>
                                 )}
-                                {!dok.storniert && !dok.gebucht && (
+                                {!dok.storniert && !dok.gebucht && !dok.digitalAngenommen && (
                                     <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
                                         Entwurf
                                     </span>
                                 )}
+                                {!dok.storniert && dok.digitalAngenommen && (
+                                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
+                                        <Lock className="w-3 h-3 inline-block mr-1" />
+                                        Verbindlich
+                                    </span>
+                                )}
+                                {(() => {
+                                    const fr = freigabeStatus[dok.id];
+                                    if (!fr) return null;
+                                    const formatShort = (iso: string | null) => {
+                                        if (!iso) return '';
+                                        try {
+                                            return new Date(iso).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
+                                        } catch { return ''; }
+                                    };
+                                    if (fr.status === 'ACCEPTED') {
+                                        return (
+                                            <span
+                                                title={`Digital angenommen am ${formatShort(fr.akzeptiertAm)}`}
+                                                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                            >
+                                                <Check className="w-3 h-3" />
+                                                Angenommen · {formatShort(fr.akzeptiertAm)}
+                                            </span>
+                                        );
+                                    }
+                                    if (fr.status === 'PENDING') {
+                                        return (
+                                            <span
+                                                title={`Freigabe-Link an Kunden versendet, gültig bis ${formatShort(fr.ablaufDatum)}`}
+                                                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+                                            >
+                                                <Mail className="w-3 h-3" />
+                                                Wartet auf Kunde
+                                            </span>
+                                        );
+                                    }
+                                    if (fr.status === 'EXPIRED' || fr.status === 'REVOKED') {
+                                        return (
+                                            <span
+                                                title="Freigabe-Link nicht mehr gültig"
+                                                className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200"
+                                            >
+                                                <X className="w-3 h-3" />
+                                                Link {fr.status === 'EXPIRED' ? 'abgelaufen' : 'zurückgezogen'}
+                                            </span>
+                                        );
+                                    }
+                                    return null;
+                                })()}
                             </div>
                             <p className="font-semibold text-slate-900 group-hover:text-rose-700 transition-colors">
                                 {dok.dokumentNummer}

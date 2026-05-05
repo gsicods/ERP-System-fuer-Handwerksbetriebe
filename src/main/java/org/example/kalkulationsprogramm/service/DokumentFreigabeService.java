@@ -8,6 +8,7 @@ import org.example.kalkulationsprogramm.domain.DokumentFreigabe;
 import org.example.kalkulationsprogramm.domain.FreigabeQuellTyp;
 import org.example.kalkulationsprogramm.domain.FreigabeStatus;
 import org.example.kalkulationsprogramm.domain.ProjektGeschaeftsdokument;
+import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentErstellenDto;
 import org.example.kalkulationsprogramm.repository.AnfrageDokumentRepository;
 import org.example.kalkulationsprogramm.repository.AusgangsGeschaeftsDokumentRepository;
 import org.example.kalkulationsprogramm.repository.DokumentFreigabeRepository;
@@ -51,6 +52,7 @@ public class DokumentFreigabeService
     private final AnfrageDokumentRepository anfrageDokumentRepository;
     private final ProjektDokumentRepository projektDokumentRepository;
     private final AusgangsGeschaeftsDokumentRepository ausgangsGeschaeftsDokumentRepository;
+    private final AusgangsGeschaeftsDokumentService ausgangsGeschaeftsDokumentService;
     private final WebPushService webPushService;
     private final DateiSpeicherService dateiSpeicherService;
 
@@ -67,6 +69,7 @@ public class DokumentFreigabeService
     @Transactional
     public DokumentFreigabe erstelleFuerAnfrage(AnfrageGeschaeftsdokument dokument, String kundeName, String kundeEmail)
     {
+        revokeAltePendingFreigaben(FreigabeQuellTyp.ANFRAGE, dokument.getId());
         DokumentFreigabe freigabe = baseFreigabe();
         freigabe.setQuellTyp(FreigabeQuellTyp.ANFRAGE);
         freigabe.setQuellDokumentId(dokument.getId());
@@ -87,6 +90,7 @@ public class DokumentFreigabeService
     @Transactional
     public DokumentFreigabe erstelleFuerProjekt(ProjektGeschaeftsdokument dokument, String kundeName, String kundeEmail)
     {
+        revokeAltePendingFreigaben(FreigabeQuellTyp.PROJEKT, dokument.getId());
         DokumentFreigabe freigabe = baseFreigabe();
         freigabe.setQuellTyp(FreigabeQuellTyp.PROJEKT);
         freigabe.setQuellDokumentId(dokument.getId());
@@ -136,6 +140,7 @@ public class DokumentFreigabeService
     @Transactional
     public DokumentFreigabe erstelleFuerAusgangsGeschaeftsDokument(AusgangsGeschaeftsDokument dok, String kundeEmail, String pdfDateiname)
     {
+        revokeAltePendingFreigaben(FreigabeQuellTyp.AUSGANGS_DOKUMENT, dok.getId());
         DokumentFreigabe freigabe = baseFreigabe();
         freigabe.setQuellTyp(FreigabeQuellTyp.AUSGANGS_DOKUMENT);
         freigabe.setQuellDokumentId(dok.getId());
@@ -336,7 +341,61 @@ public class DokumentFreigabeService
         } catch (Exception ignored) {
             // Push-Probleme dürfen die Annahme nie blockieren
         }
+
+        // Auto-Auftragsbestätigung: Hat der Kunde ein Angebot angenommen, erzeugen wir
+        // direkt eine Auftragsbestätigung als Folgedokument (mit den geerbten Positionen
+        // und den ABS-Standard-Textbausteinen). Fehler dürfen die Annahme nicht blockieren.
+        try {
+            erzeugeAutoAuftragsbestaetigungWennAngebot(saved);
+        } catch (Exception ignored) {
+            // bewusst geschluckt: AB-Erstellung ist Komfort, nicht kritisch
+        }
         return saved;
+    }
+
+    /**
+     * Wenn die akzeptierte Freigabe zu einem AusgangsGeschaeftsDokument vom Typ ANGEBOT gehört
+     * und noch keine Auftragsbestätigung als Nachfolger existiert, wird automatisch eine
+     * Auftragsbestätigung als Folgedokument erstellt. Inhalt, Positionen, Kunde und Projekt
+     * werden vom Angebot geerbt; Standard-Textbausteine werden beim Typwechsel ausgetauscht.
+     */
+    private void erzeugeAutoAuftragsbestaetigungWennAngebot(DokumentFreigabe freigabe)
+    {
+        if (freigabe.getQuellTyp() != FreigabeQuellTyp.AUSGANGS_DOKUMENT) return;
+        Long angebotId = freigabe.getQuellDokumentId();
+        if (angebotId == null) return;
+
+        AusgangsGeschaeftsDokument angebot = ausgangsGeschaeftsDokumentRepository.findById(angebotId).orElse(null);
+        if (angebot == null) return;
+        if (angebot.getTyp() != AusgangsGeschaeftsDokumentTyp.ANGEBOT) return;
+
+        // Angebot wird mit der Annahme verbindlich → sperren.
+        if (!angebot.isDigitalAngenommen())
+        {
+            angebot.setDigitalAngenommen(true);
+            ausgangsGeschaeftsDokumentRepository.save(angebot);
+        }
+
+        // Kein doppeltes Erzeugen: Hat das Angebot bereits eine Auftragsbestätigung als Nachfolger,
+        // tun wir nichts.
+        if (angebot.getNachfolger() != null && angebot.getNachfolger().stream()
+                .anyMatch(n -> n.getTyp() == AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG && !n.isStorniert()))
+        {
+            return;
+        }
+
+        AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+        dto.setTyp(AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG);
+        dto.setVorgaengerId(angebotId);
+        // Datum/Betreff/Inhalt werden vom Service aus dem Vorgänger geerbt.
+        AusgangsGeschaeftsDokument ab = ausgangsGeschaeftsDokumentService.erstellen(dto);
+
+        // Auftragsbestätigung ist das verbindliche Folgedokument der Annahme — direkt sperren.
+        if (ab != null && !ab.isDigitalAngenommen())
+        {
+            ab.setDigitalAngenommen(true);
+            ausgangsGeschaeftsDokumentRepository.save(ab);
+        }
     }
 
     /**
@@ -436,6 +495,42 @@ public class DokumentFreigabeService
         freigabe.setAblaufDatum(LocalDateTime.now().plusDays(GUELTIGKEITS_TAGE));
         freigabe.setStatus(FreigabeStatus.PENDING);
         return freigabe;
+    }
+
+    /**
+     * Setzt alle noch ausstehenden (PENDING) Freigaben für dasselbe Quell-Dokument
+     * auf REVOKED. Wird vor jeder Neu-Erstellung aufgerufen, damit nach einem erneuten
+     * E-Mail-Versand (z.B. nach Rabatt-Verhandlung) der alte Link nicht mehr akzeptiert
+     * werden kann und immer das aktuelle Angebot freigegeben wird.
+     *
+     * Bereits akzeptierte (ACCEPTED) oder abgelaufene (EXPIRED) Freigaben werden NICHT
+     * verändert — die bleiben als historischer Beweis erhalten.
+     */
+    private void revokeAltePendingFreigaben(FreigabeQuellTyp quellTyp, Long quellDokumentId)
+    {
+        if (quellDokumentId == null) return;
+        List<DokumentFreigabe> bestehende = repository.findByQuelle(quellTyp, List.of(quellDokumentId));
+        LocalDateTime jetzt = LocalDateTime.now();
+        for (DokumentFreigabe alt : bestehende)
+        {
+            if (alt.getStatus() == FreigabeStatus.PENDING)
+            {
+                alt.setStatus(FreigabeStatus.REVOKED);
+                // Restdatei nach Möglichkeit aufräumen, damit keine alte PDF mehr abrufbar ist.
+                String dateiname = alt.getDokumentDatei();
+                if (dateiname != null && !dateiname.isBlank())
+                {
+                    try
+                    {
+                        dateiSpeicherService.loescheDokumentPdfByDateiname(dateiname);
+                    }
+                    catch (Exception ignored) { /* Datei evtl. schon weg */ }
+                    alt.setDokumentDatei(null);
+                }
+                alt.setAblaufDatum(jetzt);
+                repository.save(alt);
+            }
+        }
     }
 
     private String berechneHashOriginal(DokumentFreigabe f)

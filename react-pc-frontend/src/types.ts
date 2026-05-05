@@ -819,6 +819,8 @@ export interface AusgangsGeschaeftsDokument {
   gebuchtAm?: string;
   storniert: boolean;
   storniertAm?: string;
+  /** Kunde hat das Dokument digital angenommen → gesperrt für Bearbeitung */
+  digitalAngenommen?: boolean;
   bearbeitbar: boolean;
   // Projekt
   projektId?: number;

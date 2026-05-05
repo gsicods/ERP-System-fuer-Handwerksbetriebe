@@ -7,6 +7,7 @@ import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsG
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentResponseDto;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentUpdateDto;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
+import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -41,6 +42,9 @@ class AusgangsGeschaeftsDokumentControllerTest {
 
     @MockBean
     private AusgangsGeschaeftsDokumentService service;
+
+    @MockBean
+    private DokumentFreigabeService dokumentFreigabeService;
 
     private AusgangsGeschaeftsDokumentResponseDto buildResponseDto(Long id, String nummer) {
         AusgangsGeschaeftsDokumentResponseDto dto = new AusgangsGeschaeftsDokumentResponseDto();

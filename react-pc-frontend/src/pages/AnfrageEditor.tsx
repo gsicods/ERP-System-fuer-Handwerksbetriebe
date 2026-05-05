@@ -1713,9 +1713,19 @@ export default function AnfrageEditor() {
     }, [searchParams]);
 
     // Filters
-    const [filters, setFilters] = useState({
+    const initialFreigabeParam = searchParams.get('freigabe');
+    const initialFreigabe: 'all' | 'accepted' | 'pending' | 'expired' =
+        initialFreigabeParam === 'accepted' || initialFreigabeParam === 'pending' || initialFreigabeParam === 'expired'
+            ? initialFreigabeParam
+            : 'all';
+    const [filters, setFilters] = useState<{
+        q: string;
+        jahr: string;
+        freigabe: 'all' | 'accepted' | 'pending' | 'expired';
+    }>({
         q: "",
         jahr: "",
+        freigabe: initialFreigabe,
     });
     const [verfuegbareJahre, setVerfuegbareJahre] = useState<number[]>([]);
 
@@ -1833,7 +1843,7 @@ export default function AnfrageEditor() {
 
     // Handlers
     const handleFilterChange = (key: string, value: string) => {
-        setFilters((prev) => ({ ...prev, [key]: value }));
+        setFilters((prev) => ({ ...prev, [key]: value } as typeof prev));
     };
 
     const handleFilterSubmit = (e: React.FormEvent) => {
@@ -1843,9 +1853,22 @@ export default function AnfrageEditor() {
     };
 
     const handleResetFilters = () => {
-        setFilters({ q: "", jahr: "" });
+        setFilters({ q: "", jahr: "", freigabe: 'all' });
         setPage(0);
     };
+
+    // Frontend-Filter über Freigabe-Status (Backend filtert nur q/jahr).
+    // Wirkt zusätzlich auf die geladenen Anfragen der aktuellen Seite.
+    const sichtbareAnfragen = useMemo(() => {
+        if (filters.freigabe === 'all') return anfragen;
+        return anfragen.filter(a => {
+            const fs = freigabeStatusByAnfrageId[a.id]?.status;
+            if (filters.freigabe === 'accepted') return fs === 'ACCEPTED';
+            if (filters.freigabe === 'pending') return fs === 'PENDING';
+            if (filters.freigabe === 'expired') return fs === 'EXPIRED' || fs === 'REVOKED';
+            return true;
+        });
+    }, [anfragen, freigabeStatusByAnfrageId, filters.freigabe]);
 
     // Handlers (Refactored to loadDetails below)
 
@@ -1974,25 +1997,42 @@ export default function AnfrageEditor() {
                             className="mt-1"
                         />
                     </div>
-                    <div className="flex items-end gap-3 md:col-span-2 xl:col-span-2">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">Angebots-Status</label>
+                        <Select
+                            value={filters.freigabe}
+                            onChange={(value) => handleFilterChange('freigabe', value)}
+                            options={[
+                                { value: 'all', label: 'Alle' },
+                                { value: 'accepted', label: 'Angebot angenommen' },
+                                { value: 'pending', label: 'Wartet auf Kunden' },
+                                { value: 'expired', label: 'Link abgelaufen' },
+                            ]}
+                            placeholder="Status wählen"
+                            className="mt-1"
+                        />
+                    </div>
+                    <div className="flex items-end gap-3">
                         <Button type="submit" className="flex-1 bg-rose-600 text-white hover:bg-rose-700">Filtern</Button>
                         <Button type="button" variant="outline" className="flex-1" onClick={handleResetFilters}>Reset</Button>
                     </div>
                 </form>
-                <p className="text-xs text-gray-500 mt-3">Für Performance werden immer nur {PAGE_SIZE} Einträge auf einmal geladen.</p>
+                <p className="text-xs text-gray-500 mt-3">Für Performance werden immer nur {PAGE_SIZE} Einträge auf einmal geladen. Status-Filter wirkt auf die geladene Seite.</p>
             </div>
 
             {/* Grid Content */}
             {loading ? (
                 <div className="text-center py-8 text-slate-500">Anfragen werden geladen...</div>
-            ) : anfragen.length === 0 ? (
+            ) : sichtbareAnfragen.length === 0 ? (
                 <div className="bg-white p-8 rounded-2xl text-center text-slate-500 border-dashed border-2">
                     <FileText className="w-10 h-10 mx-auto mb-2 text-rose-200" />
-                    Keine Anfragen gefunden.
+                    {filters.freigabe !== 'all' && anfragen.length > 0
+                        ? 'Keine Anfragen mit diesem Status auf der aktuellen Seite.'
+                        : 'Keine Anfragen gefunden.'}
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                    {anfragen.map((anfrage) => (
+                    {sichtbareAnfragen.map((anfrage) => (
                         <AnfrageCard
                             key={anfrage.id}
                             anfrage={anfrage}

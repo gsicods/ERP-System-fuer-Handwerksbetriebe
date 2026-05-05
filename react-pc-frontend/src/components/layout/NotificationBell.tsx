@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import {
-    Bell, Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, X, Package, CheckCircle2
+    Bell, Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, X, Package, CheckCircle2,
+    Inbox, Wallet, Users, Building2, Briefcase
 } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -78,6 +79,69 @@ const RECENT_TYPE_ICONS: Record<string, React.ComponentType<{ className?: string
     REKLAMATION: AlertTriangle,
     FREIGABE_ANGENOMMEN: CheckCircle2,
 };
+
+// ── Gruppen-Definition ─────────────────────────────────────────────────
+// Strukturiert die Kategorien thematisch — sonst wirkt die Liste zerfasert.
+
+interface NotificationGroup {
+    id: string;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    accentText: string;
+    accentBg: string;
+    types: string[];
+}
+
+const GROUPS: NotificationGroup[] = [
+    {
+        id: 'posteingaenge',
+        label: 'Posteingänge',
+        icon: Inbox,
+        accentText: 'text-blue-600',
+        accentBg: 'bg-blue-50',
+        types: ['EMAILS', 'EMAILS_PROJECTS', 'EMAILS_OFFERS', 'EMAILS_SUPPLIERS', 'EMAILS_SPAM', 'EMAILS_NEWSLETTER'],
+    },
+    {
+        id: 'geschaeft',
+        label: 'Geschäft',
+        icon: Briefcase,
+        accentText: 'text-emerald-600',
+        accentBg: 'bg-emerald-50',
+        types: ['FREIGABEN_ANGENOMMEN', 'BAUTAGEBUCH'],
+    },
+    {
+        id: 'finanzen',
+        label: 'Finanzen',
+        icon: Wallet,
+        accentText: 'text-orange-600',
+        accentBg: 'bg-orange-50',
+        types: ['EINGANG_FAELLIG', 'AUSGANG_UEBERFAELLIG', 'RECHNUNGEN'],
+    },
+    {
+        id: 'termine',
+        label: 'Termine',
+        icon: CalendarClock,
+        accentText: 'text-rose-600',
+        accentBg: 'bg-rose-50',
+        types: ['TERMINE'],
+    },
+    {
+        id: 'personal',
+        label: 'Personal',
+        icon: Users,
+        accentText: 'text-emerald-600',
+        accentBg: 'bg-emerald-50',
+        types: ['URLAUBSANTRAEGE'],
+    },
+    {
+        id: 'lieferanten',
+        label: 'Lieferanten',
+        icon: Building2,
+        accentText: 'text-cyan-600',
+        accentBg: 'bg-cyan-50',
+        types: ['LIEFERSCHEINE', 'REKLAMATIONEN'],
+    },
+];
 
 // ── Dismissal helpers ────────────────────────────────────────────────────
 // Dismissals speichern den Stand zum Zeitpunkt des Klicks.
@@ -275,9 +339,9 @@ export function NotificationBell() {
 
             {/* Dropdown */}
             {open && data && (
-                <div className="absolute right-0 top-full mt-2 w-[420px] bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden">
+                <div className="absolute right-0 top-full mt-2 w-[520px] max-h-[80vh] bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col">
                     {/* Header */}
-                    <div className="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-rose-50 to-white border-b border-slate-100">
+                    <div className="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-rose-50 to-white border-b border-slate-100 shrink-0">
                         <div className="flex items-center gap-2">
                             <Bell className="w-4 h-4 text-rose-600" />
                             <span className="text-sm font-semibold text-slate-800">Benachrichtigungen</span>
@@ -297,79 +361,108 @@ export function NotificationBell() {
                         </button>
                     </div>
 
-                    {/* Category tiles */}
-                    {data.categories.length > 0 ? (
-                        <div className="grid grid-cols-2 gap-2 p-3">
-                            {data.categories.map((cat) => {
-                                const Icon = ICON_MAP[cat.icon] || Bell;
-                                const colors = TYPE_COLORS[cat.type] || TYPE_COLORS.EMAILS;
-                                return (
-                                    <button
-                                        key={cat.type}
-                                        onClick={() => handleCategoryClick(cat)}
-                                        className={cn(
-                                            "flex items-center gap-3 p-3 rounded-xl border transition-all",
-                                            "hover:shadow-sm hover:scale-[1.02] active:scale-[0.98]",
-                                            colors.bg, colors.border
-                                        )}
-                                    >
-                                        <div className={cn("p-2 rounded-lg", colors.bg)}>
-                                            <Icon className={cn("w-4 h-4", colors.text)} />
-                                        </div>
-                                        <div className="text-left min-w-0">
-                                            <p className={cn("text-lg font-bold leading-none", colors.text)}>
-                                                {cat.count}
-                                            </p>
-                                            <p className="text-[11px] text-slate-500 truncate mt-0.5">
-                                                {cat.label}
-                                            </p>
-                                        </div>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    ) : (
-                        <div className="p-8 text-center text-slate-400">
-                            <Bell className="w-8 h-8 mx-auto mb-2 text-slate-200" />
-                            <p className="text-sm">Keine neuen Benachrichtigungen</p>
-                        </div>
-                    )}
-
-                    {/* Recent items */}
-                    {data.recentItems.length > 0 && (
-                        <>
-                            <div className="px-4 py-2 border-t border-slate-100">
-                                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                                    Aktuell
-                                </p>
-                            </div>
-                            <div className="max-h-[280px] overflow-y-auto">
-                                {data.recentItems.map((item, i) => {
-                                    const Icon = RECENT_TYPE_ICONS[item.type] || Bell;
-                                    const iconColor = RECENT_TYPE_COLORS[item.type] || 'text-slate-400';
+                    {/* Scrollable Body */}
+                    <div className="overflow-y-auto flex-1">
+                        {/* Grouped category tiles */}
+                        {data.categories.length > 0 ? (
+                            <div className="px-3 pt-3 pb-1">
+                                {GROUPS.map((group) => {
+                                    const groupCats = data.categories.filter(c => group.types.includes(c.type));
+                                    if (groupCats.length === 0) return null;
+                                    const groupTotal = groupCats.reduce((sum, c) => sum + c.count, 0);
+                                    const GroupIcon = group.icon;
                                     return (
-                                        <button
-                                            key={`${item.type}-${i}`}
-                                            onClick={() => handleItemClick(item)}
-                                            className="w-full flex items-start gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors text-left group"
-                                        >
-                                            <div className={cn("mt-0.5 p-1.5 rounded-lg bg-slate-50 group-hover:bg-white transition-colors", iconColor)}>
-                                                <Icon className="w-3.5 h-3.5" />
+                                        <div key={group.id} className="mb-3 last:mb-0">
+                                            {/* Group header */}
+                                            <div className="flex items-center gap-2 px-1 mb-1.5">
+                                                <div className={cn("flex items-center justify-center w-5 h-5 rounded-md", group.accentBg)}>
+                                                    <GroupIcon className={cn("w-3 h-3", group.accentText)} />
+                                                </div>
+                                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                                    {group.label}
+                                                </span>
+                                                <span className="text-[10px] font-semibold text-slate-400">
+                                                    · {groupTotal}
+                                                </span>
+                                                <div className="flex-1 h-px bg-slate-100" />
                                             </div>
-                                            <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-medium text-slate-800 truncate">
-                                                    {item.title}
-                                                </p>
-                                                <p className="text-xs text-slate-500 truncate">
-                                                    {item.subtitle}
-                                                </p>
+                                            {/* Group tiles */}
+                                            <div className="grid grid-cols-2 gap-1.5">
+                                                {groupCats.map((cat) => {
+                                                    const Icon = ICON_MAP[cat.icon] || Bell;
+                                                    const colors = TYPE_COLORS[cat.type] || TYPE_COLORS.EMAILS;
+                                                    return (
+                                                        <button
+                                                            key={cat.type}
+                                                            onClick={() => handleCategoryClick(cat)}
+                                                            className={cn(
+                                                                "flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all text-left",
+                                                                "hover:shadow-sm hover:-translate-y-0.5 active:scale-[0.98]",
+                                                                colors.bg, colors.border
+                                                            )}
+                                                            title={cat.label}
+                                                        >
+                                                            <Icon className={cn("w-4 h-4 shrink-0", colors.text)} />
+                                                            <div className="flex-1 min-w-0">
+                                                                <p className="text-[11px] text-slate-600 truncate leading-tight">
+                                                                    {cat.label}
+                                                                </p>
+                                                            </div>
+                                                            <span className={cn("text-base font-bold leading-none", colors.text)}>
+                                                                {cat.count}
+                                                            </span>
+                                                        </button>
+                                                    );
+                                                })}
                                             </div>
-                                        </button>
+                                        </div>
                                     );
                                 })}
                             </div>
-                        </>
-                    )}
+                        ) : (
+                            <div className="p-12 text-center text-slate-400">
+                                <Bell className="w-10 h-10 mx-auto mb-3 text-slate-200" />
+                                <p className="text-sm font-medium">Keine neuen Benachrichtigungen</p>
+                                <p className="text-xs text-slate-400 mt-1">Alles erledigt – gut gemacht!</p>
+                            </div>
+                        )}
+
+                        {/* Recent items */}
+                        {data.recentItems.length > 0 && (
+                            <>
+                                <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/50 sticky top-0">
+                                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                        Aktuelle Einträge
+                                    </p>
+                                </div>
+                                <div>
+                                    {data.recentItems.map((item, i) => {
+                                        const Icon = RECENT_TYPE_ICONS[item.type] || Bell;
+                                        const iconColor = RECENT_TYPE_COLORS[item.type] || 'text-slate-400';
+                                        return (
+                                            <button
+                                                key={`${item.type}-${i}`}
+                                                onClick={() => handleItemClick(item)}
+                                                className="w-full flex items-start gap-3 px-4 py-2.5 hover:bg-rose-50/40 transition-colors text-left group border-b border-slate-50 last:border-b-0"
+                                            >
+                                                <div className={cn("mt-0.5 p-1.5 rounded-lg bg-slate-50 group-hover:bg-white transition-colors", iconColor)}>
+                                                    <Icon className="w-3.5 h-3.5" />
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-medium text-slate-800 truncate">
+                                                        {item.title}
+                                                    </p>
+                                                    <p className="text-xs text-slate-500 truncate">
+                                                        {item.subtitle}
+                                                    </p>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        )}
+                    </div>
                 </div>
             )}
 

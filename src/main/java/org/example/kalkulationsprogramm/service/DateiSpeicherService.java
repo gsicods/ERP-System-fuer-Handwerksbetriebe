@@ -58,8 +58,8 @@ import jakarta.transaction.Transactional;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
-@Service
 @Slf4j
+@Service
 public class DateiSpeicherService {
     private final ProjektDokumentRepository dokumentRepository;
     private final ProjektRepository projektRepository;

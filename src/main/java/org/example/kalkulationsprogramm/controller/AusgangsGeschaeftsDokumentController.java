@@ -3,10 +3,13 @@ package org.example.kalkulationsprogramm.controller;
 import java.util.List;
 
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
+import org.example.kalkulationsprogramm.domain.FreigabeQuellTyp;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentErstellenDto;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentResponseDto;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentUpdateDto;
+import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeStatusKurzDto;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
+import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -34,6 +37,27 @@ public class AusgangsGeschaeftsDokumentController {
     private static final Logger log = LoggerFactory.getLogger(AusgangsGeschaeftsDokumentController.class);
 
     private final AusgangsGeschaeftsDokumentService service;
+    private final DokumentFreigabeService dokumentFreigabeService;
+
+    /**
+     * Liefert pro AusgangsGeschaeftsDokument-ID die jüngste relevante digitale Freigabe.
+     * Wird vom Frontend genutzt, um Status-Badges (z.B. "Angenommen") direkt an Dokument-
+     * Karten zu hängen.
+     */
+    @GetMapping("/freigabe-status")
+    public ResponseEntity<java.util.Map<Long, FreigabeStatusKurzDto>> freigabeStatus(@RequestParam("ids") List<Long> ids) {
+        var byDokumentId = dokumentFreigabeService.findJuengsteProQuelle(FreigabeQuellTyp.AUSGANGS_DOKUMENT, ids);
+        java.util.Map<Long, FreigabeStatusKurzDto> result = new java.util.HashMap<>();
+        byDokumentId.forEach((dokumentId, freigabe) -> result.put(dokumentId, FreigabeStatusKurzDto.builder()
+                .status(freigabe.getStatus().name())
+                .dokumentArt(freigabe.getDokumentArt())
+                .dokumentNummer(freigabe.getDokumentNummer())
+                .akzeptiertAm(freigabe.getAkzeptiertAm())
+                .ablaufDatum(freigabe.getAblaufDatum())
+                .erstelltAm(freigabe.getErstelltAm())
+                .build()));
+        return ResponseEntity.ok(result);
+    }
 
     /**
      * Einzelnes Dokument abrufen.

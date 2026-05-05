@@ -33,6 +33,7 @@ public class AusgangsGeschaeftsDokumentResponseDto {
     private LocalDate gebuchtAm;
     private boolean storniert;
     private LocalDate storniertAm;
+    private boolean digitalAngenommen;
     private boolean bearbeitbar;
 
     // Projekt

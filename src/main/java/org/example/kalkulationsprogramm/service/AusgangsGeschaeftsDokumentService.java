@@ -1187,6 +1187,7 @@ public class AusgangsGeschaeftsDokumentService {
         dto.setGebuchtAm(dokument.getGebuchtAm());
         dto.setStorniert(dokument.isStorniert());
         dto.setStorniertAm(dokument.getStorniertAm());
+        dto.setDigitalAngenommen(dokument.isDigitalAngenommen());
         dto.setZahlungszielTage(dokument.getZahlungszielTage());
         dto.setVersandDatum(dokument.getVersandDatum());
         dto.setBearbeitbar(dokument.istBearbeitbar());
