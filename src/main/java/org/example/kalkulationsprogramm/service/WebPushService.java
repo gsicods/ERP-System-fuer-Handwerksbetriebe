@@ -139,6 +139,32 @@ public class WebPushService {
     }
 
     /**
+     * Push-Benachrichtigung für Freigabe-Annahmen ("Kunde hat angenommen").
+     * Versendet nur an Subscriptions, deren Mitarbeiter mindestens einer
+     * Abteilung mit darfFreigabeAnnahmePushen=true angehört. So lässt sich
+     * pro Abteilung in der Administration steuern, wer den Push bekommt.
+     */
+    public void notifyFreigabeAnnahme(String title, String body, String url) {
+        if (!isEnabled()) {
+            log.debug("WebPush nicht aktiv – notifyFreigabeAnnahme wird ignoriert");
+            return;
+        }
+        try {
+            List<PushSubscription> alle = pushSubscriptionRepository.findAll();
+            for (PushSubscription sub : alle) {
+                Mitarbeiter ma = sub.getMitarbeiter();
+                if (ma == null) continue;
+                boolean erlaubt = ma.getAbteilungen() != null && ma.getAbteilungen().stream()
+                        .anyMatch(abt -> Boolean.TRUE.equals(abt.getDarfFreigabeAnnahmePushen()));
+                if (!erlaubt) continue;
+                sendPush(sub, title, body, url, null, "freigabe");
+            }
+        } catch (Exception e) {
+            log.warn("notifyFreigabeAnnahme fehlgeschlagen: {}", e.getMessage());
+        }
+    }
+
+    /**
      * Subscribe a device for push notifications.
      */
     @Transactional

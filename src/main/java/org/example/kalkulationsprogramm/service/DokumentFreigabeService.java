@@ -332,7 +332,7 @@ public class DokumentFreigabeService
                     ? (saved.getKundeEmail() == null ? "Ein Kunde" : saved.getKundeEmail())
                     : saved.getKundeName();
             String body = kunde + " hat " + art + " " + saved.getDokumentNummer() + " digital angenommen.";
-            webPushService.notifyAll(art + " angenommen", body, "/anfragen?freigabe=" + saved.getUuid());
+            webPushService.notifyFreigabeAnnahme(art + " angenommen", body, "/anfragen?freigabe=" + saved.getUuid());
         } catch (Exception ignored) {
             // Push-Probleme dürfen die Annahme nie blockieren
         }
