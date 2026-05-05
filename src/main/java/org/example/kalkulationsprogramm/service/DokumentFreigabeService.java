@@ -2,11 +2,14 @@ package org.example.kalkulationsprogramm.service;
 
 import lombok.RequiredArgsConstructor;
 import org.example.kalkulationsprogramm.domain.AnfrageGeschaeftsdokument;
+import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
+import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokumentTyp;
 import org.example.kalkulationsprogramm.domain.DokumentFreigabe;
 import org.example.kalkulationsprogramm.domain.FreigabeQuellTyp;
 import org.example.kalkulationsprogramm.domain.FreigabeStatus;
 import org.example.kalkulationsprogramm.domain.ProjektGeschaeftsdokument;
 import org.example.kalkulationsprogramm.repository.AnfrageDokumentRepository;
+import org.example.kalkulationsprogramm.repository.AusgangsGeschaeftsDokumentRepository;
 import org.example.kalkulationsprogramm.repository.DokumentFreigabeRepository;
 import org.example.kalkulationsprogramm.repository.ProjektDokumentRepository;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,6 +50,7 @@ public class DokumentFreigabeService
     private final DokumentFreigabeRepository repository;
     private final AnfrageDokumentRepository anfrageDokumentRepository;
     private final ProjektDokumentRepository projektDokumentRepository;
+    private final AusgangsGeschaeftsDokumentRepository ausgangsGeschaeftsDokumentRepository;
     private final WebPushService webPushService;
 
     @Value("${freigabe.hash.salt:CHANGE_ME_LOCAL_ONLY}")
@@ -124,8 +128,53 @@ public class DokumentFreigabeService
     }
 
     /**
+     * Erzeugt einen Freigabe-Token für ein AusgangsGeschaeftsDokument (neues Dokumentsystem).
+     */
+    @Transactional
+    public DokumentFreigabe erstelleFuerAusgangsGeschaeftsDokument(AusgangsGeschaeftsDokument dok, String kundeEmail)
+    {
+        DokumentFreigabe freigabe = baseFreigabe();
+        freigabe.setQuellTyp(FreigabeQuellTyp.AUSGANGS_DOKUMENT);
+        freigabe.setQuellDokumentId(dok.getId());
+        freigabe.setDokumentNummer(dok.getDokumentNummer());
+        freigabe.setDokumentArt(typZuBezeichnung(dok.getTyp()));
+        freigabe.setDokumentBetrag(dok.getBetragBrutto());
+        freigabe.setDokumentDatei(null); // PDFs werden on-demand generiert
+
+        String bauvorhaben = null;
+        String kundeName = null;
+        if (dok.getProjekt() != null)
+        {
+            bauvorhaben = dok.getProjekt().getBauvorhaben();
+            if (dok.getProjekt().getKundenId() != null)
+            {
+                kundeName = dok.getProjekt().getKundenId().getName();
+            }
+        }
+        else if (dok.getAnfrage() != null)
+        {
+            bauvorhaben = dok.getAnfrage().getBauvorhaben();
+            if (dok.getAnfrage().getKunde() != null)
+            {
+                kundeName = dok.getAnfrage().getKunde().getName();
+            }
+        }
+        if (kundeName == null && dok.getKunde() != null)
+        {
+            kundeName = dok.getKunde().getName();
+        }
+
+        freigabe.setBauvorhaben(bauvorhaben);
+        freigabe.setKundeName(kundeName);
+        freigabe.setKundeEmail(kundeEmail);
+        freigabe.setHashOriginal(berechneHashOriginal(freigabe));
+        return repository.save(freigabe);
+    }
+
+    /**
      * Erstellt einen Freigabe-Token für ein Dokument (per ID) und gibt den fertigen
      * HTML-Block zurück, der in die E-Mail-Vorlage eingebettet werden kann.
+     * Sucht zuerst im neuen System (AusgangsGeschaeftsDokument), dann im alten.
      * Nur für Angebote und Auftragsbestätigungen – bei anderen Typen wird Optional.empty() zurückgegeben.
      */
     @Transactional
@@ -134,6 +183,17 @@ public class DokumentFreigabeService
         if (dokumentId == null) return Optional.empty();
         try
         {
+            // Neues System: AusgangsGeschaeftsDokument (DocumentEditor)
+            Optional<AusgangsGeschaeftsDokument> agdOpt = ausgangsGeschaeftsDokumentRepository.findById(dokumentId);
+            if (agdOpt.isPresent())
+            {
+                AusgangsGeschaeftsDokument agd = agdOpt.get();
+                if (!istAngebotOderABTyp(agd.getTyp())) return Optional.empty();
+                DokumentFreigabe freigabe = erstelleFuerAusgangsGeschaeftsDokument(agd, recipient);
+                return Optional.of(buildFreigabeBlockHtml(buildPublicUrl(freigabe), typZuBezeichnung(agd.getTyp())));
+            }
+
+            // Fallback: altes System
             if (isAnfrage)
             {
                 return anfrageDokumentRepository.findById(dokumentId)
@@ -165,6 +225,22 @@ public class DokumentFreigabeService
         {
             return Optional.empty();
         }
+    }
+
+    private static boolean istAngebotOderABTyp(AusgangsGeschaeftsDokumentTyp typ)
+    {
+        return typ == AusgangsGeschaeftsDokumentTyp.ANGEBOT || typ == AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG;
+    }
+
+    private static String typZuBezeichnung(AusgangsGeschaeftsDokumentTyp typ)
+    {
+        if (typ == null) return "Dokument";
+        return switch (typ)
+        {
+            case ANGEBOT -> "Angebot";
+            case AUFTRAGSBESTAETIGUNG -> "Auftragsbestätigung";
+            default -> typ.name();
+        };
     }
 
     private static boolean istAngebotOderAB(String art)

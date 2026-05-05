@@ -8,5 +8,6 @@ package org.example.kalkulationsprogramm.domain;
 public enum FreigabeQuellTyp
 {
     ANFRAGE,
-    PROJEKT
+    PROJEKT,
+    AUSGANGS_DOKUMENT
 }
