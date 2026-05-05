@@ -1568,6 +1568,9 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         dokumentnummer: dokumentNummer || '',
                         rechnungsdatum: datum || new Date().toISOString().split('T')[0],
                         betrag: nettosumme ? `${(nettosumme * 1.19).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €` : undefined,
+                        dokumentId: dokument?.id ?? null,
+                        isAnfrage: !!anfrageId,
+                        recipient: kontextDaten.kundenEmails?.[0] ?? null,
                     })
                 });
                 if (templateRes.ok) {

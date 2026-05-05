@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Locale;
+
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -101,6 +103,75 @@ public class DokumentFreigabeService
     {
         String base = publicBaseUrl == null ? "" : publicBaseUrl.replaceAll("/+$", "");
         return base + "/freigabe/" + freigabe.getUuid();
+    }
+
+    /**
+     * Erzeugt den HTML-Block für die E-Mail, der den Freigabe-Link enthält.
+     * Wird sowohl beim E-Mail-Versand als auch bei der Template-Vorschau genutzt.
+     */
+    public static String buildFreigabeBlockHtml(String url, String dokumentArt)
+    {
+        String art = dokumentArt == null || dokumentArt.isBlank() ? "Dokument" : dokumentArt;
+        return "<div style=\"margin:24px 0;padding:16px 18px;border-left:3px solid #500010;background:#fafafa;font-family:Arial,Helvetica,sans-serif;\">"
+                + "<p style=\"margin:0 0 6px 0;font-weight:600;color:#1e293b;\">" + art + " digital prüfen und annehmen</p>"
+                + "<p style=\"margin:0 0 10px 0;color:#475569;line-height:1.45;\">"
+                + "Sie können dieses " + art + " bequem online ansehen und mit einem Klick verbindlich annehmen:"
+                + "</p>"
+                + "<p style=\"margin:0;\"><a href=\"" + url + "\" style=\"color:#500010;font-weight:600;text-decoration:underline;\">"
+                + url + "</a></p>"
+                + "<p style=\"margin:8px 0 0 0;color:#94a3b8;font-size:13px;\">Der Link ist 14 Tage gültig.</p>"
+                + "</div>";
+    }
+
+    /**
+     * Erstellt einen Freigabe-Token für ein Dokument (per ID) und gibt den fertigen
+     * HTML-Block zurück, der in die E-Mail-Vorlage eingebettet werden kann.
+     * Nur für Angebote und Auftragsbestätigungen – bei anderen Typen wird Optional.empty() zurückgegeben.
+     */
+    @Transactional
+    public Optional<String> erstelleFreigabeBlockFuerDokument(Long dokumentId, boolean isAnfrage, String recipient)
+    {
+        if (dokumentId == null) return Optional.empty();
+        try
+        {
+            if (isAnfrage)
+            {
+                return anfrageDokumentRepository.findById(dokumentId)
+                        .filter(d -> d instanceof AnfrageGeschaeftsdokument)
+                        .filter(d -> istAngebotOderAB(((AnfrageGeschaeftsdokument) d).getGeschaeftsdokumentart()))
+                        .map(d -> {
+                            AnfrageGeschaeftsdokument gesDoc = (AnfrageGeschaeftsdokument) d;
+                            String kundeName = gesDoc.getAnfrage() != null && gesDoc.getAnfrage().getKunde() != null
+                                    ? gesDoc.getAnfrage().getKunde().getName() : null;
+                            DokumentFreigabe freigabe = erstelleFuerAnfrage(gesDoc, kundeName, recipient);
+                            return buildFreigabeBlockHtml(buildPublicUrl(freigabe), gesDoc.getGeschaeftsdokumentart());
+                        });
+            }
+            else
+            {
+                return projektDokumentRepository.findById(dokumentId)
+                        .filter(d -> d instanceof ProjektGeschaeftsdokument)
+                        .filter(d -> istAngebotOderAB(((ProjektGeschaeftsdokument) d).getGeschaeftsdokumentart()))
+                        .map(d -> {
+                            ProjektGeschaeftsdokument gesDoc = (ProjektGeschaeftsdokument) d;
+                            String kundeName = gesDoc.getProjekt() != null && gesDoc.getProjekt().getKundenId() != null
+                                    ? gesDoc.getProjekt().getKundenId().getName() : null;
+                            DokumentFreigabe freigabe = erstelleFuerProjekt(gesDoc, kundeName, recipient);
+                            return buildFreigabeBlockHtml(buildPublicUrl(freigabe), gesDoc.getGeschaeftsdokumentart());
+                        });
+            }
+        }
+        catch (Exception e)
+        {
+            return Optional.empty();
+        }
+    }
+
+    private static boolean istAngebotOderAB(String art)
+    {
+        if (art == null) return false;
+        String lower = art.toLowerCase(Locale.GERMAN);
+        return lower.contains("angebot") || lower.contains("auftragsbest");
     }
 
     /**

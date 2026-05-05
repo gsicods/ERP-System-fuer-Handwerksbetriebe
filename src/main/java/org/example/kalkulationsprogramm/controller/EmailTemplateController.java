@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.example.email.EmailService;
+import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
 import org.example.kalkulationsprogramm.service.EmailTextTemplateService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,6 +27,7 @@ public class EmailTemplateController {
     private static final String REVIEW_LINK = "<a href='https://www.google.com/search?q=Bauschlosserei+Thomas+Kuhn+Rezensionen#lkt=LocalPoiReviews'>Jetzt Bewertung abgeben</a>";
 
     private final EmailTextTemplateService emailTextTemplateService;
+    private final DokumentFreigabeService dokumentFreigabeService;
 
     @PostMapping
     public ResponseEntity<EmailTemplateResponse> generateTemplate(@RequestBody EmailTemplateRequest request) {
@@ -41,9 +43,21 @@ public class EmailTemplateController {
                 content = renderFallback(dokumentTyp, request);
             }
 
+            String body = content.htmlBody();
+
+            // Für Angebote und Auftragsbestätigungen: Freigabe-Block anhängen
+            if ((dokumentTyp.equals("ANGEBOT") || dokumentTyp.equals("AUFTRAGSBESTAETIGUNG"))
+                    && request.getDokumentId() != null) {
+                boolean isAnfrage = Boolean.TRUE.equals(request.getIsAnfrage());
+                String recipient = request.getRecipient() != null ? request.getRecipient() : "";
+                body += dokumentFreigabeService
+                        .erstelleFreigabeBlockFuerDokument(request.getDokumentId(), isAnfrage, recipient)
+                        .orElse("");
+            }
+
             EmailTemplateResponse response = new EmailTemplateResponse();
             response.setSubject(content.subject());
-            response.setBody(content.htmlBody());
+            response.setBody(body);
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
@@ -158,6 +172,12 @@ public class EmailTemplateController {
         private String faelligkeitsdatum;
         private String betrag;
         private String benutzer;
+        /** Optionale Dokument-ID für Freigabe-Block (nur bei Angebot/AB) */
+        private Long dokumentId;
+        /** true = Anfrage-Kontext, false = Projekt-Kontext */
+        private Boolean isAnfrage;
+        /** Empfänger-E-Mail für die Freigabe-Zuordnung */
+        private String recipient;
     }
 
     @Data
