@@ -256,7 +256,10 @@ public class DokumentFreigabeService
 
     private static boolean istAngebotOderABTyp(AusgangsGeschaeftsDokumentTyp typ)
     {
-        return typ == AusgangsGeschaeftsDokumentTyp.ANGEBOT || typ == AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG;
+        // Nur Angebote bekommen einen digitalen Freigabe-Link. Auftragsbestätigungen
+        // werden vom Büro versendet, der Kunde stimmt nur dem Angebot zu — die AB ist
+        // dessen Folge und braucht keine zweite Bestätigung mehr.
+        return typ == AusgangsGeschaeftsDokumentTyp.ANGEBOT;
     }
 
     private static String typZuBezeichnung(AusgangsGeschaeftsDokumentTyp typ)
@@ -388,9 +391,12 @@ public class DokumentFreigabeService
         dto.setTyp(AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG);
         dto.setVorgaengerId(angebotId);
         // Datum/Betreff/Inhalt werden vom Service aus dem Vorgänger geerbt.
+        // Standard-Textbausteine werden beim Typwechsel auf AB getauscht.
         AusgangsGeschaeftsDokument ab = ausgangsGeschaeftsDokumentService.erstellen(dto);
 
         // Auftragsbestätigung ist das verbindliche Folgedokument der Annahme — direkt sperren.
+        // Bewusst KEIN automatischer Mail-Versand an den Kunden: die AB ist eine
+        // interne, verbindliche Dokumentation. Versand entscheidet das Büro manuell.
         if (ab != null && !ab.isDigitalAngenommen())
         {
             ab.setDigitalAngenommen(true);

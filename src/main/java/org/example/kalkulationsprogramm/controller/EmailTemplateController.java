@@ -45,8 +45,10 @@ public class EmailTemplateController {
 
             String body = content.htmlBody();
 
-            // Für Angebote und Auftragsbestätigungen: Freigabe-Block anhängen
-            if ((dokumentTyp.equals("ANGEBOT") || dokumentTyp.equals("AUFTRAGSBESTAETIGUNG"))
+            // Nur Angebote bekommen einen digitalen Freigabe-Link.
+            // Auftragsbestätigungen werden vom Büro versendet — der Kunde hat dem Angebot
+            // bereits zugestimmt, eine zweite digitale Bestätigung waere irreführend.
+            if (dokumentTyp.equals("ANGEBOT")
                     && request.getDokumentId() != null) {
                 boolean isAnfrage = Boolean.TRUE.equals(request.getIsAnfrage());
                 String recipient = request.getRecipient() != null ? request.getRecipient() : "";
