@@ -436,8 +436,15 @@ public class DokumentFreigabeService
         {
             return Map.of();
         }
-        List<Object[]> mapping = anfrageDokumentRepository.findGeschaeftsdokumentIdMappingByAnfrageIds(anfrageIds);
-        return aggregiereProContainer(FreigabeQuellTyp.ANFRAGE, mapping);
+        // Altes System (AnfrageGeschaeftsdokument) — Quelltyp ANFRAGE
+        List<Object[]> mappingAlt = anfrageDokumentRepository.findGeschaeftsdokumentIdMappingByAnfrageIds(anfrageIds);
+        Map<Long, DokumentFreigabe> alteFreigaben = aggregiereProContainer(FreigabeQuellTyp.ANFRAGE, mappingAlt);
+
+        // Neues System (AusgangsGeschaeftsDokument an Anfrage) — Quelltyp AUSGANGS_DOKUMENT
+        List<Object[]> mappingNeu = ausgangsGeschaeftsDokumentRepository.findIdAnfrageIdMappingByAnfrageIds(anfrageIds);
+        Map<Long, DokumentFreigabe> neueFreigaben = aggregiereProContainer(FreigabeQuellTyp.AUSGANGS_DOKUMENT, mappingNeu);
+
+        return mergeFreigabenProContainer(alteFreigaben, neueFreigaben);
     }
 
     /**
@@ -450,8 +457,23 @@ public class DokumentFreigabeService
         {
             return Map.of();
         }
-        List<Object[]> mapping = projektDokumentRepository.findGeschaeftsdokumentIdMappingByProjektIds(projektIds);
-        return aggregiereProContainer(FreigabeQuellTyp.PROJEKT, mapping);
+        // Altes System (ProjektGeschaeftsdokument) — Quelltyp PROJEKT
+        List<Object[]> mappingAlt = projektDokumentRepository.findGeschaeftsdokumentIdMappingByProjektIds(projektIds);
+        Map<Long, DokumentFreigabe> alteFreigaben = aggregiereProContainer(FreigabeQuellTyp.PROJEKT, mappingAlt);
+
+        // Neues System (AusgangsGeschaeftsDokument an Projekt) — Quelltyp AUSGANGS_DOKUMENT
+        List<Object[]> mappingNeu = ausgangsGeschaeftsDokumentRepository.findIdProjektIdMappingByProjektIds(projektIds);
+        Map<Long, DokumentFreigabe> neueFreigaben = aggregiereProContainer(FreigabeQuellTyp.AUSGANGS_DOKUMENT, mappingNeu);
+
+        return mergeFreigabenProContainer(alteFreigaben, neueFreigaben);
+    }
+
+    private static Map<Long, DokumentFreigabe> mergeFreigabenProContainer(
+            Map<Long, DokumentFreigabe> a, Map<Long, DokumentFreigabe> b)
+    {
+        Map<Long, DokumentFreigabe> result = new java.util.HashMap<>(a);
+        b.forEach((containerId, freigabe) -> result.merge(containerId, freigabe, DokumentFreigabeService::pickRelevant));
+        return result;
     }
 
     private Map<Long, DokumentFreigabe> aggregiereProContainer(FreigabeQuellTyp typ, List<Object[]> dokToContainerMapping)
