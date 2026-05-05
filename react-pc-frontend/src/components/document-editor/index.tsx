@@ -811,8 +811,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     }, []);
 
     // --- Save ---
-    const handleSave = useCallback(async () => {
-        if (isLocked) return;
+    const handleSave = useCallback(async (): Promise<AusgangsGeschaeftsDokument | null> => {
+        if (isLocked) return null;
         setSaving(true);
         try {
             const htmlInhalt = blocksToHtml(blocks);
@@ -854,6 +854,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     setSaveSuccess(true);
                     setTimeout(() => setSaveSuccess(false), 2000);
                     notifyDokumentChanged({ projektId, anfrageId, dokumentId: updated.id });
+                    return updated;
                 } else {
                     const errorText = await res.text();
                     console.error('Fehler beim Speichern:', res.status, errorText);
@@ -886,6 +887,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     setSaveSuccess(true);
                     setTimeout(() => setSaveSuccess(false), 2000);
                     notifyDokumentChanged({ projektId, anfrageId, dokumentId: created.id });
+                    return created;
                 }
             }
         } catch (err) {
@@ -893,6 +895,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         } finally {
             setSaving(false);
         }
+        return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [dokument, dokumentTyp, datum, betreff, blocks, projektId, anfrageId, isLocked, syncDocumentIdInUrl, bereitsAbgerechnetDurchAndere, globalRabatt]);
 
@@ -1505,9 +1508,11 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     const handleFormatSelected = async (format: PdfFormat) => {
         setEmailLoading(true);
         try {
-            // 1. Auto-Save wenn nötig
+            // 1. Auto-Save wenn nötig – Rückgabewert liefert aktuelle ID (React-State ist async)
+            let aktiveDokumentId = dokument?.id ?? null;
             if (!dokument?.id || hasUnsavedChanges) {
-                await handleSave();
+                const saved = await handleSave();
+                if (saved?.id) aktiveDokumentId = saved.id;
             }
 
             // 2. Rechnungstypen: sofort buchen & sperren (instant lock vor E-Mail)
@@ -1568,7 +1573,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         dokumentnummer: dokumentNummer || '',
                         rechnungsdatum: datum || new Date().toISOString().split('T')[0],
                         betrag: nettosumme ? `${(nettosumme * 1.19).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €` : undefined,
-                        dokumentId: dokument?.id ?? null,
+                        dokumentId: aktiveDokumentId,
                         isAnfrage: !!anfrageId,
                         recipient: kontextDaten.kundenEmails?.[0] ?? null,
                     })
