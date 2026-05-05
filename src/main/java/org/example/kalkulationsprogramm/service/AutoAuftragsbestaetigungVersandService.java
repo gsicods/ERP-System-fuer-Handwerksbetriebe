@@ -169,18 +169,157 @@ public class AutoAuftragsbestaetigungVersandService
             return kern;
         }
 
+        Map<String, String> ctx = bauePlatzhalterKontext(ab);
         List<ContentBlockDto> result = new ArrayList<>();
-        for (Textbaustein tb : defaults.vortexte()) result.add(textbausteinAlsBlock(tb));
-        result.addAll(kern);
-        for (Textbaustein tb : defaults.nachtexte()) result.add(textbausteinAlsBlock(tb));
+        for (Textbaustein tb : defaults.vortexte()) result.add(textbausteinAlsBlock(tb, ctx));
+        // Auch Freitexte aus dem positionenJson können Platzhalter enthalten
+        // (z.B. wenn der Sachbearbeiter im DocumentEditor TEXT-Blöcke mit
+        // {{KUNDENNAME}} oder {{BEZUGSDOKUMENTNUMMER}} eingefügt hat).
+        for (ContentBlockDto kb : kern) result.add(loeseBlockAuf(kb, ctx));
+        for (Textbaustein tb : defaults.nachtexte()) result.add(textbausteinAlsBlock(tb, ctx));
         return result;
     }
 
-    private static ContentBlockDto textbausteinAlsBlock(Textbaustein tb)
+    /**
+     * Wendet die Platzhalter-Auflösung auf alle text-tragenden Felder eines
+     * {@link ContentBlockDto} an: {@code text} (TEXT-Block), {@code beschreibung}
+     * (SERVICE-Titel) und {@code beschreibungHtml} (SERVICE-Beschreibung).
+     */
+    private static ContentBlockDto loeseBlockAuf(ContentBlockDto b, Map<String, String> ctx)
     {
-        String html = tb.getHtml() != null ? tb.getHtml() : "";
+        return new ContentBlockDto(
+                b.type(),
+                aufloesePlatzhalter(b.text(), ctx),
+                b.fett(),
+                b.fontSize(),
+                b.pos(),
+                aufloesePlatzhalter(b.beschreibung(), ctx),
+                aufloesePlatzhalter(b.beschreibungHtml(), ctx),
+                b.menge(),
+                b.einheit(),
+                b.einzelpreis(),
+                b.gesamt(),
+                b.optional(),
+                aufloesePlatzhalter(b.sectionLabel(), ctx),
+                b.rabattProzent());
+    }
+
+    private static ContentBlockDto textbausteinAlsBlock(Textbaustein tb, Map<String, String> ctx)
+    {
+        String html = aufloesePlatzhalter(tb.getHtml() != null ? tb.getHtml() : "", ctx);
         return new ContentBlockDto("TEXT", html, false, 10,
                 null, null, null, null, null, null, null, false, null, null);
+    }
+
+    /**
+     * Setzt {@code {{TOKEN}}}-Platzhalter im HTML auf. Wert-Lookup ist
+     * case-insensitive (Token wird auf UPPERCASE normalisiert), unbekannte
+     * Tokens bleiben unverändert stehen — symmetrisch zum Frontend
+     * {@code DocumentEditor.replacePlaceholders}.
+     */
+    static String aufloesePlatzhalter(String text, Map<String, String> ctx)
+    {
+        if (text == null || text.isEmpty()) return text;
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("\\{\\{\\s*([a-zA-Z0-9_äöüÄÖÜß]+)\\s*\\}\\}");
+        java.util.regex.Matcher m = p.matcher(text);
+        StringBuilder out = new StringBuilder();
+        while (m.find())
+        {
+            String key = m.group(1).toUpperCase(Locale.GERMAN);
+            String value = ctx.get(key);
+            m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(value != null ? value : m.group()));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
+    /**
+     * Baut den Platzhalter-Kontext für die Inhalts-Auflösung. Werte werden in
+     * der gleichen Schreibweise hinterlegt wie der Frontend-DocumentEditor sie
+     * erwartet (siehe {@code react-pc-frontend/src/components/document-editor/index.tsx}).
+     */
+    private Map<String, String> bauePlatzhalterKontext(AusgangsGeschaeftsDokument ab)
+    {
+        Map<String, String> ctx = new HashMap<>();
+        Kunde kunde = effektiverKunde(ab);
+        AusgangsGeschaeftsDokument vorgaenger = ab.getVorgaenger();
+
+        ctx.put("DOKUMENTNUMMER", nullSafe(ab.getDokumentNummer()));
+        ctx.put("RECHNUNGSNUMMER", nullSafe(ab.getDokumentNummer()));
+        ctx.put("DOKUMENTTYP", "Auftragsbestätigung");
+        ctx.put("DATUM", ab.getDatum() != null ? ab.getDatum().format(DATUM_FORMAT) : "");
+        ctx.put("BETREFF", nullSafe(ab.getBetreff()));
+        ctx.put("BAUVORHABEN", nullSafe(ermittleBauvorhaben(ab)));
+        ctx.put("PROJEKTNUMMER", nullSafe(ermittleProjektnummer(ab)));
+        ctx.put("ZAHLUNGSZIEL_TAGE", ab.getZahlungszielTage() != null ? ab.getZahlungszielTage().toString() : "8");
+        ctx.put("ZAHLUNGSZIEL", berechneZahlungszielDatum(ab));
+
+        if (kunde != null)
+        {
+            ctx.put("KUNDENNAME", nullSafe(kunde.getName()));
+            ctx.put("KUNDENNUMMER", nullSafe(kunde.getKundennummer()));
+            ctx.put("KUNDENADRESSE", nullSafe(baueAdresseAusKunde(kunde)));
+            ctx.put("ANSPRECHPARTNER", nullSafe(kunde.getAnsprechspartner()));
+            ctx.put("ANREDE", kunde.getAnrede() != null ? kunde.getAnrede().toAnredeText() : "Sehr geehrte Damen und Herren");
+        }
+        else
+        {
+            ctx.put("ANREDE", "Sehr geehrte Damen und Herren");
+        }
+
+        if (vorgaenger != null)
+        {
+            ctx.put("BEZUGSDOKUMENT", nullSafe(vorgaenger.getDokumentNummer()));
+            ctx.put("BEZUGSDOKUMENTNUMMER", nullSafe(vorgaenger.getDokumentNummer()));
+            ctx.put("BEZUGSDOKUMENTTYP", vorgaenger.getTyp() != null ? typLabel(vorgaenger.getTyp()) : "");
+            ctx.put("BEZUGSDOKUMENTDATUM", vorgaenger.getDatum() != null ? vorgaenger.getDatum().format(DATUM_FORMAT) : "");
+        }
+        return ctx;
+    }
+
+    private static String typLabel(AusgangsGeschaeftsDokumentTyp typ)
+    {
+        return switch (typ) {
+            case ANGEBOT -> "Angebot";
+            case AUFTRAGSBESTAETIGUNG -> "Auftragsbestätigung";
+            case RECHNUNG -> "Rechnung";
+            case TEILRECHNUNG -> "Teilrechnung";
+            case ABSCHLAGSRECHNUNG -> "Abschlagsrechnung";
+            case SCHLUSSRECHNUNG -> "Schlussrechnung";
+            case GUTSCHRIFT -> "Gutschrift";
+            case STORNO -> "Stornorechnung";
+            default -> typ.name();
+        };
+    }
+
+    private static String berechneZahlungszielDatum(AusgangsGeschaeftsDokument ab)
+    {
+        int tage = ab.getZahlungszielTage() != null ? ab.getZahlungszielTage() : 8;
+        LocalDate basis = ab.getDatum() != null ? ab.getDatum() : LocalDate.now();
+        return basis.plusDays(tage).format(DATUM_FORMAT);
+    }
+
+    private static Kunde effektiverKunde(AusgangsGeschaeftsDokument ab)
+    {
+        if (ab.getKunde() != null) return ab.getKunde();
+        if (ab.getProjekt() != null && ab.getProjekt().getKundenId() != null) return ab.getProjekt().getKundenId();
+        if (ab.getAnfrage() != null && ab.getAnfrage().getKunde() != null) return ab.getAnfrage().getKunde();
+        return null;
+    }
+
+    private static String ermittleBauvorhaben(AusgangsGeschaeftsDokument ab)
+    {
+        if (ab.getProjekt() != null && ab.getProjekt().getBauvorhaben() != null) return ab.getProjekt().getBauvorhaben();
+        if (ab.getAnfrage() != null && ab.getAnfrage().getBauvorhaben() != null) return ab.getAnfrage().getBauvorhaben();
+        return ab.getBetreff();
+    }
+
+    private static String ermittleProjektnummer(AusgangsGeschaeftsDokument ab)
+    {
+        if (ab.getProjekt() != null && ab.getProjekt().getAuftragsnummer() != null) return ab.getProjekt().getAuftragsnummer();
+        // Fallback bei Anfrage-AB: Vorgänger-Dokumentnummer als Bezug.
+        if (ab.getAnfrage() != null) return "—";
+        return "";
     }
 
     private byte[] buildPdfBytes(AusgangsGeschaeftsDokument ab, KopfdatenDto kopfdaten,
@@ -338,45 +477,29 @@ public class AutoAuftragsbestaetigungVersandService
 
     private KopfdatenDto buildKopfdaten(AusgangsGeschaeftsDokument ab)
     {
-        Kunde kunde = ab.getKunde();
-        if (kunde == null && ab.getProjekt() != null) kunde = ab.getProjekt().getKundenId();
-        if (kunde == null && ab.getAnfrage() != null) kunde = ab.getAnfrage().getKunde();
-
-        String kundenName = kunde != null ? kunde.getName() : null;
+        Kunde kunde = effektiverKunde(ab);
         String kundenAdresse = ab.getRechnungsadresseOverride();
         if ((kundenAdresse == null || kundenAdresse.isBlank()) && kunde != null)
         {
             kundenAdresse = baueAdresseAusKunde(kunde);
         }
 
-        String bauvorhaben = null;
-        String projektnummer = null;
-        if (ab.getProjekt() != null)
-        {
-            bauvorhaben = ab.getProjekt().getBauvorhaben();
-            projektnummer = ab.getProjekt().getAuftragsnummer();
-        }
-        else if (ab.getAnfrage() != null)
-        {
-            bauvorhaben = ab.getAnfrage().getBauvorhaben();
-        }
-
         return new KopfdatenDto(
                 ab.getDokumentNummer(),
                 ab.getDatum() != null ? ab.getDatum() : LocalDate.now(),
                 ab.getDatum() != null ? ab.getDatum() : LocalDate.now(),
-                kundenName,
+                kunde != null ? kunde.getName() : null,
                 kundenAdresse,
                 ab.getBetreff(),
-                kunde != null && kunde.getKundennummer() != null ? kunde.getKundennummer() : null,
+                kunde != null ? kunde.getKundennummer() : null,
                 "Auftragsbestätigung",
                 ab.getVorgaenger() != null ? ab.getVorgaenger().getDokumentNummer() : null,
-                projektnummer,
-                bauvorhaben,
+                ermittleProjektnummer(ab),
+                ermittleBauvorhaben(ab),
                 ab.getVorgaenger() != null && ab.getVorgaenger().getTyp() != null
-                        ? ab.getVorgaenger().getTyp().name() : null,
+                        ? typLabel(ab.getVorgaenger().getTyp()) : null,
                 ab.getVorgaenger() != null && ab.getVorgaenger().getDatum() != null
-                        ? ab.getVorgaenger().getDatum().toString() : null,
+                        ? ab.getVorgaenger().getDatum().format(DATUM_FORMAT) : null,
                 ab.getZahlungszielTage());
     }
 
@@ -552,32 +675,32 @@ public class AutoAuftragsbestaetigungVersandService
                 "Bauschlosserei Kuhn");
     }
 
+    /**
+     * Kontext für die E-Mail-Vorlagen-Engine ({@code EmailTextTemplateService}).
+     * Liegt auf dem PDF-Platzhalter-Kontext auf und ergänzt nur den Betrag,
+     * sodass Mail- und PDF-Werte garantiert konsistent sind.
+     */
     private Map<String, String> baueTemplateKontext(AusgangsGeschaeftsDokument ab)
     {
-        Map<String, String> ctx = new HashMap<>();
-        ctx.put("DOKUMENTNUMMER", nullSafe(ab.getDokumentNummer()));
-        ctx.put("DOKUMENTTYP", "Auftragsbestätigung");
-        ctx.put("DATUM", ab.getDatum() != null ? ab.getDatum().format(DATUM_FORMAT) : "");
-        Kunde kunde = ab.getKunde();
-        if (kunde == null && ab.getProjekt() != null) kunde = ab.getProjekt().getKundenId();
-        if (kunde == null && ab.getAnfrage() != null) kunde = ab.getAnfrage().getKunde();
-        if (kunde != null)
-        {
-            ctx.put("KUNDENNAME", nullSafe(kunde.getName()));
-            ctx.put("KUNDENNUMMER", nullSafe(kunde.getKundennummer()));
-            ctx.put("KUNDENADRESSE", nullSafe(baueAdresseAusKunde(kunde)));
-        }
-        if (ab.getProjekt() != null)
-        {
-            ctx.put("PROJEKTNUMMER", nullSafe(ab.getProjekt().getAuftragsnummer()));
-            ctx.put("BAUVORHABEN", nullSafe(ab.getProjekt().getBauvorhaben()));
-        }
-        else if (ab.getAnfrage() != null)
-        {
-            ctx.put("BAUVORHABEN", nullSafe(ab.getAnfrage().getBauvorhaben()));
-        }
-        ctx.put("BETRAG", formatBetrag(ab.getBetragBrutto()));
+        Map<String, String> ctx = new HashMap<>(bauePlatzhalterKontext(ab));
+        ctx.put("BETRAG", formatBetrag(ermittleBruttoBetrag(ab)));
         return ctx;
+    }
+
+    /**
+     * Liefert den Brutto-Betrag der AB. Falls {@code betragBrutto} (noch) nicht
+     * gesetzt ist — z.B. weil {@code AusgangsGeschaeftsDokumentService.erstellen}
+     * nur den Netto-Wert übernimmt — wird er aus Netto + MwSt-Satz berechnet.
+     */
+    private static BigDecimal ermittleBruttoBetrag(AusgangsGeschaeftsDokument ab)
+    {
+        if (ab.getBetragBrutto() != null) return ab.getBetragBrutto();
+        if (ab.getBetragNetto() != null)
+        {
+            BigDecimal mwst = ab.getMwstSatz() != null ? ab.getMwstSatz() : new BigDecimal("0.19");
+            return ab.getBetragNetto().multiply(BigDecimal.ONE.add(mwst)).setScale(2, RoundingMode.HALF_UP);
+        }
+        return null;
     }
 
     private static String formatBetrag(BigDecimal betrag)
