@@ -2,6 +2,7 @@ package org.example.kalkulationsprogramm.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.kalkulationsprogramm.domain.Anrede;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokumentTyp;
 import org.example.kalkulationsprogramm.domain.Kunde;
@@ -38,14 +39,26 @@ class AutoAuftragsbestaetigungVersandServicePreview {
         AusgangsGeschaeftsDokument ab = baueDemoAB();
         VorlagenDaten vorlage = ladeVorlage(VORLAGEN_NAME);
 
-        // Im echten Versand fügt der Service hier die Vor-/Nachtexte aus den
-        // FormularTextbausteinDefaults ein. Da die Preview ohne DB läuft,
-        // simulieren wir nur den Nachtext (der Anrede-Vortext steckt schon
-        // im Demo-positionenJson).
-        List<ContentBlockDto> contentBlocks = new java.util.ArrayList<>(
-                AutoAuftragsbestaetigungVersandService.parsePositionenJsonZuContentBlocks(ab.getPositionenJson()));
-        contentBlocks.add(demoText("<p>Bei Rückfragen stehen wir Ihnen jederzeit zur Verfügung.</p>"
-                + "<p>Mit freundlichen Grüßen<br>Bauschlosserei Kuhn</p>"));
+        // Im echten Versand baut der Service Vor-/Nachtexte aus den DB-
+        // Defaults und löst dabei {{ANREDE}}, {{BAUVORHABEN}} usw. auf.
+        // Der Preview-Test simuliert das mit hartcodierten Vorlagen, die
+        // genau dieselben Platzhalter enthalten wie die Standard-Textbausteine.
+        java.util.Map<String, String> ctx = bauePreviewKontext(ab);
+
+        List<ContentBlockDto> contentBlocks = new java.util.ArrayList<>();
+        contentBlocks.add(demoText(AutoAuftragsbestaetigungVersandService.aufloesePlatzhalter(
+                "<p>{{ANREDE}} {{ANSPRECHPARTNER}},</p>"
+                        + "<p>wir freuen uns über Ihren Auftrag und bestätigen hiermit die Beauftragung "
+                        + "für das Bauvorhaben <b>{{BAUVORHABEN}}</b> "
+                        + "(Projektnummer: {{PROJEKTNUMMER}}) zu den nachfolgenden Konditionen:</p>"
+                        + "<p>Bezug: {{BEZUGSDOKUMENTTYP}} Nr. {{BEZUGSDOKUMENTNUMMER}} vom {{BEZUGSDOKUMENTDATUM}}</p>",
+                ctx)));
+        contentBlocks.addAll(AutoAuftragsbestaetigungVersandService
+                .parsePositionenJsonZuContentBlocks(ab.getPositionenJson()));
+        contentBlocks.add(demoText(AutoAuftragsbestaetigungVersandService.aufloesePlatzhalter(
+                "<p>Zahlungsziel: {{ZAHLUNGSZIEL_TAGE}} Tage netto (fällig bis {{ZAHLUNGSZIEL}}).</p>"
+                        + "<p>Mit freundlichen Grüßen<br>Bauschlosserei Kuhn</p>",
+                ctx)));
 
         KopfdatenDto kopfdaten = new KopfdatenDto(
                 ab.getDokumentNummer(),
@@ -117,6 +130,8 @@ class AutoAuftragsbestaetigungVersandServicePreview {
         Kunde kunde = new Kunde();
         kunde.setKundennummer("K-2026-0042");
         kunde.setName("Max Mustermann GmbH");
+        kunde.setAnrede(Anrede.HERR);
+        kunde.setAnsprechspartner("Herr Mustermann");
         kunde.setStrasse("Musterstraße 12");
         kunde.setPlz("97259");
         kunde.setOrt("Greußenheim");
@@ -153,6 +168,29 @@ class AutoAuftragsbestaetigungVersandServicePreview {
                 "<b>Montage:</b> Termin wird mit Ihnen abgestimmt.</p>\",\"fontSize\":10}" +
                 "]");
         return ab;
+    }
+
+    private static java.util.Map<String, String> bauePreviewKontext(AusgangsGeschaeftsDokument ab) {
+        java.util.Map<String, String> ctx = new java.util.HashMap<>();
+        Kunde k = ab.getKunde();
+        ctx.put("DOKUMENTNUMMER", ab.getDokumentNummer());
+        ctx.put("DOKUMENTTYP", "Auftragsbestätigung");
+        ctx.put("DATUM", ab.getDatum().format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")));
+        ctx.put("BAUVORHABEN", "Privathaus Mustermann");
+        ctx.put("PROJEKTNUMMER", "2026-PR-001");
+        ctx.put("KUNDENNAME", k.getName());
+        ctx.put("KUNDENNUMMER", k.getKundennummer());
+        ctx.put("ANSPRECHPARTNER", k.getAnsprechspartner() != null ? k.getAnsprechspartner() : "Herr Mustermann");
+        ctx.put("ANREDE", k.getAnrede() != null ? k.getAnrede().toAnredeText() : "Sehr geehrter Herr");
+        ctx.put("BEZUGSDOKUMENT", "AN-2026/01/00042");
+        ctx.put("BEZUGSDOKUMENTNUMMER", "AN-2026/01/00042");
+        ctx.put("BEZUGSDOKUMENTTYP", "Angebot");
+        ctx.put("BEZUGSDOKUMENTDATUM", java.time.LocalDate.now().minusDays(7)
+                .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")));
+        ctx.put("ZAHLUNGSZIEL_TAGE", "14");
+        ctx.put("ZAHLUNGSZIEL", java.time.LocalDate.now().plusDays(14)
+                .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")));
+        return ctx;
     }
 
     private static ContentBlockDto demoText(String html) {
