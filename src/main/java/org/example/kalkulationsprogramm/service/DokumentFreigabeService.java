@@ -11,6 +11,7 @@ import org.example.kalkulationsprogramm.domain.FreigabeQuellTyp;
 import org.example.kalkulationsprogramm.domain.FreigabeStatus;
 import org.example.kalkulationsprogramm.domain.ProjektGeschaeftsdokument;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentErstellenDto;
+import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeAuditDto;
 import org.example.kalkulationsprogramm.dto.Produktkategroie.KategorieVorschlagDto;
 import org.example.kalkulationsprogramm.dto.Projekt.ProjektErstellenDto;
 import org.example.kalkulationsprogramm.dto.ProjektProduktkategorie.ProjektProduktkategorieErfassenDto;
@@ -504,6 +505,36 @@ public class DokumentFreigabeService
         {
             log.warn("Auto-Projektanlage aus Anfrage {} fehlgeschlagen: {}", anfrageId, e.getMessage());
         }
+    }
+
+    /**
+     * Lädt den Audit-Trail einer akzeptierten Freigabe für ein einzelnes Quell-Dokument.
+     * Wird vom Frontend on-demand beim Klick auf den „Angenommen"-Badge geladen, damit
+     * die rechtlich relevanten Beweisdaten (E-Mail, IP, Zeitstempel, Hash) nicht in
+     * der Listenansicht mitgeladen werden müssen.
+     *
+     * <p>Liefert {@link Optional#empty()} wenn keine Freigabe existiert.</p>
+     */
+    @Transactional(readOnly = true)
+    public Optional<FreigabeAuditDto> findAuditByQuelle(FreigabeQuellTyp typ, Long quellDokumentId)
+    {
+        if (quellDokumentId == null) return Optional.empty();
+        Map<Long, DokumentFreigabe> map = findJuengsteProQuelle(typ, List.of(quellDokumentId));
+        DokumentFreigabe f = map.get(quellDokumentId);
+        if (f == null) return Optional.empty();
+        return Optional.of(FreigabeAuditDto.builder()
+                .status(f.getStatus().name())
+                .dokumentArt(f.getDokumentArt())
+                .dokumentNummer(f.getDokumentNummer())
+                .erstelltAm(f.getErstelltAm())
+                .ablaufDatum(f.getAblaufDatum())
+                .akzeptiertAm(f.getAkzeptiertAm())
+                .akzeptiertEmail(f.getAkzeptiertEmail())
+                .akzeptiertIp(f.getAkzeptiertIp())
+                .akzeptiertUserAgent(f.getAkzeptiertUserAgent())
+                .hashOriginal(f.getHashOriginal())
+                .hashAcceptance(f.getHashAcceptance())
+                .build());
     }
 
     /**

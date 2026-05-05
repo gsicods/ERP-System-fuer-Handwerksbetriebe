@@ -140,6 +140,23 @@ const TYP_COLORS: Record<string, string> = {
 
 
 
+// ==================== AUDIT-TRAIL ====================
+
+/** Rechtlich relevante Beweisdaten einer akzeptierten digitalen Freigabe. */
+type FreigabeAuditData = {
+    status: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+    dokumentArt: string;
+    dokumentNummer: string;
+    erstelltAm: string;
+    ablaufDatum: string;
+    akzeptiertAm: string | null;
+    akzeptiertEmail: string | null;
+    akzeptiertIp: string | null;
+    akzeptiertUserAgent: string | null;
+    hashOriginal: string | null;
+    hashAcceptance: string | null;
+};
+
 // ==================== DETAIL VIEW ====================
 
 interface ProjektDetailViewProps {
@@ -362,6 +379,12 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
         akzeptiertAm: string | null;
         ablaufDatum: string;
     }>>({});
+
+    // Audit-Detail-Modal beim Klick auf den „Angenommen"-Badge — wird on-demand
+    // pro Dokument geladen, damit IP/User-Agent nicht in der Listen-API mitkommen.
+    const [auditDokumentId, setAuditDokumentId] = useState<number | null>(null);
+    const [auditDaten, setAuditDaten] = useState<FreigabeAuditData | null>(null);
+    const [auditLoading, setAuditLoading] = useState(false);
     const [actionMenuDokument, setActionMenuDokument] = useState<AusgangsGeschaeftsDokument | null>(null);
 
     // Dateien (Dokumente) Anzahl
@@ -419,6 +442,23 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
             .then(data => setFreigabeStatus(data || {}))
             .catch(() => setFreigabeStatus({}));
     }, [ausgangsDokumente]);
+
+    // Audit-Trail on-demand laden, sobald der Nutzer auf den Badge klickt.
+    const oeffneAuditModal = useCallback(async (dokumentId: number) => {
+        setAuditDokumentId(dokumentId);
+        setAuditDaten(null);
+        setAuditLoading(true);
+        try {
+            const res = await fetch(`/api/ausgangs-dokumente/${dokumentId}/freigabe-audit`);
+            if (res.ok) {
+                setAuditDaten(await res.json());
+            }
+        } catch {
+            // Modal bleibt leer — Fehler wird durch fehlende Daten sichtbar
+        } finally {
+            setAuditLoading(false);
+        }
+    }, []);
 
     // Dateien-Anzahl laden
     useEffect(() => {
@@ -1593,13 +1633,15 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                                                                 };
                                                                 if (fr.status === 'ACCEPTED') {
                                                                     return (
-                                                                        <span
-                                                                            title={`Digital angenommen am ${formatShort(fr.akzeptiertAm)}`}
-                                                                            className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                                                        <button
+                                                                            type="button"
+                                                                            title={`Digital angenommen am ${formatShort(fr.akzeptiertAm)} — Klick für Audit-Details`}
+                                                                            className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 cursor-pointer"
+                                                                            onClick={(e) => { e.stopPropagation(); oeffneAuditModal(dok.id); }}
                                                                         >
                                                                             <Check className="w-3 h-3" />
                                                                             Angenommen · {formatShort(fr.akzeptiertAm)}
-                                                                        </span>
+                                                                        </button>
                                                                     );
                                                                 }
                                                                 if (fr.status === 'PENDING') {
@@ -3187,6 +3229,61 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* Audit-Trail-Modal: Beweisdaten der digitalen Annahme.
+                Wer (E-Mail), Wann (Zeitstempel), Wo (IP), Was (Hash) — analog zu DocuSign-
+                Audit-Trail. Hash wird gekürzt angezeigt mit Copy-Button für den Vollwert. */}
+            <Dialog open={auditDokumentId !== null} onOpenChange={(open) => { if (!open) { setAuditDokumentId(null); setAuditDaten(null); } }}>
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Check className="w-5 h-5 text-emerald-600" />
+                            Annahme-Beweis
+                        </DialogTitle>
+                    </DialogHeader>
+                    {auditLoading && (
+                        <p className="text-sm text-slate-500 py-4">Lade Audit-Daten…</p>
+                    )}
+                    {!auditLoading && !auditDaten && (
+                        <p className="text-sm text-slate-500 py-4">Keine Audit-Daten verfügbar.</p>
+                    )}
+                    {!auditLoading && auditDaten && (
+                        <div className="space-y-3 py-2 text-sm">
+                            <AuditRow label="Dokument" value={`${auditDaten.dokumentArt} ${auditDaten.dokumentNummer}`} />
+                            <AuditRow
+                                label="Angenommen am"
+                                value={auditDaten.akzeptiertAm
+                                    ? new Date(auditDaten.akzeptiertAm).toLocaleString('de-DE', {
+                                        day: '2-digit', month: '2-digit', year: 'numeric',
+                                        hour: '2-digit', minute: '2-digit', second: '2-digit',
+                                    })
+                                    : '—'}
+                            />
+                            <AuditRow label="E-Mail" value={auditDaten.akzeptiertEmail || '—'} />
+                            <AuditRow label="IP-Adresse" value={auditDaten.akzeptiertIp || '—'} mono />
+                            {auditDaten.akzeptiertUserAgent && (
+                                <AuditRow label="Browser" value={auditDaten.akzeptiertUserAgent} mono small />
+                            )}
+                            <div className="pt-2 mt-2 border-t border-slate-100 space-y-3">
+                                <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">
+                                    Kryptographischer Beweis
+                                </p>
+                                <HashRow label="Original-Hash" value={auditDaten.hashOriginal} toast={toast} />
+                                <HashRow label="Annahme-Hash" value={auditDaten.hashAcceptance} toast={toast} />
+                                <p className="text-xs text-slate-400 leading-relaxed">
+                                    SHA-256 über Geschäftsdaten + Akzeptanzdaten. Im Streitfall reproduzierbar
+                                    und damit unveränderbarer Beweis der digitalen Annahme.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => { setAuditDokumentId(null); setAuditDaten(null); }}>
+                            Schließen
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </>
     );
 
@@ -3200,6 +3297,52 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
         </PageLayout>
     );
 };
+
+// ==================== AUDIT-MODAL HELFER ====================
+
+function AuditRow({ label, value, mono, small }: { label: string; value: string; mono?: boolean; small?: boolean }) {
+    return (
+        <div>
+            <p className="text-xs text-slate-500">{label}</p>
+            <p className={cn(
+                "text-slate-900 break-all",
+                mono && "font-mono",
+                small ? "text-xs" : "text-sm",
+            )}>
+                {value}
+            </p>
+        </div>
+    );
+}
+
+function HashRow({ label, value, toast }: {
+    label: string;
+    value: string | null;
+    toast: ReturnType<typeof useToast>;
+}) {
+    if (!value) {
+        return <AuditRow label={label} value="—" />;
+    }
+    const kurz = value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-8)}` : value;
+    const handleCopy = () => {
+        navigator.clipboard.writeText(value)
+            .then(() => toast.success('Hash in Zwischenablage kopiert'))
+            .catch(() => toast.error('Kopieren fehlgeschlagen'));
+    };
+    return (
+        <div>
+            <p className="text-xs text-slate-500">{label}</p>
+            <div className="flex items-center gap-2">
+                <code className="text-xs font-mono text-slate-700 bg-slate-50 border border-slate-200 rounded px-2 py-1 flex-1 truncate" title={value}>
+                    {kurz}
+                </code>
+                <Button size="sm" variant="outline" onClick={handleCopy} className="shrink-0">
+                    Kopieren
+                </Button>
+            </div>
+        </div>
+    );
+}
 
 // ==================== MAIN COMPONENT ====================
 

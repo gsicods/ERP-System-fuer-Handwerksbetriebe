@@ -7,6 +7,7 @@ import org.example.kalkulationsprogramm.domain.FreigabeQuellTyp;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentErstellenDto;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentResponseDto;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentUpdateDto;
+import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeAuditDto;
 import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeStatusKurzDto;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
 import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
@@ -57,6 +58,20 @@ public class AusgangsGeschaeftsDokumentController {
                 .erstelltAm(freigabe.getErstelltAm())
                 .build()));
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Liefert den vollständigen Audit-Trail einer akzeptierten Freigabe (E-Mail, IP,
+     * Zeitstempel, Hash). Wird im Frontend on-demand beim Klick auf den
+     * „Angenommen"-Badge geladen — bewusst nicht in der Listen-API, damit personen-
+     * bezogene Daten (IP, User-Agent) nicht ungefragt mit jeder Übersicht ausgeliefert werden.
+     */
+    @GetMapping("/{id}/freigabe-audit")
+    public ResponseEntity<FreigabeAuditDto> freigabeAudit(@PathVariable Long id) {
+        return dokumentFreigabeService
+                .findAuditByQuelle(FreigabeQuellTyp.AUSGANGS_DOKUMENT, id)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**
