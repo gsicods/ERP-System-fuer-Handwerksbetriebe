@@ -55,6 +55,7 @@ public class DokumentFreigabeService
     private final AusgangsGeschaeftsDokumentService ausgangsGeschaeftsDokumentService;
     private final WebPushService webPushService;
     private final DateiSpeicherService dateiSpeicherService;
+    private final AutoAuftragsbestaetigungVersandService autoAuftragsbestaetigungVersandService;
 
     @Value("${freigabe.hash.salt:CHANGE_ME_LOCAL_ONLY}")
     private String hashSalt;
@@ -395,12 +396,26 @@ public class DokumentFreigabeService
         AusgangsGeschaeftsDokument ab = ausgangsGeschaeftsDokumentService.erstellen(dto);
 
         // Auftragsbestätigung ist das verbindliche Folgedokument der Annahme — direkt sperren.
-        // Bewusst KEIN automatischer Mail-Versand an den Kunden: die AB ist eine
-        // interne, verbindliche Dokumentation. Versand entscheidet das Büro manuell.
         if (ab != null && !ab.isDigitalAngenommen())
         {
             ab.setDigitalAngenommen(true);
-            ausgangsGeschaeftsDokumentRepository.save(ab);
+            ab = ausgangsGeschaeftsDokumentRepository.save(ab);
+        }
+
+        // Auto-Versand der AB als PDF-Mail an den Kunden (Issue #55).
+        // Empfänger ist die Adresse aus der Freigabe — das ist die Adresse, an die
+        // das Angebot ging. Versandfehler dürfen die Annahme nie blockieren.
+        if (ab != null)
+        {
+            String empfaenger = freigabe.getKundeEmail();
+            if (empfaenger != null && !empfaenger.isBlank())
+            {
+                try
+                {
+                    autoAuftragsbestaetigungVersandService.versende(ab, empfaenger);
+                }
+                catch (Exception ignored) { /* Versand-Fehler werden im Service geloggt */ }
+            }
         }
     }
 

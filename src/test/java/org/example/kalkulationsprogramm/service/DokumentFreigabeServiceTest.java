@@ -38,6 +38,8 @@ class DokumentFreigabeServiceTest {
     private WebPushService webPushService;
     @Mock
     private DateiSpeicherService dateiSpeicherService;
+    @Mock
+    private AutoAuftragsbestaetigungVersandService autoAuftragsbestaetigungVersandService;
 
     @InjectMocks
     private DokumentFreigabeService service;

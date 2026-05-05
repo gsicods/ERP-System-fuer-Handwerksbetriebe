@@ -1,0 +1,605 @@
+package org.example.kalkulationsprogramm.service;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.example.email.EmailService;
+import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
+import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokumentTyp;
+import org.example.kalkulationsprogramm.domain.Kunde;
+import org.example.kalkulationsprogramm.domain.Textbaustein;
+import org.example.kalkulationsprogramm.repository.AusgangsGeschaeftsDokumentRepository;
+import org.example.kalkulationsprogramm.service.RechnungPdfService.ContentBlockDto;
+import org.example.kalkulationsprogramm.service.RechnungPdfService.FormBlockDto;
+import org.example.kalkulationsprogramm.service.RechnungPdfService.KopfdatenDto;
+import org.example.kalkulationsprogramm.service.RechnungPdfService.LayoutDto;
+import org.example.kalkulationsprogramm.service.RechnungPdfService.RechnungDto;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Element;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.text.NumberFormat;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * Versendet eine Auftragsbestätigung automatisch per E-Mail an den Kunden,
+ * sobald dieser ein Angebot digital angenommen hat. Die AB ist zu diesem
+ * Zeitpunkt bereits als Folgedokument erzeugt (siehe
+ * {@link DokumentFreigabeService#erzeugeAutoAuftragsbestaetigungWennAngebot}).
+ *
+ * <p>Layout-Quelle: Die im Formularwesen für "Auftragsbestätigung"
+ * zugewiesene Vorlage wird geladen und parsed; daraus werden Briefkopf-
+ * Hintergrundbild und {@link FormBlockDto}s (Adresse, Datum, Dokumentnummer,
+ * Logo etc.) extrahiert und an {@link RechnungPdfService} übergeben.
+ * Damit ist die PDF visuell identisch zum manuellen Export aus dem
+ * DocumentEditor.</p>
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class AutoAuftragsbestaetigungVersandService
+{
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final DateTimeFormatter DATUM_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
+
+    private final RechnungPdfService rechnungPdfService;
+    private final SystemSettingsService systemSettingsService;
+    private final EmailTextTemplateService emailTextTemplateService;
+    private final AusgangsGeschaeftsDokumentRepository ausgangsGeschaeftsDokumentRepository;
+    private final FormularTemplateService formularTemplateService;
+    private final FormularTextbausteinDefaultService formularTextbausteinDefaultService;
+
+    /**
+     * Versendet die Auftragsbestätigung als PDF-Mail. Fehler werden geloggt
+     * und nicht propagiert — die Annahme darf an einem SMTP-Ausfall nicht scheitern.
+     *
+     * @return {@code true}, wenn der Versand erfolgreich war.
+     */
+    public boolean versende(AusgangsGeschaeftsDokument ab, String empfaenger)
+    {
+        if (ab == null || ab.getTyp() != AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG)
+        {
+            return false;
+        }
+        if (empfaenger == null || empfaenger.isBlank())
+        {
+            log.warn("Auto-AB-Versand übersprungen: kein Empfänger für AB {}", ab.getDokumentNummer());
+            return false;
+        }
+
+        Path tempPdf = null;
+        try
+        {
+            byte[] pdfBytes = generierePdfFuerAB(ab);
+            String filename = "Auftragsbestaetigung_" + sanitizeForFilename(ab.getDokumentNummer()) + ".pdf";
+            tempPdf = Files.createTempFile("auto-ab-", ".pdf");
+            Files.write(tempPdf, pdfBytes);
+
+            EmailService.EmailContent content = baueEmailInhalt(ab);
+
+            EmailService emailService = new EmailService(
+                    systemSettingsService.getSmtpHost(),
+                    systemSettingsService.getSmtpPort(),
+                    systemSettingsService.getSmtpUsername(),
+                    systemSettingsService.getSmtpPassword());
+
+            String absender = ermittleAbsenderAdresse();
+            emailService.sendEmail(
+                    empfaenger,
+                    null,
+                    absender,
+                    content.subject(),
+                    content.htmlBody(),
+                    tempPdf.toString(),
+                    filename);
+
+            markiereAlsVersendet(ab);
+            log.info("Auto-AB {} per Mail an {} versendet", ab.getDokumentNummer(), empfaenger);
+            return true;
+        }
+        catch (Exception e)
+        {
+            log.error("Auto-AB-Versand für {} fehlgeschlagen: {}", ab.getDokumentNummer(), e.getMessage(), e);
+            return false;
+        }
+        finally
+        {
+            if (tempPdf != null)
+            {
+                try { Files.deleteIfExists(tempPdf); } catch (IOException ignored) { /* temp-Datei ggf. schon weg */ }
+            }
+        }
+    }
+
+    @Transactional
+    protected void markiereAlsVersendet(AusgangsGeschaeftsDokument ab)
+    {
+        AusgangsGeschaeftsDokument frisch = ausgangsGeschaeftsDokumentRepository.findById(ab.getId()).orElse(null);
+        if (frisch == null) return;
+        frisch.setVersandDatum(LocalDate.now());
+        ausgangsGeschaeftsDokumentRepository.save(frisch);
+    }
+
+    // ======================= PDF =======================
+
+    private byte[] generierePdfFuerAB(AusgangsGeschaeftsDokument ab)
+    {
+        KopfdatenDto kopfdaten = buildKopfdaten(ab);
+        String templateName = ladeTemplateName().orElse(null);
+        List<ContentBlockDto> contentBlocks = baueContentBlocks(ab, templateName);
+        VorlagenDaten vorlage = ladeVorlagenDaten(templateName);
+        return buildPdfBytes(ab, kopfdaten, contentBlocks, vorlage);
+    }
+
+    /**
+     * Setzt die finalen ContentBlocks zusammen: Vortexte aus den Formularwesen-
+     * Defaults → Inhalte/Positionen aus {@code positionenJson} → Nachtexte aus
+     * den Defaults. Damit landen Anrede, Liefer- und Zahlungsbedingungen, Schluss-
+     * formel automatisch in der Auto-AB — analog zum DocumentEditor.
+     */
+    private List<ContentBlockDto> baueContentBlocks(AusgangsGeschaeftsDokument ab, String templateName)
+    {
+        List<ContentBlockDto> kern = parsePositionenJsonZuContentBlocks(ab.getPositionenJson());
+        if (templateName == null) return kern;
+
+        FormularTextbausteinDefaultService.DefaultsForDokumenttyp defaults;
+        try
+        {
+            defaults = formularTextbausteinDefaultService.loadForDokumenttyp(templateName, "Auftragsbestätigung");
+        }
+        catch (Exception e)
+        {
+            log.warn("Standard-Textbausteine für AB konnten nicht geladen werden: {}", e.getMessage());
+            return kern;
+        }
+
+        List<ContentBlockDto> result = new ArrayList<>();
+        for (Textbaustein tb : defaults.vortexte()) result.add(textbausteinAlsBlock(tb));
+        result.addAll(kern);
+        for (Textbaustein tb : defaults.nachtexte()) result.add(textbausteinAlsBlock(tb));
+        return result;
+    }
+
+    private static ContentBlockDto textbausteinAlsBlock(Textbaustein tb)
+    {
+        String html = tb.getHtml() != null ? tb.getHtml() : "";
+        return new ContentBlockDto("TEXT", html, false, 10,
+                null, null, null, null, null, null, null, false, null, null);
+    }
+
+    private byte[] buildPdfBytes(AusgangsGeschaeftsDokument ab, KopfdatenDto kopfdaten,
+                                  List<ContentBlockDto> blocks, VorlagenDaten vorlage)
+    {
+        // Wenn die Vorlage einen "table"-FormBlock liefert, leiten wir Content-
+        // Bereich + Header/Footer-Rechtecke daraus ab — analog zum Frontend
+        // (DocumentEditor → DokumentGeneratorController). Sonst Fallback auf
+        // das Standard-Layout (kein Briefkopf konfiguriert).
+        LayoutDto layout = vorlage.formBlocks().isEmpty()
+                ? RechnungPdfService.getDefaultLayout()
+                : RechnungPdfService.createLayoutFromFormBlocks(vorlage.formBlocks(), 595f, 842f);
+        RechnungDto dto = new RechnungDto(
+                layout,
+                kopfdaten,
+                blocks,
+                vorlage.formBlocks,           // Adresse / Datum / Dokumentnummer / Logo … aus der Vorlage
+                null,                          // Schlusstext: kommt über Textbausteine im positionenJson
+                vorlage.backgroundImagePage1,  // Briefkopf-Bild Seite 1
+                vorlage.backgroundImagePage2,  // Briefkopf-Bild Folgeseiten
+                null,                          // globaler Rabatt
+                null,                          // Abrechnungsverlauf
+                ab.getBetragNetto(),           // expliziter Netto-Betrag → AB übernimmt den Wert vom Angebot
+                null);
+        return rechnungPdfService.generatePdfBytes(dto);
+    }
+
+    /**
+     * Liefert den Namen der im Formularwesen für "Auftragsbestätigung"
+     * zugewiesenen Vorlage. Dient sowohl zum Laden des Layouts als auch der
+     * Standard-Textbausteine — beides muss aus derselben Vorlage stammen.
+     */
+    private Optional<String> ladeTemplateName()
+    {
+        try { return formularTemplateService.getPreferredTemplateForDokumenttyp("Auftragsbestätigung", null); }
+        catch (Exception e)
+        {
+            log.warn("Vorlagenzuordnung für AB konnte nicht ermittelt werden: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Lädt die Vorlage zum gegebenen Namen und extrahiert daraus alle für die
+     * PDF-Erzeugung nötigen Layout-Daten: Hintergrundbilder (Seite 1, Folgeseiten)
+     * und {@link FormBlockDto}s mit den exakten Pixel-Positionen aller Felder
+     * (Adresse, Datum, Logo etc.).
+     *
+     * <p>Wenn {@code templateName} {@code null} ist oder das Laden fehlschlägt,
+     * wird eine leere {@link VorlagenDaten}-Instanz zurückgegeben — die PDF
+     * wird dann mit dem Standard-Briefkopf gerendert (Versand-Erfolg vor Optik).</p>
+     */
+    private VorlagenDaten ladeVorlagenDaten(String templateName)
+    {
+        if (templateName == null || templateName.isBlank()) return VorlagenDaten.leer();
+        try
+        {
+            FormularTemplateService.NamedTemplateData data = formularTemplateService.loadNamedTemplate(templateName);
+            return parseVorlagenHtml(data.html());
+        }
+        catch (Exception e)
+        {
+            log.warn("Vorlage '{}' konnte nicht geladen werden, fallback auf Standard-Briefkopf: {}",
+                    templateName, e.getMessage());
+            return VorlagenDaten.leer();
+        }
+    }
+
+    /**
+     * Parst das gespeicherte Vorlagen-HTML (siehe
+     * {@code FormularwesenMain.serialize}) in ein Hintergrundbild-Paar plus
+     * eine {@link FormBlockDto}-Liste. Das Format ist symmetrisch zum
+     * Frontend: jeder Block ist ein {@code <div>} mit {@code data-*}-Attributen,
+     * Hintergründe stecken in {@code <meta name="background-image[-page2]">}.
+     */
+    static VorlagenDaten parseVorlagenHtml(String html)
+    {
+        if (html == null || html.isBlank()) return VorlagenDaten.leer();
+        org.jsoup.nodes.Document doc = Jsoup.parse(html);
+        String bg1 = parseMetaContent(doc, "background-image");
+        String bg2 = parseMetaContent(doc, "background-image-page2");
+        List<FormBlockDto> blocks = new ArrayList<>();
+        for (Element el : doc.select("[data-block-type]"))
+        {
+            FormBlockDto block = parseFormBlockElement(el);
+            if (block != null) blocks.add(block);
+        }
+        return new VorlagenDaten(bg1, bg2, blocks);
+    }
+
+    private static String parseMetaContent(org.jsoup.nodes.Document doc, String name)
+    {
+        Element meta = doc.selectFirst("meta[name=" + name + "]");
+        if (meta == null) return null;
+        String content = meta.attr("content");
+        if (content == null || content.isBlank()) return null;
+        return urlDecode(content);
+    }
+
+    private static FormBlockDto parseFormBlockElement(Element el)
+    {
+        String type = el.attr("data-block-type");
+        if (type == null || type.isBlank()) return null;
+        String id = el.id();
+        if (id == null || id.isBlank()) id = type + "_" + Math.abs(el.hashCode());
+        int page = parseInt(el.attr("data-page"), 1);
+        float x = parseFloat(el.attr("data-x"), 0f);
+        float y = parseFloat(el.attr("data-y"), 0f);
+        float width = parseFloat(el.attr("data-width"), 0f);
+        float height = parseFloat(el.attr("data-height"), 0f);
+        String content = el.hasAttr("data-content") ? urlDecode(el.attr("data-content")) : null;
+        Map<String, Object> styles = parseStyleAttribute(el.attr("data-style"));
+        return new FormBlockDto(id, type, page, x, y, width, height, content, styles);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> parseStyleAttribute(String raw)
+    {
+        if (raw == null || raw.isBlank()) return Map.of();
+        try
+        {
+            String json = urlDecode(raw);
+            return OBJECT_MAPPER.readValue(json, Map.class);
+        }
+        catch (Exception e)
+        {
+            return Map.of();
+        }
+    }
+
+    private static String urlDecode(String s)
+    {
+        if (s == null) return null;
+        try { return URLDecoder.decode(s, StandardCharsets.UTF_8); }
+        catch (IllegalArgumentException e) { return s; }
+    }
+
+    private static int parseInt(String s, int fallback)
+    {
+        try { return Integer.parseInt(s); } catch (Exception e) { return fallback; }
+    }
+
+    private static float parseFloat(String s, float fallback)
+    {
+        try { return Float.parseFloat(s); } catch (Exception e) { return fallback; }
+    }
+
+    /**
+     * Container für die aus der Formularwesen-Vorlage geladenen Layout-Daten.
+     */
+    record VorlagenDaten(String backgroundImagePage1, String backgroundImagePage2, List<FormBlockDto> formBlocks)
+    {
+        static VorlagenDaten leer() { return new VorlagenDaten(null, null, List.of()); }
+    }
+
+    private KopfdatenDto buildKopfdaten(AusgangsGeschaeftsDokument ab)
+    {
+        Kunde kunde = ab.getKunde();
+        if (kunde == null && ab.getProjekt() != null) kunde = ab.getProjekt().getKundenId();
+        if (kunde == null && ab.getAnfrage() != null) kunde = ab.getAnfrage().getKunde();
+
+        String kundenName = kunde != null ? kunde.getName() : null;
+        String kundenAdresse = ab.getRechnungsadresseOverride();
+        if ((kundenAdresse == null || kundenAdresse.isBlank()) && kunde != null)
+        {
+            kundenAdresse = baueAdresseAusKunde(kunde);
+        }
+
+        String bauvorhaben = null;
+        String projektnummer = null;
+        if (ab.getProjekt() != null)
+        {
+            bauvorhaben = ab.getProjekt().getBauvorhaben();
+            projektnummer = ab.getProjekt().getAuftragsnummer();
+        }
+        else if (ab.getAnfrage() != null)
+        {
+            bauvorhaben = ab.getAnfrage().getBauvorhaben();
+        }
+
+        return new KopfdatenDto(
+                ab.getDokumentNummer(),
+                ab.getDatum() != null ? ab.getDatum() : LocalDate.now(),
+                ab.getDatum() != null ? ab.getDatum() : LocalDate.now(),
+                kundenName,
+                kundenAdresse,
+                ab.getBetreff(),
+                kunde != null && kunde.getKundennummer() != null ? kunde.getKundennummer() : null,
+                "Auftragsbestätigung",
+                ab.getVorgaenger() != null ? ab.getVorgaenger().getDokumentNummer() : null,
+                projektnummer,
+                bauvorhaben,
+                ab.getVorgaenger() != null && ab.getVorgaenger().getTyp() != null
+                        ? ab.getVorgaenger().getTyp().name() : null,
+                ab.getVorgaenger() != null && ab.getVorgaenger().getDatum() != null
+                        ? ab.getVorgaenger().getDatum().toString() : null,
+                ab.getZahlungszielTage());
+    }
+
+    private static String baueAdresseAusKunde(Kunde kunde)
+    {
+        if (kunde == null) return null;
+        StringBuilder sb = new StringBuilder();
+        if (kunde.getName() != null && !kunde.getName().isBlank()) sb.append(kunde.getName());
+        if (kunde.getStrasse() != null && !kunde.getStrasse().isBlank())
+        {
+            if (sb.length() > 0) sb.append("\n");
+            sb.append(kunde.getStrasse());
+        }
+        boolean plzOrt = (kunde.getPlz() != null && !kunde.getPlz().isBlank())
+                || (kunde.getOrt() != null && !kunde.getOrt().isBlank());
+        if (plzOrt)
+        {
+            if (sb.length() > 0) sb.append("\n");
+            if (kunde.getPlz() != null) sb.append(kunde.getPlz()).append(" ");
+            if (kunde.getOrt() != null) sb.append(kunde.getOrt());
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    // ======================= positionenJson Parser =======================
+
+    /**
+     * Konvertiert das im DocumentEditor erzeugte {@code positionenJson}
+     * (rekursive Struktur aus TEXT/SERVICE/SECTION_HEADER/SUBTOTAL/SEPARATOR/CLOSURE)
+     * in die flache {@link ContentBlockDto}-Liste, die der {@link RechnungPdfService}
+     * erwartet. Position-Nummerierung wird hierarchisch vergeben (1, 1.1, 2 …),
+     * analog zur Frontend-Logik.
+     */
+    static List<ContentBlockDto> parsePositionenJsonZuContentBlocks(String positionenJson)
+    {
+        if (positionenJson == null || positionenJson.isBlank()) return List.of();
+        try
+        {
+            JsonNode root = OBJECT_MAPPER.readTree(positionenJson);
+            JsonNode blocks;
+            if (root.isArray()) blocks = root;
+            else if (root.has("blocks") && root.get("blocks").isArray()) blocks = root.get("blocks");
+            else return List.of();
+
+            List<ContentBlockDto> result = new ArrayList<>();
+            int[] counters = new int[] { 0 };
+            for (JsonNode block : blocks)
+            {
+                appendBlock(block, "", counters, result);
+            }
+            return result;
+        }
+        catch (Exception e)
+        {
+            log.warn("positionenJson konnte nicht geparst werden: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    private static void appendBlock(JsonNode block, String parentPos, int[] counters, List<ContentBlockDto> out)
+    {
+        String type = optString(block, "type");
+        if (type == null) return;
+
+        switch (type)
+        {
+            case "TEXT" ->
+            {
+                String text = optString(block, "content");
+                int fontSize = optInt(block, "fontSize", 10);
+                boolean fett = optBoolean(block, "fett", false);
+                out.add(new ContentBlockDto("TEXT", text, fett, fontSize,
+                        null, null, null, null, null, null, null, false, null, null));
+            }
+            case "SERVICE" ->
+            {
+                counters[0]++;
+                String pos = parentPos.isEmpty() ? String.valueOf(counters[0]) : parentPos + "." + counters[0];
+                BigDecimal menge = optBigDecimal(block, "quantity", BigDecimal.ONE);
+                BigDecimal einzelpreis = optBigDecimal(block, "price", BigDecimal.ZERO);
+                BigDecimal gesamt = menge.multiply(einzelpreis);
+                BigDecimal rabattProzent = optBigDecimal(block, "discount", null);
+                if (rabattProzent != null && rabattProzent.signum() > 0)
+                {
+                    BigDecimal faktor = BigDecimal.ONE.subtract(
+                            rabattProzent.divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP));
+                    gesamt = gesamt.multiply(faktor).setScale(2, RoundingMode.HALF_UP);
+                }
+                else
+                {
+                    gesamt = gesamt.setScale(2, RoundingMode.HALF_UP);
+                }
+                out.add(new ContentBlockDto(
+                        "SERVICE", null, false, 0,
+                        pos,
+                        optString(block, "title"),
+                        optString(block, "description"),
+                        menge,
+                        optString(block, "unit", "Stk"),
+                        einzelpreis,
+                        gesamt,
+                        optBoolean(block, "optional", false),
+                        null,
+                        rabattProzent));
+            }
+            case "SECTION_HEADER" ->
+            {
+                counters[0]++;
+                String pos = parentPos.isEmpty() ? String.valueOf(counters[0]) : parentPos + "." + counters[0];
+                out.add(new ContentBlockDto("SECTION_HEADER", null, false, 0,
+                        pos, null, null, null, null, null, null, false,
+                        optString(block, "sectionLabel", ""), null));
+                JsonNode children = block.get("children");
+                if (children != null && children.isArray())
+                {
+                    int[] childCounters = new int[] { 0 };
+                    for (JsonNode child : children)
+                    {
+                        appendBlock(child, pos, childCounters, out);
+                    }
+                }
+            }
+            case "SUBTOTAL" -> out.add(new ContentBlockDto("SUBTOTAL", null, false, 0,
+                    null, null, null, null, null, null, null, false, null, null));
+            case "SEPARATOR" -> out.add(new ContentBlockDto("SEPARATOR", null, false, 0,
+                    null, null, null, null, null, null, null, false, null, null));
+            case "CLOSURE" -> out.add(new ContentBlockDto("CLOSURE", null, false, 0,
+                    null, null, null, null, null, null, null, false, null, null));
+            default -> { /* unbekannter Blocktyp wird ignoriert */ }
+        }
+    }
+
+    private static String optString(JsonNode node, String key) { return optString(node, key, null); }
+    private static String optString(JsonNode node, String key, String fallback)
+    {
+        if (node == null || !node.has(key) || node.get(key).isNull()) return fallback;
+        return node.get(key).asText();
+    }
+    private static int optInt(JsonNode node, String key, int fallback)
+    {
+        if (node == null || !node.has(key) || node.get(key).isNull()) return fallback;
+        return node.get(key).asInt(fallback);
+    }
+    private static boolean optBoolean(JsonNode node, String key, boolean fallback)
+    {
+        if (node == null || !node.has(key) || node.get(key).isNull()) return fallback;
+        return node.get(key).asBoolean(fallback);
+    }
+    private static BigDecimal optBigDecimal(JsonNode node, String key, BigDecimal fallback)
+    {
+        if (node == null || !node.has(key) || node.get(key).isNull()) return fallback;
+        try { return new BigDecimal(node.get(key).asText()); }
+        catch (NumberFormatException e) { return fallback; }
+    }
+
+    // ======================= E-Mail =======================
+
+    private EmailService.EmailContent baueEmailInhalt(AusgangsGeschaeftsDokument ab)
+    {
+        Map<String, String> ctx = baueTemplateKontext(ab);
+        EmailService.EmailContent rendered = emailTextTemplateService.render("AUFTRAGSBESTAETIGUNG", ctx);
+        if (rendered != null && rendered.subject() != null && !rendered.subject().isBlank()) return rendered;
+
+        // Fallback auf hartkodiertes Template
+        return EmailService.buildOrderConfirmationEmail(
+                null,
+                "Sehr geehrte Damen und Herren",
+                ctx.getOrDefault("KUNDENNAME", ""),
+                ctx.getOrDefault("BAUVORHABEN", ""),
+                ctx.getOrDefault("PROJEKTNUMMER", ""),
+                ctx.getOrDefault("DOKUMENTNUMMER", ab.getDokumentNummer()),
+                ctx.getOrDefault("BETRAG", ""),
+                "Bauschlosserei Kuhn");
+    }
+
+    private Map<String, String> baueTemplateKontext(AusgangsGeschaeftsDokument ab)
+    {
+        Map<String, String> ctx = new HashMap<>();
+        ctx.put("DOKUMENTNUMMER", nullSafe(ab.getDokumentNummer()));
+        ctx.put("DOKUMENTTYP", "Auftragsbestätigung");
+        ctx.put("DATUM", ab.getDatum() != null ? ab.getDatum().format(DATUM_FORMAT) : "");
+        Kunde kunde = ab.getKunde();
+        if (kunde == null && ab.getProjekt() != null) kunde = ab.getProjekt().getKundenId();
+        if (kunde == null && ab.getAnfrage() != null) kunde = ab.getAnfrage().getKunde();
+        if (kunde != null)
+        {
+            ctx.put("KUNDENNAME", nullSafe(kunde.getName()));
+            ctx.put("KUNDENNUMMER", nullSafe(kunde.getKundennummer()));
+            ctx.put("KUNDENADRESSE", nullSafe(baueAdresseAusKunde(kunde)));
+        }
+        if (ab.getProjekt() != null)
+        {
+            ctx.put("PROJEKTNUMMER", nullSafe(ab.getProjekt().getAuftragsnummer()));
+            ctx.put("BAUVORHABEN", nullSafe(ab.getProjekt().getBauvorhaben()));
+        }
+        else if (ab.getAnfrage() != null)
+        {
+            ctx.put("BAUVORHABEN", nullSafe(ab.getAnfrage().getBauvorhaben()));
+        }
+        ctx.put("BETRAG", formatBetrag(ab.getBetragBrutto()));
+        return ctx;
+    }
+
+    private static String formatBetrag(BigDecimal betrag)
+    {
+        if (betrag == null) return "";
+        NumberFormat nf = NumberFormat.getCurrencyInstance(Locale.GERMANY);
+        return nf.format(betrag);
+    }
+
+    private static String nullSafe(String s) { return s == null ? "" : s; }
+
+    private String ermittleAbsenderAdresse()
+    {
+        // Bei T-Online ist der SMTP-Username gleich der Mail-Adresse;
+        // andere Provider ebenso üblich.
+        String username = systemSettingsService.getSmtpUsername();
+        return username != null && username.contains("@") ? username : "noreply@bauschlosserei-kuhn.de";
+    }
+
+    private static String sanitizeForFilename(String input)
+    {
+        if (input == null) return "Dokument";
+        return input.replaceAll("[\\\\/:*?\"<>|\\s]", "_");
+    }
+}
