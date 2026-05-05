@@ -35,6 +35,7 @@ import Urlaubsantraege from './pages/Urlaubsantraege';
 import AbteilungBerechtigungenEditor from './pages/AbteilungBerechtigungenEditor';
 import TerminKalender from './pages/TerminKalender';
 import RechnungsuebersichtEditor from './pages/RechnungsuebersichtEditor';
+import DokumentUebersichtEditor from './pages/DokumentUebersichtEditor';
 import FirmaEditor from './pages/FirmaEditor';
 import BestellungEditor from './pages/BestellungEditor';
 import DocumentEditorPage from './pages/DocumentEditorPage';
@@ -83,6 +84,7 @@ export default function App() {
                 <Route path="/formulare" element={<ErrorBoundary><FormularwesenEditor /></ErrorBoundary>} />
                 <Route path="/offeneposten" element={<ErrorBoundary><OffenePostenEditor /></ErrorBoundary>} />
                 <Route path="/rechnungsuebersicht" element={<ErrorBoundary><RechnungsuebersichtEditor /></ErrorBoundary>} />
+                <Route path="/dokumentuebersicht" element={<ErrorBoundary><DokumentUebersichtEditor /></ErrorBoundary>} />
                 <Route path="/emails" element={<Navigate to="/emails/inbox" replace />} />
                 <Route path="/emails/:folder" element={<ErrorBoundary><EmailCenter /></ErrorBoundary>} />
                 <Route path="/emails/:folder/:emailId" element={<ErrorBoundary><EmailCenter /></ErrorBoundary>} />

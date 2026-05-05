@@ -78,6 +78,12 @@ const NAVIGATION: NavCategory[] = [
                 ]
             },
             {
+                label: 'Dokumente',
+                items: [
+                    { name: 'Dokumente', href: '/dokumentuebersicht', icon: FileText },
+                ]
+            },
+            {
                 label: 'Planung',
                 items: [
                     { name: 'Kalender', href: '/kalender', icon: Calendar },

@@ -73,6 +73,16 @@ public interface AusgangsGeschaeftsDokumentRepository extends JpaRepository<Ausg
     Optional<String> findMaxDokumentNummerByPrefix(String prefix);
 
     /**
+     * Findet alle Dokumente in einem Datumsbereich (für Dokumentübersicht).
+     */
+    List<AusgangsGeschaeftsDokument> findByDatumBetweenOrderByDatumDesc(java.time.LocalDate start, java.time.LocalDate end);
+
+    /**
+     * Findet alle Dokumente sortiert nach Datum absteigend (für Dokumentübersicht ohne Datumsfilter).
+     */
+    List<AusgangsGeschaeftsDokument> findAllByOrderByDatumDesc();
+
+    /**
      * Liefert für eine Liste von Anfrage-IDs ein Mapping
      * [AusgangsGeschaeftsDokument.id, Anfrage.id], damit der DokumentFreigabeService
      * den jüngsten Freigabe-Status pro Anfrage auch für Dokumente aus dem neuen
