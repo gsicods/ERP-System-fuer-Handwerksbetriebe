@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import {
     Bell, Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, X, Package, CheckCircle2,
-    Inbox, Wallet, Users, Building2, Briefcase
+    Inbox, Wallet, Users, Building2, Briefcase, Globe
 } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -32,28 +32,6 @@ interface NotificationSummary {
 
 // ── Icon map ─────────────────────────────────────────────────────────────
 
-const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
-    Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, Package, CheckCircle2,
-};
-
-const TYPE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-    EMAILS: { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200' },
-    URLAUBSANTRAEGE: { bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-200' },
-    BAUTAGEBUCH: { bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-200' },
-    EINGANG_FAELLIG: { bg: 'bg-orange-50', text: 'text-orange-600', border: 'border-orange-200' },
-    AUSGANG_UEBERFAELLIG: { bg: 'bg-red-50', text: 'text-red-600', border: 'border-red-200' },
-    RECHNUNGEN: { bg: 'bg-violet-50', text: 'text-violet-600', border: 'border-violet-200' },
-    TERMINE: { bg: 'bg-rose-50', text: 'text-rose-600', border: 'border-rose-200' },
-    LIEFERSCHEINE: { bg: 'bg-cyan-50', text: 'text-cyan-600', border: 'border-cyan-200' },
-    REKLAMATIONEN: { bg: 'bg-pink-50', text: 'text-pink-600', border: 'border-pink-200' },
-    EMAILS_PROJECTS: { bg: 'bg-indigo-50', text: 'text-indigo-600', border: 'border-indigo-200' },
-    EMAILS_OFFERS: { bg: 'bg-teal-50', text: 'text-teal-600', border: 'border-teal-200' },
-    EMAILS_SUPPLIERS: { bg: 'bg-lime-50', text: 'text-lime-600', border: 'border-lime-200' },
-    EMAILS_SPAM: { bg: 'bg-yellow-50', text: 'text-yellow-600', border: 'border-yellow-200' },
-    EMAILS_NEWSLETTER: { bg: 'bg-sky-50', text: 'text-sky-600', border: 'border-sky-200' },
-    FREIGABEN_ANGENOMMEN: { bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-200' },
-};
-
 const RECENT_TYPE_COLORS: Record<string, string> = {
     EMAIL: 'text-blue-500',
     URLAUBSANTRAG: 'text-emerald-500',
@@ -65,6 +43,7 @@ const RECENT_TYPE_COLORS: Record<string, string> = {
     LIEFERSCHEIN: 'text-cyan-500',
     REKLAMATION: 'text-pink-500',
     FREIGABE_ANGENOMMEN: 'text-emerald-500',
+    ANFRAGE_WEBSEITE: 'text-rose-600',
 };
 
 const RECENT_TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -78,6 +57,7 @@ const RECENT_TYPE_ICONS: Record<string, React.ComponentType<{ className?: string
     LIEFERSCHEIN: Package,
     REKLAMATION: AlertTriangle,
     FREIGABE_ANGENOMMEN: CheckCircle2,
+    ANFRAGE_WEBSEITE: Globe,
 };
 
 // ── Gruppen-Definition ─────────────────────────────────────────────────
@@ -89,10 +69,23 @@ interface NotificationGroup {
     icon: React.ComponentType<{ className?: string }>;
     accentText: string;
     accentBg: string;
+    /** Category-Types (CategoryDto.type) die zu dieser Gruppe gehören. */
     types: string[];
+    /** RecentItem-Types (RecentItemDto.type) die zu dieser Gruppe gehören. */
+    recentTypes: string[];
 }
 
+// Reihenfolge bestimmt das Rendering — Webseiten-Anfragen sollen ganz oben sein.
 const GROUPS: NotificationGroup[] = [
+    {
+        id: 'webseite',
+        label: 'Neu von der Webseite',
+        icon: Globe,
+        accentText: 'text-rose-700',
+        accentBg: 'bg-rose-100',
+        types: ['ANFRAGEN_WEBSEITE'],
+        recentTypes: ['ANFRAGE_WEBSEITE'],
+    },
     {
         id: 'posteingaenge',
         label: 'Posteingänge',
@@ -100,6 +93,7 @@ const GROUPS: NotificationGroup[] = [
         accentText: 'text-blue-600',
         accentBg: 'bg-blue-50',
         types: ['EMAILS', 'EMAILS_PROJECTS', 'EMAILS_OFFERS', 'EMAILS_SUPPLIERS', 'EMAILS_SPAM', 'EMAILS_NEWSLETTER'],
+        recentTypes: ['EMAIL'],
     },
     {
         id: 'geschaeft',
@@ -108,6 +102,7 @@ const GROUPS: NotificationGroup[] = [
         accentText: 'text-emerald-600',
         accentBg: 'bg-emerald-50',
         types: ['FREIGABEN_ANGENOMMEN', 'BAUTAGEBUCH'],
+        recentTypes: ['FREIGABE_ANGENOMMEN', 'BAUTAGEBUCH'],
     },
     {
         id: 'finanzen',
@@ -116,6 +111,7 @@ const GROUPS: NotificationGroup[] = [
         accentText: 'text-orange-600',
         accentBg: 'bg-orange-50',
         types: ['EINGANG_FAELLIG', 'AUSGANG_UEBERFAELLIG', 'RECHNUNGEN'],
+        recentTypes: ['EINGANG_FAELLIG', 'AUSGANG_UEBERFAELLIG', 'RECHNUNG'],
     },
     {
         id: 'termine',
@@ -124,6 +120,7 @@ const GROUPS: NotificationGroup[] = [
         accentText: 'text-rose-600',
         accentBg: 'bg-rose-50',
         types: ['TERMINE'],
+        recentTypes: ['TERMIN'],
     },
     {
         id: 'personal',
@@ -132,6 +129,7 @@ const GROUPS: NotificationGroup[] = [
         accentText: 'text-emerald-600',
         accentBg: 'bg-emerald-50',
         types: ['URLAUBSANTRAEGE'],
+        recentTypes: ['URLAUBSANTRAG'],
     },
     {
         id: 'lieferanten',
@@ -140,41 +138,17 @@ const GROUPS: NotificationGroup[] = [
         accentText: 'text-cyan-600',
         accentBg: 'bg-cyan-50',
         types: ['LIEFERSCHEINE', 'REKLAMATIONEN'],
+        recentTypes: ['LIEFERSCHEIN', 'REKLAMATION'],
     },
 ];
 
 // ── Dismissal helpers ────────────────────────────────────────────────────
-// Dismissals speichern den Stand zum Zeitpunkt des Klicks.
-// Eine Kategorie bleibt ausgeblendet bis ihr Count *höher* wird als beim Dismiss.
-// Items bleiben ausgeblendet bis zur nächsten Seiten-Sitzung (sessionStorage).
-
-const DISMISSAL_KEY = 'notification_dismissals_v2';
-
-interface Dismissals {
-    // type → count beim Dismiss (nicht timestamp!)
-    categories: Record<string, number>;
-}
-
-function loadDismissals(): Dismissals {
-    try {
-        const raw = localStorage.getItem(DISMISSAL_KEY);
-        if (raw) return JSON.parse(raw);
-    } catch { /* ignore */ }
-    return { categories: {} };
-}
-
-function saveDismissals(d: Dismissals) {
-    localStorage.setItem(DISMISSAL_KEY, JSON.stringify(d));
-}
-
-function dismissCategory(type: string, count: number) {
-    const d = loadDismissals();
-    d.categories[type] = count;
-    saveDismissals(d);
-}
+// Items bleiben für die laufende Browser-Sitzung ausgeblendet, sobald sie
+// einmal angeklickt wurden – die Kategorien-Zähler kommen weiter direkt vom
+// Backend, das die Quelle der Wahrheit für „erledigt" ist (z.B. Mark-Read,
+// Annahme-Status, Anfrage-zu-Projekt-Umwandlung).
 
 function dismissItem(type: string, title: string) {
-    // Items nur für diese Sitzung ausblenden (SessionStorage)
     try {
         const raw = sessionStorage.getItem('notification_dismissed_items') || '[]';
         const items: string[] = JSON.parse(raw);
@@ -184,24 +158,13 @@ function dismissItem(type: string, title: string) {
 }
 
 function filterDismissed(data: NotificationSummary): NotificationSummary {
-    const d = loadDismissals();
-
-    // Kategorie einblenden sobald count > dismissedCount (echte neue Einträge)
-    const categories = data.categories.filter(c => {
-        const dismissedCount = d.categories[c.type];
-        if (dismissedCount === undefined) return true;  // nie dismissed
-        return c.count > dismissedCount;                // neue dazugekommen
-    });
-
-    // Items: sitzungsbasiert ausblenden
     let dismissedItems: string[] = [];
     try {
         dismissedItems = JSON.parse(sessionStorage.getItem('notification_dismissed_items') || '[]');
     } catch { /* ignore */ }
     const recentItems = data.recentItems.filter(item => !dismissedItems.includes(`${item.type}::${item.title}`));
-
-    const totalCount = categories.reduce((sum, c) => sum + c.count, 0);
-    return { totalCount, categories, recentItems };
+    const totalCount = data.categories.reduce((sum, c) => sum + c.count, 0);
+    return { totalCount, categories: data.categories, recentItems };
 }
 
 // ── Component ────────────────────────────────────────────────────────────
@@ -298,13 +261,6 @@ export function NotificationBell() {
         navigate(link);
     };
 
-    const handleCategoryClick = (cat: CategoryDto) => {
-        dismissCategory(cat.type, cat.count);
-        // Immediately update local display
-        if (rawData) setData(filterDismissed(rawData));
-        handleNavigate(cat.link, cat.type);
-    };
-
     const handleItemClick = (item: RecentItemDto) => {
         dismissItem(item.type, item.title);
         // Immediately update local display
@@ -339,7 +295,7 @@ export function NotificationBell() {
 
             {/* Dropdown */}
             {open && data && (
-                <div className="absolute right-0 top-full mt-2 w-[520px] max-h-[80vh] bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col">
+                <div className="absolute right-0 top-full mt-2 w-[720px] max-w-[calc(100vw-2rem)] max-h-[80vh] bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col">
                     {/* Header */}
                     <div className="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-rose-50 to-white border-b border-slate-100 shrink-0">
                         <div className="flex items-center gap-2">
@@ -361,106 +317,92 @@ export function NotificationBell() {
                         </button>
                     </div>
 
-                    {/* Scrollable Body */}
+                    {/* Scrollable Body — Items pro Gruppe gerendert; nur Items sind klickbar. */}
                     <div className="overflow-y-auto flex-1">
-                        {/* Grouped category tiles */}
-                        {data.categories.length > 0 ? (
-                            <div className="px-3 pt-3 pb-1">
-                                {GROUPS.map((group) => {
-                                    const groupCats = data.categories.filter(c => group.types.includes(c.type));
-                                    if (groupCats.length === 0) return null;
-                                    const groupTotal = groupCats.reduce((sum, c) => sum + c.count, 0);
-                                    const GroupIcon = group.icon;
-                                    return (
-                                        <div key={group.id} className="mb-3 last:mb-0">
-                                            {/* Group header */}
-                                            <div className="flex items-center gap-2 px-1 mb-1.5">
-                                                <div className={cn("flex items-center justify-center w-5 h-5 rounded-md", group.accentBg)}>
-                                                    <GroupIcon className={cn("w-3 h-3", group.accentText)} />
-                                                </div>
-                                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                                                    {group.label}
-                                                </span>
-                                                <span className="text-[10px] font-semibold text-slate-400">
-                                                    · {groupTotal}
-                                                </span>
-                                                <div className="flex-1 h-px bg-slate-100" />
-                                            </div>
-                                            {/* Group tiles */}
-                                            <div className="grid grid-cols-2 gap-1.5">
-                                                {groupCats.map((cat) => {
-                                                    const Icon = ICON_MAP[cat.icon] || Bell;
-                                                    const colors = TYPE_COLORS[cat.type] || TYPE_COLORS.EMAILS;
-                                                    return (
-                                                        <button
-                                                            key={cat.type}
-                                                            onClick={() => handleCategoryClick(cat)}
-                                                            className={cn(
-                                                                "flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all text-left",
-                                                                "hover:shadow-sm hover:-translate-y-0.5 active:scale-[0.98]",
-                                                                colors.bg, colors.border
-                                                            )}
-                                                            title={cat.label}
-                                                        >
-                                                            <Icon className={cn("w-4 h-4 shrink-0", colors.text)} />
-                                                            <div className="flex-1 min-w-0">
-                                                                <p className="text-[11px] text-slate-600 truncate leading-tight">
-                                                                    {cat.label}
-                                                                </p>
-                                                            </div>
-                                                            <span className={cn("text-base font-bold leading-none", colors.text)}>
-                                                                {cat.count}
-                                                            </span>
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        ) : (
+                        {data.categories.length === 0 && data.recentItems.length === 0 ? (
                             <div className="p-12 text-center text-slate-400">
                                 <Bell className="w-10 h-10 mx-auto mb-3 text-slate-200" />
                                 <p className="text-sm font-medium">Keine neuen Benachrichtigungen</p>
                                 <p className="text-xs text-slate-400 mt-1">Alles erledigt – gut gemacht!</p>
                             </div>
-                        )}
-
-                        {/* Recent items */}
-                        {data.recentItems.length > 0 && (
-                            <>
-                                <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/50 sticky top-0">
-                                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                                        Aktuelle Einträge
-                                    </p>
-                                </div>
-                                <div>
-                                    {data.recentItems.map((item, i) => {
-                                        const Icon = RECENT_TYPE_ICONS[item.type] || Bell;
-                                        const iconColor = RECENT_TYPE_COLORS[item.type] || 'text-slate-400';
-                                        return (
-                                            <button
-                                                key={`${item.type}-${i}`}
-                                                onClick={() => handleItemClick(item)}
-                                                className="w-full flex items-start gap-3 px-4 py-2.5 hover:bg-rose-50/40 transition-colors text-left group border-b border-slate-50 last:border-b-0"
-                                            >
-                                                <div className={cn("mt-0.5 p-1.5 rounded-lg bg-slate-50 group-hover:bg-white transition-colors", iconColor)}>
-                                                    <Icon className="w-3.5 h-3.5" />
+                        ) : (
+                            <div className="py-1">
+                                {GROUPS.map((group) => {
+                                    const groupCats = data.categories.filter(c => group.types.includes(c.type));
+                                    const groupItems = data.recentItems.filter(i => group.recentTypes.includes(i.type));
+                                    // Gruppe nur anzeigen, wenn es entweder einen Zähler oder konkrete Items gibt.
+                                    if (groupCats.length === 0 && groupItems.length === 0) return null;
+                                    const groupTotal = groupCats.reduce((sum, c) => sum + c.count, 0);
+                                    const GroupIcon = group.icon;
+                                    const isLeadGruppe = group.id === 'webseite';
+                                    return (
+                                        <div key={group.id} className="mb-1 last:mb-0">
+                                            {/* Group header — bewusst NICHT klickbar, dient nur der Orientierung */}
+                                            <div className={cn(
+                                                "flex items-center gap-2.5 px-4 py-2 border-y border-slate-100",
+                                                isLeadGruppe ? "bg-rose-50" : "bg-slate-50/60"
+                                            )}>
+                                                <div className={cn("flex items-center justify-center w-7 h-7 rounded-lg", group.accentBg)}>
+                                                    <GroupIcon className={cn("w-4 h-4", group.accentText)} />
                                                 </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-sm font-medium text-slate-800 truncate">
-                                                        {item.title}
-                                                    </p>
-                                                    <p className="text-xs text-slate-500 truncate">
-                                                        {item.subtitle}
-                                                    </p>
+                                                <span className={cn(
+                                                    "text-[12px] font-bold uppercase tracking-wider",
+                                                    isLeadGruppe ? group.accentText : "text-slate-600"
+                                                )}>
+                                                    {group.label}
+                                                </span>
+                                                {groupTotal > 0 && (
+                                                    <span className={cn("px-2 py-0.5 text-[11px] font-bold rounded-full", group.accentBg, group.accentText)}>
+                                                        {groupTotal} {groupTotal === 1 ? 'Eintrag' : 'Einträge'}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {/* Items — jede Zeile öffnet exakt eine Instanz */}
+                                            {groupItems.length > 0 ? (
+                                                <div>
+                                                    {groupItems.map((item, i) => {
+                                                        const Icon = RECENT_TYPE_ICONS[item.type] || Bell;
+                                                        const iconColor = RECENT_TYPE_COLORS[item.type] || 'text-slate-400';
+                                                        return (
+                                                            <button
+                                                                key={`${group.id}-${item.type}-${i}`}
+                                                                onClick={() => handleItemClick(item)}
+                                                                className={cn(
+                                                                    "w-full flex items-start gap-3 px-4 py-3 transition-colors text-left group border-b border-slate-50 last:border-b-0",
+                                                                    isLeadGruppe
+                                                                        ? "bg-rose-50/40 hover:bg-rose-50"
+                                                                        : "hover:bg-rose-50/40"
+                                                                )}
+                                                                title="Direkt zu diesem Eintrag öffnen"
+                                                            >
+                                                                <div className={cn(
+                                                                    "mt-0.5 p-2 rounded-lg transition-colors",
+                                                                    isLeadGruppe ? "bg-white" : "bg-slate-50 group-hover:bg-white",
+                                                                    iconColor
+                                                                )}>
+                                                                    <Icon className="w-4 h-4" />
+                                                                </div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-sm font-semibold text-slate-900 truncate">
+                                                                        {item.title}
+                                                                    </p>
+                                                                    <p className="text-xs text-slate-500 truncate mt-0.5">
+                                                                        {item.subtitle}
+                                                                    </p>
+                                                                </div>
+                                                            </button>
+                                                        );
+                                                    })}
                                                 </div>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </>
+                                            ) : (
+                                                <div className="px-4 py-3 text-xs text-slate-500">
+                                                    {groupTotal} {groupTotal === 1 ? 'Eintrag' : 'Einträge'} – Details werden geladen, sobald du die Übersicht öffnest.
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         )}
                     </div>
                 </div>

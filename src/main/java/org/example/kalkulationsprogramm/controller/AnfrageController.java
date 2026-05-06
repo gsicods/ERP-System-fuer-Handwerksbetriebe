@@ -19,8 +19,10 @@ import org.example.kalkulationsprogramm.dto.Projekt.ProjektErstellenDto;
 import org.example.kalkulationsprogramm.dto.Zugferd.ZugferdDaten;
 import org.example.kalkulationsprogramm.repository.AnfrageNotizBildRepository;
 import org.example.kalkulationsprogramm.repository.AnfrageNotizRepository;
+import org.example.kalkulationsprogramm.repository.AnfrageRepository;
 import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
+import org.example.kalkulationsprogramm.service.AnfrageFunnelService;
 import org.example.kalkulationsprogramm.service.AnfrageService;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
 import org.example.kalkulationsprogramm.service.DateiSpeicherService;
@@ -54,6 +56,7 @@ public class AnfrageController {
     private final KundeRepository kundeRepository;
     private final AnfrageNotizRepository anfrageNotizRepository;
     private final AnfrageNotizBildRepository anfrageNotizBildRepository;
+    private final AnfrageRepository anfrageRepository;
     private final MitarbeiterRepository mitarbeiterRepository;
     private final FrontendUserProfileService frontendUserProfileService;
     private final DokumentFreigabeService dokumentFreigabeService;
@@ -63,6 +66,22 @@ public class AnfrageController {
      * (Angebot oder Auftragsbestätigung). Wird vom AnfrageEditor genutzt, um Status-
      * Badges direkt an die Suche-Cards zu hängen.
      */
+    /**
+     * Liefert die IDs aller noch offenen Anfragen, die über den Webseiten-Funnel
+     * hereingekommen sind. Wird vom AnfrageEditor genutzt, um diese Anfragen in
+     * der Kartenübersicht ganz nach oben zu sortieren – „neue Leads zuerst".
+     */
+    @GetMapping("/funnel-ids")
+    public ResponseEntity<List<Long>> funnelAnfrageIds() {
+        List<Long> ids = anfrageRepository
+                .findOffeneFunnelAnfragen(AnfrageFunnelService.SYSTEM_MITARBEITER_TOKEN)
+                .stream()
+                .map(Anfrage::getId)
+                .filter(Objects::nonNull)
+                .toList();
+        return ResponseEntity.ok(ids);
+    }
+
     @GetMapping("/freigabe-status")
     public ResponseEntity<java.util.Map<Long, FreigabeStatusKurzDto>> freigabeStatus(@RequestParam("ids") List<Long> ids) {
         var byAnfrageId = dokumentFreigabeService.findJuengsteProAnfrage(ids);

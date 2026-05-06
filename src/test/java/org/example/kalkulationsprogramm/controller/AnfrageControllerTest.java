@@ -6,6 +6,7 @@ import org.example.kalkulationsprogramm.dto.Produktkategroie.KategorieVorschlagD
 import org.example.kalkulationsprogramm.dto.Projekt.ProjektErstellenDto;
 import org.example.kalkulationsprogramm.repository.AnfrageNotizBildRepository;
 import org.example.kalkulationsprogramm.repository.AnfrageNotizRepository;
+import org.example.kalkulationsprogramm.repository.AnfrageRepository;
 import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
 import org.example.kalkulationsprogramm.service.AnfrageService;
@@ -39,14 +40,15 @@ class AnfrageControllerTest {
         KundeRepository kundeRepository = mock(KundeRepository.class);
         AnfrageNotizRepository anfrageNotizRepository = mock(AnfrageNotizRepository.class);
         AnfrageNotizBildRepository anfrageNotizBildRepository = mock(AnfrageNotizBildRepository.class);
+        AnfrageRepository anfrageRepository = mock(AnfrageRepository.class);
         MitarbeiterRepository mitarbeiterRepository = mock(MitarbeiterRepository.class);
         FrontendUserProfileService frontendUserProfileService = mock(FrontendUserProfileService.class);
         DokumentFreigabeService dokumentFreigabeService = mock(DokumentFreigabeService.class);
 
         AnfrageController controller = new AnfrageController(anfrageService, ausgangsGeschaeftsDokumentService,
                 dateiSpeicherService, zugferdErstellService, zugferdExtractorService, pdfAiExtractorService,
-                kundeRepository, anfrageNotizRepository, anfrageNotizBildRepository, mitarbeiterRepository,
-                frontendUserProfileService, dokumentFreigabeService);
+                kundeRepository, anfrageNotizRepository, anfrageNotizBildRepository, anfrageRepository,
+                mitarbeiterRepository, frontendUserProfileService, dokumentFreigabeService);
 
         Anfrage anfrage = new Anfrage();
         anfrage.setId(42L);
@@ -76,14 +78,15 @@ class AnfrageControllerTest {
         KundeRepository kundeRepository = mock(KundeRepository.class);
         AnfrageNotizRepository anfrageNotizRepository = mock(AnfrageNotizRepository.class);
         AnfrageNotizBildRepository anfrageNotizBildRepository = mock(AnfrageNotizBildRepository.class);
+        AnfrageRepository anfrageRepository = mock(AnfrageRepository.class);
         MitarbeiterRepository mitarbeiterRepository = mock(MitarbeiterRepository.class);
         FrontendUserProfileService frontendUserProfileService = mock(FrontendUserProfileService.class);
         DokumentFreigabeService dokumentFreigabeService = mock(DokumentFreigabeService.class);
 
         AnfrageController controller = new AnfrageController(anfrageService, ausgangsGeschaeftsDokumentService,
                 dateiSpeicherService, zugferdErstellService, zugferdExtractorService, pdfAiExtractorService,
-                kundeRepository, anfrageNotizRepository, anfrageNotizBildRepository, mitarbeiterRepository,
-                frontendUserProfileService, dokumentFreigabeService);
+                kundeRepository, anfrageNotizRepository, anfrageNotizBildRepository, anfrageRepository,
+                mitarbeiterRepository, frontendUserProfileService, dokumentFreigabeService);
 
         KategorieVorschlagDto dto = new KategorieVorschlagDto();
         dto.setKategorieId(7L);

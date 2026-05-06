@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.example.kalkulationsprogramm.domain.Anfrage;
 import org.example.kalkulationsprogramm.domain.AnfrageGeschaeftsdokument;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
 import org.example.kalkulationsprogramm.domain.DokumentFreigabe;
@@ -22,7 +23,9 @@ import org.example.kalkulationsprogramm.domain.ProjektNotiz;
 import org.example.kalkulationsprogramm.domain.ReklamationStatus;
 import org.example.kalkulationsprogramm.domain.Urlaubsantrag;
 import org.example.kalkulationsprogramm.repository.AnfrageDokumentRepository;
+import org.example.kalkulationsprogramm.repository.AnfrageRepository;
 import org.example.kalkulationsprogramm.repository.AusgangsGeschaeftsDokumentRepository;
+import org.example.kalkulationsprogramm.service.AnfrageFunnelService;
 import org.example.kalkulationsprogramm.repository.DokumentFreigabeRepository;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
 import org.example.kalkulationsprogramm.repository.KalenderEintragRepository;
@@ -59,6 +62,7 @@ public class NotificationController {
         private final DokumentFreigabeRepository dokumentFreigabeRepository;
         private final AusgangsGeschaeftsDokumentRepository ausgangsGeschaeftsDokumentRepository;
         private final AnfrageDokumentRepository anfrageDokumentRepository;
+        private final AnfrageRepository anfrageRepository;
 
         @GetMapping("/summary")
         public NotificationSummaryDto getSummary(@RequestParam(required = false) Long mitarbeiterId) {
@@ -67,6 +71,47 @@ public class NotificationController {
 
                 List<CategoryDto> categories = new ArrayList<>();
                 List<RecentItemDto> recentItems = new ArrayList<>();
+
+                // 0. Webseiten-Anfragen (Funnel) – immer zuoberst, damit neue Leads
+                //    sofort sichtbar sind. Anfragen, die schon in ein Projekt
+                //    umgewandelt oder als abgeschlossen markiert sind, fallen raus.
+                try {
+                        List<Anfrage> funnelAnfragen = anfrageRepository
+                                        .findOffeneFunnelAnfragen(AnfrageFunnelService.SYSTEM_MITARBEITER_TOKEN);
+                        if (!funnelAnfragen.isEmpty()) {
+                                categories.add(new CategoryDto("ANFRAGEN_WEBSEITE",
+                                                "Neue Anfragen über Webseite", funnelAnfragen.size(),
+                                                "Globe", "/anfragen"));
+
+                                funnelAnfragen.stream()
+                                                .limit(5)
+                                                .forEach(a -> {
+                                                        String kundenName = a.getKunde() != null
+                                                                        && a.getKunde().getName() != null
+                                                                        && !a.getKunde().getName().isBlank()
+                                                                                        ? a.getKunde().getName()
+                                                                                        : "Unbekannt";
+                                                        String bauvorhaben = a.getBauvorhaben() == null
+                                                                        || a.getBauvorhaben().isBlank()
+                                                                                        ? "Webseiten-Anfrage"
+                                                                                        : a.getBauvorhaben();
+                                                        recentItems.add(new RecentItemDto(
+                                                                        "ANFRAGE_WEBSEITE",
+                                                                        "Webseite: " + kundenName,
+                                                                        bauvorhaben,
+                                                                        a.getCreatedAt() != null
+                                                                                        ? a.getCreatedAt().toString()
+                                                                                        : (a.getAnlegedatum() != null
+                                                                                                        ? a.getAnlegedatum()
+                                                                                                                        .atStartOfDay()
+                                                                                                                        .toString()
+                                                                                                        : ""),
+                                                                        "/anfragen?anfrageId=" + a.getId()));
+                                                });
+                        }
+                } catch (Exception ignored) {
+                        /* Funnel-Auswertung darf das Notification-Center nicht blockieren */
+                }
 
                 // 1. Ungelesene E-Mails
                 try {
@@ -145,7 +190,8 @@ public class NotificationController {
                                                                         a.getVonDatum() != null
                                                                                         ? a.getVonDatum().toString()
                                                                                         : "",
-                                                                        "/urlaubsantraege?status=OFFEN"));
+                                                                        "/urlaubsantraege?status=OFFEN&antragId="
+                                                                                        + a.getId()));
                                                 });
                         }
                 } catch (Exception ignored) {
@@ -226,7 +272,8 @@ public class NotificationController {
                                                                                         : "Rechnung",
                                                                         lieferantName + " – " + fristText,
                                                                         gd.getZahlungsziel().toString(),
-                                                                        "/offeneposten?tab=eingang"));
+                                                                        "/offeneposten?tab=eingang&dokumentId="
+                                                                                        + gd.getId()));
                                                 });
                         }
                 } catch (Exception ignored) {
@@ -264,7 +311,8 @@ public class NotificationController {
                                                                         g.getDokumentid() + " überfällig",
                                                                         kundenName + " – seit " + tageUeber + " Tagen",
                                                                         g.getFaelligkeitsdatum().toString(),
-                                                                        "/offeneposten?tab=ausgang"));
+                                                                        "/offeneposten?tab=ausgang&dokumentId="
+                                                                                        + g.getId()));
                                                 });
                         }
                 } catch (Exception ignored) {
@@ -514,9 +562,10 @@ public class NotificationController {
                                 .sort(Comparator.comparing(RecentItemDto::timestamp,
                                                 Comparator.nullsLast(Comparator.reverseOrder())));
 
-                // Limit to 10 most recent
-                List<RecentItemDto> limitedItems = recentItems.size() > 10
-                                ? new ArrayList<>(recentItems.subList(0, 10))
+                // Limit auf 40 – Items werden im Frontend pro Gruppe gerendert,
+                // ein zu kleines Limit würde komplette Gruppen leerfegen.
+                List<RecentItemDto> limitedItems = recentItems.size() > 40
+                                ? new ArrayList<>(recentItems.subList(0, 40))
                                 : recentItems;
 
                 return new NotificationSummaryDto(totalCount, categories, limitedItems);
@@ -536,11 +585,19 @@ public class NotificationController {
                                         AusgangsGeschaeftsDokument dok = ausgangsGeschaeftsDokumentRepository
                                                         .findById(f.getQuellDokumentId()).orElse(null);
                                         if (dok == null) return "/anfragen";
-                                        if (dok.getAnfrage() != null) {
-                                                return "/anfragen?anfrageId=" + dok.getAnfrage().getId();
-                                        }
+                                        // Mit der digitalen Annahme wandelt das System die Anfrage
+                                        // automatisch in ein Projekt um (siehe DokumentFreigabeService).
+                                        // Daher zuerst auf das Projekt prüfen, damit der Klick auf
+                                        // die Notification direkt auf der Projekt-Detailansicht landet.
                                         if (dok.getProjekt() != null) {
                                                 return "/projekte?projektId=" + dok.getProjekt().getId();
+                                        }
+                                        if (dok.getAnfrage() != null) {
+                                                Long projektId = projektIdAusAnfrage(dok.getAnfrage().getId());
+                                                if (projektId != null) {
+                                                        return "/projekte?projektId=" + projektId;
+                                                }
+                                                return "/anfragen?anfrageId=" + dok.getAnfrage().getId();
                                         }
                                         return "/anfragen";
                                 }
@@ -549,7 +606,14 @@ public class NotificationController {
                                                         .filter(d -> d instanceof AnfrageGeschaeftsdokument)
                                                         .map(d -> (AnfrageGeschaeftsdokument) d)
                                                         .filter(g -> g.getAnfrage() != null)
-                                                        .map(g -> "/anfragen?anfrageId=" + g.getAnfrage().getId())
+                                                        .map(g -> {
+                                                                Long projektId = projektIdAusAnfrage(
+                                                                                g.getAnfrage().getId());
+                                                                return projektId != null
+                                                                                ? "/projekte?projektId=" + projektId
+                                                                                : "/anfragen?anfrageId="
+                                                                                                + g.getAnfrage().getId();
+                                                        })
                                                         .orElse("/anfragen");
                                 }
                                 case PROJEKT:
@@ -560,6 +624,24 @@ public class NotificationController {
                         }
                 } catch (Exception ignored) {
                         return "/anfragen";
+                }
+        }
+
+        /**
+         * Liefert die Projekt-ID, in die eine Anfrage zwischenzeitlich umgewandelt
+         * wurde – oder {@code null}, wenn die Anfrage noch eine Anfrage ist bzw.
+         * der Lookup fehlschlägt. Wird benutzt, um Notifications aus „akzeptierten
+         * Angeboten" direkt auf die Projekt-Detailansicht zu führen.
+         */
+        private Long projektIdAusAnfrage(Long anfrageId) {
+                if (anfrageId == null) return null;
+                try {
+                        return anfrageRepository.findById(anfrageId)
+                                        .map(Anfrage::getProjekt)
+                                        .map(p -> p.getId())
+                                        .orElse(null);
+                } catch (Exception ignored) {
+                        return null;
                 }
         }
 

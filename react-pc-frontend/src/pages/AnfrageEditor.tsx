@@ -139,11 +139,12 @@ function FreigabeBadge({ freigabe }: { freigabe: FreigabeStatusKurz }) {
     return null;
 }
 
-function AnfrageCard({ anfrage, onClick, onToggleAbgeschlossen, freigabe }: {
+function AnfrageCard({ anfrage, onClick, onToggleAbgeschlossen, freigabe, viaWebseite }: {
     anfrage: Anfrage;
     onClick: () => void;
     onToggleAbgeschlossen?: (anfrageId: number, abgeschlossen: boolean) => void;
     freigabe?: FreigabeStatusKurz;
+    viaWebseite?: boolean;
 }) {
     const handleCheckboxClick = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -179,6 +180,14 @@ function AnfrageCard({ anfrage, onClick, onToggleAbgeschlossen, freigabe }: {
                                 {anfrage.abgeschlossen ? 'Beendet' : (anfrage.projektId ? 'Projekt erstellt' : 'Offen')}
                             </span>
                             {freigabe && <FreigabeBadge freigabe={freigabe} />}
+                            {viaWebseite && (
+                                <span
+                                    className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200"
+                                    title="Anfrage kam frisch über die Webseite herein"
+                                >
+                                    Webseite · neu
+                                </span>
+                            )}
                         </div>
                         <h3 className="font-semibold text-slate-900 mt-2 truncate text-base" title={anfrage.bauvorhaben}>
                             {anfrage.bauvorhaben || "Unbenannt"}
@@ -1413,6 +1422,7 @@ export default function AnfrageEditor() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
     const [anfragen, setAnfragen] = useState<Anfrage[]>([]);
+    const [funnelAnfrageIds, setFunnelAnfrageIds] = useState<Set<number>>(new Set());
     const [freigabeStatusByAnfrageId, setFreigabeStatusByAnfrageId] = useState<Record<number, FreigabeStatusKurz>>({});
     const [selectedAnfrage, setSelectedAnfrage] = useState<AnfrageDetail | null>(null);
     const [loading, setLoading] = useState(false);
@@ -1498,30 +1508,44 @@ export default function AnfrageEditor() {
             }
             if (filters.jahr) params.set("jahr", filters.jahr);
 
-            const [res, lastAccessed] = await Promise.all([
+            const [res, lastAccessed, funnelRes] = await Promise.all([
                 fetch(`/api/anfragen?${params.toString()}`),
                 fetchAnfrageLastAccessed(),
+                fetch('/api/anfragen/funnel-ids').catch(() => null),
             ]);
             if (!res.ok) throw new Error("Fehler beim Laden");
             const data = await res.json();
 
-            // API gibt Array oder Objekt mit gesamt zurück
-            const sortByLastAccessed = (a: Anfrage, b: Anfrage) => {
+            // Webseiten-Anfragen (Funnel) ganz oben halten — frische Leads sollen
+            // sofort sichtbar sein. Innerhalb der Funnel-Gruppe wieder nach
+            // letztem Aufruf sortieren, dito für den Rest.
+            let funnelIds = new Set<number>();
+            if (funnelRes && funnelRes.ok) {
+                try {
+                    const ids: number[] = await funnelRes.json();
+                    if (Array.isArray(ids)) funnelIds = new Set(ids);
+                } catch { /* ignore */ }
+            }
+            const sortFn = (a: Anfrage, b: Anfrage) => {
+                const aFunnel = funnelIds.has(a.id) ? 1 : 0;
+                const bFunnel = funnelIds.has(b.id) ? 1 : 0;
+                if (aFunnel !== bFunnel) return bFunnel - aFunnel; // Funnel zuerst
                 const ta = lastAccessed[String(a.id)] || 0;
                 const tb = lastAccessed[String(b.id)] || 0;
-                return tb - ta; // zuletzt aufgerufene zuerst, sonst stabil
+                return tb - ta;
             };
             let resultList: Anfrage[];
             if (Array.isArray(data)) {
-                resultList = [...data].sort(sortByLastAccessed);
+                resultList = [...data].sort(sortFn);
                 setAnfragen(resultList);
                 setTotal(resultList.length);
             } else {
                 resultList = Array.isArray(data.anfragen) ? [...data.anfragen] : [];
-                resultList.sort(sortByLastAccessed);
+                resultList.sort(sortFn);
                 setAnfragen(resultList);
                 setTotal(typeof data.gesamt === "number" ? data.gesamt : 0);
             }
+            setFunnelAnfrageIds(funnelIds);
             // Freigabe-Status (Angebot/AB digital angenommen?) für die geladenen Anfragen ziehen.
             const ids = resultList.map(a => a.id).filter((id): id is number => typeof id === 'number');
             if (ids.length > 0) {
@@ -1545,6 +1569,7 @@ export default function AnfrageEditor() {
             setAnfragen([]);
             setTotal(0);
             setFreigabeStatusByAnfrageId({});
+            setFunnelAnfrageIds(new Set());
         } finally {
             setLoading(false);
         }
@@ -1785,6 +1810,7 @@ export default function AnfrageEditor() {
                             onClick={() => handleDetail(anfrage)}
                             onToggleAbgeschlossen={handleToggleAbgeschlossen}
                             freigabe={freigabeStatusByAnfrageId[anfrage.id]}
+                            viaWebseite={funnelAnfrageIds.has(anfrage.id)}
                         />
                     ))}
                 </div>
