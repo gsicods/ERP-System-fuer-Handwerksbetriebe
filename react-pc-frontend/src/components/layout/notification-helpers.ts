@@ -84,10 +84,28 @@ export function filterDismissed(data: NotificationSummary): NotificationSummary 
     } catch {
         /* ignore */
     }
-    const categories = data.categories.filter(c => {
+    const categoriesAfterCatDismiss = data.categories.filter(c => {
         const dismissedCount = dismissedCats[c.type];
         if (dismissedCount === undefined) return true;
         return c.count > dismissedCount;
+    });
+    // Zusätzlicher Filter: Wenn das Backend für eine Kategorie konkrete Items
+    // geliefert hat und der User *alle* davon einzeln dismissed hat (z.B. der
+    // Reihe nach angeklickt), dann verschwindet die Kategorie ebenfalls — sonst
+    // bleibt ein Counter ohne sichtbaren Inhalt stehen ("10 obwohl gar nichts
+    // mehr drin ist"). Greift nur für eindeutig zugeordnete Item-Types; bei
+    // mehrdeutigen (EMAIL → 6 Mail-Ordner) bleibt die Kategorie konservativ
+    // sichtbar, weil das Backend Item-Type ohne Ordner-Bezug liefert.
+    const exclusiveItemTypesByCat = buildExclusiveItemTypesByCat();
+    const categories = categoriesAfterCatDismiss.filter(c => {
+        const exclusiveItemTypes = exclusiveItemTypesByCat[c.type];
+        if (!exclusiveItemTypes || exclusiveItemTypes.length === 0) return true;
+        const itemsForCat = data.recentItems.filter(i => exclusiveItemTypes.includes(i.type));
+        if (itemsForCat.length === 0) return true; // Backend hat keine Items geliefert → Counter behalten
+        const allDismissed = itemsForCat.every(item =>
+            dismissedItems.includes(`${item.type}::${item.title}`)
+        );
+        return !allDismissed;
     });
     const visibleCatTypes = new Set(categories.map(c => c.type));
     const recentItems = data.recentItems
@@ -95,6 +113,24 @@ export function filterDismissed(data: NotificationSummary): NotificationSummary 
         .filter(item => itemTypeBelongsToVisibleCat(item.type, visibleCatTypes, data.categories));
     const totalCount = categories.reduce((sum, c) => sum + c.count, 0);
     return { totalCount, categories, recentItems };
+}
+
+/**
+ * Baut eine Lookup-Map: Category-Type → die Item-Types, die ausschließlich zu
+ * dieser einen Kategorie gehören. Wird nur für die „alle Items dismissed"-Regel
+ * gebraucht – mehrdeutige Item-Types (EMAIL gehört zu 6 Email-Ordnern) sind
+ * absichtlich nicht enthalten.
+ */
+function buildExclusiveItemTypesByCat(): Record<string, string[]> {
+    const result: Record<string, string[]> = {};
+    Object.entries(ITEM_TO_CAT_TYPES).forEach(([itemType, catTypes]) => {
+        if (catTypes.length === 1) {
+            const catType = catTypes[0];
+            if (!result[catType]) result[catType] = [];
+            result[catType].push(itemType);
+        }
+    });
+    return result;
 }
 
 /**

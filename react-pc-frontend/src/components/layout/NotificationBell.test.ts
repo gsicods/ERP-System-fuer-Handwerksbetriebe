@@ -79,6 +79,61 @@ describe('filterDismissed', () => {
         expect(result.totalCount).toBe(10);
     });
 
+    it('Bug-Repro: einzeln angeklickte Items lassen die Kategorie verschwinden, wenn alle ihre Items dismissed sind', () => {
+        // Szenario: 2 Urlaubsanträge offen, User klickt beide einzeln im
+        // Notification-Center an. Vorher blieb die "Personal: 2 Einträge"-
+        // Spalte als leerer Counter stehen, weil der Backend-Status der
+        // Anträge weiterhin OFFEN ist. Jetzt: Kategorie verschwindet, weil
+        // alle vom Backend gelieferten Items dismissed sind.
+        const summary: NotificationSummary = {
+            totalCount: 2,
+            categories: [
+                { type: 'URLAUBSANTRAEGE', label: 'Offene Anträge', count: 2, icon: 'Plane', link: '/urlaubsantraege' },
+            ],
+            recentItems: [
+                { type: 'URLAUBSANTRAG', title: 'URLAUB: Max Mustermann', subtitle: '01.06.', timestamp: '2026-05-07T10:00', link: '/urlaubsantraege?antragId=1' },
+                { type: 'URLAUBSANTRAG', title: 'URLAUB: Erika Mustermann', subtitle: '03.06.', timestamp: '2026-05-07T09:00', link: '/urlaubsantraege?antragId=2' },
+            ],
+        };
+        dismissItem('URLAUBSANTRAG', 'URLAUB: Max Mustermann');
+        dismissItem('URLAUBSANTRAG', 'URLAUB: Erika Mustermann');
+        const result = filterDismissed(summary);
+        expect(result.totalCount).toBe(0);
+        expect(result.categories).toHaveLength(0);
+        expect(result.recentItems).toHaveLength(0);
+    });
+
+    it('Halb-erledigt: solange noch ein Item ungedismissed ist, bleibt die Kategorie sichtbar', () => {
+        const summary: NotificationSummary = {
+            totalCount: 2,
+            categories: [
+                { type: 'URLAUBSANTRAEGE', label: 'Offene Anträge', count: 2, icon: 'Plane', link: '/urlaubsantraege' },
+            ],
+            recentItems: [
+                { type: 'URLAUBSANTRAG', title: 'URLAUB: Max Mustermann', subtitle: '01.06.', timestamp: '2026-05-07T10:00', link: '/urlaubsantraege?antragId=1' },
+                { type: 'URLAUBSANTRAG', title: 'URLAUB: Erika Mustermann', subtitle: '03.06.', timestamp: '2026-05-07T09:00', link: '/urlaubsantraege?antragId=2' },
+            ],
+        };
+        dismissItem('URLAUBSANTRAG', 'URLAUB: Max Mustermann');
+        const result = filterDismissed(summary);
+        expect(result.categories).toHaveLength(1);
+        expect(result.recentItems).toHaveLength(1);
+        expect(result.totalCount).toBe(2); // Counter kommt vom Backend, nicht von sichtbaren Items
+    });
+
+    it('Kategorie ohne Backend-Items (z.B. RECHNUNGEN) bleibt sichtbar, auch wenn nichts dismissbar ist', () => {
+        const summary: NotificationSummary = {
+            totalCount: 4,
+            categories: [
+                { type: 'RECHNUNGEN', label: 'Neue Lieferantenrechnungen', count: 4, icon: 'Truck', link: '/offeneposten' },
+            ],
+            recentItems: [], // Backend liefert für RECHNUNGEN keine Items
+        };
+        const result = filterDismissed(summary);
+        expect(result.categories).toHaveLength(1);
+        expect(result.totalCount).toBe(4);
+    });
+
     it('Bug-Repro: nach dismiss aller Kategorien geht der totalCount auf 0', () => {
         // Vor dem Fix war totalCount weiterhin 10 (Backend-Counter), obwohl alle
         // Spalten leer waren. Jetzt korrekt: 0.

@@ -463,9 +463,33 @@ export function NotificationBell() {
                                                         );
                                                     })
                                                 ) : (
-                                                    <div className="px-3 py-3 text-[11px] text-slate-500">
-                                                        {groupTotal} {groupTotal === 1 ? 'Eintrag' : 'Einträge'} – in der Übersicht öffnen.
-                                                    </div>
+                                                    // Fallback: Backend liefert Counter, aber keine Items (z.B. weil der
+                                                    // Detail-Build im Server fehlgeschlagen ist). Statt einer toten Textzeile
+                                                    // rendern wir die Kategorien als klickbare Zeilen, damit der Nutzer
+                                                    // immer in die passende Übersicht gelangt.
+                                                    groupCats.map((cat) => (
+                                                        <button
+                                                            key={`${group.id}-cat-${cat.type}`}
+                                                            onClick={() => { setOpen(false); navigate(cat.link); }}
+                                                            className={cn(
+                                                                "w-full flex items-center gap-2.5 px-3 py-2.5 transition-colors text-left border-b border-slate-50 last:border-b-0",
+                                                                isLeadGruppe
+                                                                    ? "bg-rose-50/40 hover:bg-rose-50"
+                                                                    : "hover:bg-rose-50/40"
+                                                            )}
+                                                            title="Übersicht öffnen"
+                                                        >
+                                                            <span className={cn(
+                                                                "shrink-0 inline-flex items-center justify-center min-w-[22px] h-[22px] px-1.5 rounded-full text-[11px] font-bold",
+                                                                group.accentBg, group.accentText
+                                                            )}>
+                                                                {cat.count}
+                                                            </span>
+                                                            <span className="text-[13px] font-medium text-slate-700 truncate flex-1">
+                                                                {cat.label}
+                                                            </span>
+                                                        </button>
+                                                    ))
                                                 )}
                                             </div>
                                         </div>
