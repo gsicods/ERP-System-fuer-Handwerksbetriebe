@@ -1,15 +1,5 @@
 package org.example.kalkulationsprogramm.service;
 
-import lombok.RequiredArgsConstructor;
-import org.example.kalkulationsprogramm.domain.Kunde;
-import org.example.kalkulationsprogramm.dto.Kunde.KundeDuplikatGrund;
-import org.example.kalkulationsprogramm.dto.Kunde.KundeDuplikatResponseDto;
-import org.example.kalkulationsprogramm.dto.Kunde.KundeDuplikatTrefferDto;
-import org.example.kalkulationsprogramm.repository.KundeRepository;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -19,6 +9,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+
+import org.example.kalkulationsprogramm.domain.Kunde;
+import org.example.kalkulationsprogramm.dto.Kunde.KundeDuplikatGrund;
+import org.example.kalkulationsprogramm.dto.Kunde.KundeDuplikatResponseDto;
+import org.example.kalkulationsprogramm.dto.Kunde.KundeDuplikatTrefferDto;
+import org.example.kalkulationsprogramm.repository.KundeRepository;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import lombok.RequiredArgsConstructor;
 
 /**
  * Erkennt potenzielle Duplikate beim Anlegen eines Kunden.

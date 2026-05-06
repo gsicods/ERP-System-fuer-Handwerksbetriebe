@@ -1,15 +1,14 @@
 package org.example.kalkulationsprogramm.service;
 
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import org.example.kalkulationsprogramm.domain.Kunde;
 import org.example.kalkulationsprogramm.dto.Kunde.KundeDuplikatGrund;
 import org.example.kalkulationsprogramm.dto.Kunde.KundeDuplikatResponseDto;
 import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import java.util.List;
-
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
