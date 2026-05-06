@@ -36,6 +36,11 @@ interface Firmeninformation {
     logoDateiname: string;
     geschaeftsfuehrer: string;
     fusszeileText: string;
+    mahnverfahrenAktiv: boolean;
+    tageBisZahlungserinnerung: number;
+    tageBisErsteMahnung: number;
+    tageBisZweiteMahnung: number;
+    mahnverfahrenNeuesZahlungszielTage: number;
 }
 
 interface Kostenstelle {
@@ -592,6 +597,65 @@ export default function FirmaEditor() {
                                         <Input
                                             value={firma.bic || ''}
                                             onChange={e => setFirma({ ...firma, bic: e.target.value })}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Mahnverfahren — Volle Breite, eigener Block */}
+                            <div className="mt-6 pt-6 border-t space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-lg font-semibold text-slate-900">Automatisches Mahnverfahren</h3>
+                                    <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={firma.mahnverfahrenAktiv || false}
+                                            onChange={e => setFirma({ ...firma, mahnverfahrenAktiv: e.target.checked })}
+                                            className="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                                        />
+                                        Aktiv
+                                    </label>
+                                </div>
+                                <p className="text-sm text-slate-500">
+                                    Wenn aktiviert, prüft das System täglich überfällige Rechnungen und versendet automatisch
+                                    Zahlungserinnerungen sowie 1. und 2. Mahnungen per E-Mail an den Kunden. Die Tagesangaben
+                                    zählen ab dem Fälligkeitsdatum der Original-Rechnung.
+                                </p>
+                                <div className={cn("grid grid-cols-1 md:grid-cols-4 gap-4 transition-opacity", !firma.mahnverfahrenAktiv && "opacity-50 pointer-events-none")}>
+                                    <div>
+                                        <Label>Zahlungserinnerung nach (Tagen)</Label>
+                                        <Input
+                                            type="number"
+                                            min={1}
+                                            value={firma.tageBisZahlungserinnerung || 7}
+                                            onChange={e => setFirma({ ...firma, tageBisZahlungserinnerung: parseInt(e.target.value) || 7 })}
+                                        />
+                                    </div>
+                                    <div>
+                                        <Label>1. Mahnung nach (Tagen)</Label>
+                                        <Input
+                                            type="number"
+                                            min={1}
+                                            value={firma.tageBisErsteMahnung || 14}
+                                            onChange={e => setFirma({ ...firma, tageBisErsteMahnung: parseInt(e.target.value) || 14 })}
+                                        />
+                                    </div>
+                                    <div>
+                                        <Label>2. Mahnung nach (Tagen)</Label>
+                                        <Input
+                                            type="number"
+                                            min={1}
+                                            value={firma.tageBisZweiteMahnung || 21}
+                                            onChange={e => setFirma({ ...firma, tageBisZweiteMahnung: parseInt(e.target.value) || 21 })}
+                                        />
+                                    </div>
+                                    <div>
+                                        <Label>Neues Zahlungsziel (Tage)</Label>
+                                        <Input
+                                            type="number"
+                                            min={1}
+                                            value={firma.mahnverfahrenNeuesZahlungszielTage || 7}
+                                            onChange={e => setFirma({ ...firma, mahnverfahrenNeuesZahlungszielTage: parseInt(e.target.value) || 7 })}
                                         />
                                     </div>
                                 </div>

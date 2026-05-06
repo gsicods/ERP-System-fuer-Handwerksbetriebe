@@ -41,9 +41,19 @@ public class FirmeninformationService {
         fi.setLogoDateiname(dto.getLogoDateiname());
         fi.setGeschaeftsfuehrer(dto.getGeschaeftsfuehrer());
         fi.setFusszeileText(dto.getFusszeileText());
-        
+
+        fi.setMahnverfahrenAktiv(dto.isMahnverfahrenAktiv());
+        fi.setTageBisZahlungserinnerung(positivOrDefault(dto.getTageBisZahlungserinnerung(), 7));
+        fi.setTageBisErsteMahnung(positivOrDefault(dto.getTageBisErsteMahnung(), 14));
+        fi.setTageBisZweiteMahnung(positivOrDefault(dto.getTageBisZweiteMahnung(), 21));
+        fi.setMahnverfahrenNeuesZahlungszielTage(positivOrDefault(dto.getMahnverfahrenNeuesZahlungszielTage(), 7));
+
         fi = repository.save(fi);
         return toDto(fi);
+    }
+
+    private static int positivOrDefault(int wert, int fallback) {
+        return wert > 0 ? wert : fallback;
     }
 
     private FirmeninformationDto toDto(Firmeninformation fi) {
@@ -67,6 +77,11 @@ public class FirmeninformationService {
         dto.setLogoDateiname(fi.getLogoDateiname());
         dto.setGeschaeftsfuehrer(fi.getGeschaeftsfuehrer());
         dto.setFusszeileText(fi.getFusszeileText());
+        dto.setMahnverfahrenAktiv(fi.isMahnverfahrenAktiv());
+        dto.setTageBisZahlungserinnerung(fi.getTageBisZahlungserinnerung());
+        dto.setTageBisErsteMahnung(fi.getTageBisErsteMahnung());
+        dto.setTageBisZweiteMahnung(fi.getTageBisZweiteMahnung());
+        dto.setMahnverfahrenNeuesZahlungszielTage(fi.getMahnverfahrenNeuesZahlungszielTage());
         return dto;
     }
 }

@@ -4,7 +4,7 @@ import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select-custom';
 import { Input } from '../components/ui/input';
 import { PageLayout } from '../components/layout/PageLayout';
-import { RefreshCw, FileText, ArrowUpRight, Building2, Search, Edit3, Lock, Ban, ShieldCheck, Files, User, Truck, X } from 'lucide-react';
+import { RefreshCw, FileText, ArrowUpRight, Building2, Search, Edit3, Lock, Ban, ShieldCheck, Files, User, Truck, X, BellRing } from 'lucide-react';
 import DocumentPreviewModal, { type PreviewDoc } from '../components/DocumentPreviewModal';
 import { KundeSearchModal, type KundeSearchItem } from '../components/KundeSearchModal';
 import { LieferantSearchModal, type LieferantSuchErgebnis } from '../components/LieferantSearchModal';
@@ -446,6 +446,13 @@ export default function DokumentUebersichtEditor() {
                     loading={loading}
                     daten={ausgang}
                     onOpen={openAusgangsDokument}
+                    onMahnVorschau={(d, stufe) => {
+                        const stufenLabel = MAHN_STUFEN.find(s => s.wert === stufe)?.label ?? stufe;
+                        setPreviewDoc({
+                            url: `/api/ausgangs-dokumente/${d.id}/mahnung-vorschau?stufe=${stufe}`,
+                            title: `${stufenLabel} (Vorschau) — Rechnung ${d.dokumentNummer}`,
+                        });
+                    }}
                 />
             ) : (
                 <EingangsTabelle
@@ -487,9 +494,20 @@ interface AusgangsTabelleProps {
     loading: boolean;
     daten: AusgangsDokumentDto[];
     onOpen: (doc: AusgangsDokumentDto) => void;
+    onMahnVorschau: (doc: AusgangsDokumentDto, stufe: MahnStufe) => void;
 }
 
-function AusgangsTabelle({ loading, daten, onOpen }: AusgangsTabelleProps) {
+type MahnStufe = 'ZAHLUNGSERINNERUNG' | 'ERSTE_MAHNUNG' | 'ZWEITE_MAHNUNG';
+
+const MAHN_STUFEN: { wert: MahnStufe; label: string }[] = [
+    { wert: 'ZAHLUNGSERINNERUNG', label: 'Zahlungserinnerung' },
+    { wert: 'ERSTE_MAHNUNG', label: '1. Mahnung' },
+    { wert: 'ZWEITE_MAHNUNG', label: '2. Mahnung' },
+];
+
+const RECHNUNGS_TYPEN: AusgangsTyp[] = ['RECHNUNG', 'TEILRECHNUNG', 'ABSCHLAGSRECHNUNG', 'SCHLUSSRECHNUNG'];
+
+function AusgangsTabelle({ loading, daten, onOpen, onMahnVorschau }: AusgangsTabelleProps) {
     if (loading) {
         return (
             <Card className="p-8 text-center text-slate-500 border-0 shadow-sm rounded-xl">
@@ -534,6 +552,9 @@ function AusgangsTabelle({ loading, daten, onOpen }: AusgangsTabelleProps) {
                             </th>
                             <th className="px-4 py-2.5 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">
                                 Status
+                            </th>
+                            <th className="px-4 py-2.5 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Mahn-Vorschau
                             </th>
                             <th className="px-4 py-2.5 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">
                                 Öffnen
@@ -590,6 +611,25 @@ function AusgangsTabelle({ loading, daten, onOpen }: AusgangsTabelleProps) {
                                             </span>
                                         )}
                                     </div>
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                    {RECHNUNGS_TYPEN.includes(d.typ) ? (
+                                        <div className="inline-flex items-center gap-1">
+                                            {MAHN_STUFEN.map(s => (
+                                                <button
+                                                    key={s.wert}
+                                                    onClick={(e) => { e.stopPropagation(); onMahnVorschau(d, s.wert); }}
+                                                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600 transition hover:border-rose-200 hover:text-rose-600"
+                                                    title={`${s.label}-PDF anzeigen (nur Vorschau, nichts wird versendet)`}
+                                                >
+                                                    <BellRing className="w-3 h-3" />
+                                                    {s.wert === 'ZAHLUNGSERINNERUNG' ? 'ZE' : s.wert === 'ERSTE_MAHNUNG' ? '1.' : '2.'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <span className="text-xs text-slate-300">–</span>
+                                    )}
                                 </td>
                                 <td className="px-4 py-3 text-center">
                                     <button

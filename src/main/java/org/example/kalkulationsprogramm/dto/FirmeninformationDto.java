@@ -23,4 +23,11 @@ public class FirmeninformationDto {
     private String logoDateiname;
     private String geschaeftsfuehrer;
     private String fusszeileText;
+
+    // Mahnverfahren — siehe Firmeninformation
+    private boolean mahnverfahrenAktiv;
+    private int tageBisZahlungserinnerung;
+    private int tageBisErsteMahnung;
+    private int tageBisZweiteMahnung;
+    private int mahnverfahrenNeuesZahlungszielTage;
 }

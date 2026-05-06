@@ -9,9 +9,13 @@ import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsG
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentUpdateDto;
 import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeAuditDto;
 import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeStatusKurzDto;
+import org.example.kalkulationsprogramm.domain.Mahnstufe;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentAuditService;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
+import org.example.kalkulationsprogramm.service.AutoMahnVersandService;
 import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -41,6 +45,28 @@ public class AusgangsGeschaeftsDokumentController {
     private final AusgangsGeschaeftsDokumentService service;
     private final DokumentFreigabeService dokumentFreigabeService;
     private final AusgangsGeschaeftsDokumentAuditService auditService;
+    private final AutoMahnVersandService autoMahnVersandService;
+
+    /**
+     * Reine Vorschau: rendert die Mahn-PDF einer beliebigen Stufe ohne irgendetwas
+     * zu persistieren oder zu versenden. Wird vom DokumentUebersichtEditor benutzt,
+     * damit der Sachbearbeiter pro Rechnung kontrollieren kann, wie eine
+     * Zahlungserinnerung / 1. / 2. Mahnung konkret aussehen würde — bevor das
+     * automatische Mahnverfahren überhaupt scharf geschaltet wird.
+     */
+    @GetMapping("/{id}/mahnung-vorschau")
+    public ResponseEntity<byte[]> mahnungVorschau(@PathVariable Long id, @RequestParam("stufe") Mahnstufe stufe) {
+        try {
+            byte[] pdf = autoMahnVersandService.generiereVorschauPdfFuerAusgangsRechnung(id, stufe);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_PDF)
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=mahn-vorschau-" + id + ".pdf")
+                    .body(pdf);
+        } catch (IllegalArgumentException e) {
+            log.warn("Mahn-Vorschau fuer Dokument {} fehlgeschlagen: {}", id, e.getMessage());
+            return ResponseEntity.notFound().build();
+        }
+    }
 
     /**
      * Liefert pro AusgangsGeschaeftsDokument-ID die jüngste relevante digitale Freigabe.

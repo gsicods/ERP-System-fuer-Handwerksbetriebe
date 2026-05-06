@@ -1338,6 +1338,15 @@ public class RechnungPdfService {
     }
 
     private void addSummenBlock(ColumnText ct, List<ContentBlockDto> blocks, BigDecimal globalRabattProzent, AbrechnungsverlaufPdfDto abrechnungsverlauf, BigDecimal overrideBetragNetto, String dokumentTyp, AbschlagInfoPdfDto abschlagInfo) throws DocumentException {
+        // Mahnungen brauchen keinen Summen-Block: der offene Betrag steht schon
+        // prominent in der Forderungs-Box im Inhalt — eine weitere Netto/USt/
+        // Zahlbetrag-Tabelle wäre redundant und verwirrend.
+        boolean isMahnung = dokumentTyp != null
+                && (dokumentTyp.contains("Mahnung") || dokumentTyp.equalsIgnoreCase("Zahlungserinnerung"));
+        if (isMahnung) {
+            return;
+        }
+
         // Nettosumme aus allen SERVICE-Blöcken berechnen (exclude optional)
         BigDecimal positionenNetto = BigDecimal.ZERO;
         for (ContentBlockDto block : blocks) {

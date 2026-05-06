@@ -49,6 +49,9 @@ class AusgangsGeschaeftsDokumentControllerTest {
     @MockBean
     private org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentAuditService auditService;
 
+    @MockBean
+    private org.example.kalkulationsprogramm.service.AutoMahnVersandService autoMahnVersandService;
+
     private AusgangsGeschaeftsDokumentResponseDto buildResponseDto(Long id, String nummer) {
         AusgangsGeschaeftsDokumentResponseDto dto = new AusgangsGeschaeftsDokumentResponseDto();
         dto.setId(id);
