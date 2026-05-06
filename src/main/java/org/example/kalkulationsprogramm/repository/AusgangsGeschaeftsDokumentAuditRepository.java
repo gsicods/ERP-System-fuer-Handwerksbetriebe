@@ -24,4 +24,17 @@ public interface AusgangsGeschaeftsDokumentAuditRepository
     /** Audit-Einträge in einem Zeitraum (für Steuerprüfungs-Export). */
     List<AusgangsGeschaeftsDokumentAudit> findByGeaendertAmBetweenOrderByGeaendertAmAsc(
             LocalDateTime von, LocalDateTime bis);
+
+    /** Komplette Kette in chronologischer Reihenfolge (für Verifikation und Backfill). */
+    List<AusgangsGeschaeftsDokumentAudit> findAllByOrderByChainIndexAsc();
+
+    /** Einträge ohne Chain-Daten (Backfill) — sortiert nach Erfassungszeit. */
+    List<AusgangsGeschaeftsDokumentAudit> findByChainIndexIsNullOrderByGeaendertAmAscIdAsc();
+
+    /** Einträge in einer Zeitspanne, sortiert nach Position in der Kette. */
+    List<AusgangsGeschaeftsDokumentAudit> findByGeaendertAmBetweenOrderByChainIndexAsc(
+            LocalDateTime von, LocalDateTime bis);
+
+    /** Schnelle Zählung ohne Memory-Load (für UI-Vorschau). */
+    long countByGeaendertAmBetween(LocalDateTime von, LocalDateTime bis);
 }
