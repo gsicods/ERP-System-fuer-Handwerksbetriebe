@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import {
@@ -175,10 +175,13 @@ export function NotificationBell() {
     const [open, setOpen] = useState(false);
     const [shake, setShake] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const bellButtonRef = useRef<HTMLButtonElement>(null);
+    const panelRef = useRef<HTMLDivElement>(null);
     // Use a ref for prevCount to avoid stale-closure issues in the callback
     const prevCountRef = useRef(0);
     const abortRef = useRef<AbortController | null>(null);
     const navigate = useNavigate();
+    const [panelPos, setPanelPos] = useState<{ top: number; right: number } | null>(null);
 
     const fetchNotifications = useCallback(async () => {
         // Cancel any in-flight request before starting a new one
@@ -235,6 +238,47 @@ export function NotificationBell() {
         };
     }, [fetchNotifications]);
 
+    // Position berechnen: Modal wird unter der Glocke geöffnet, an deren rechte Kante
+    // ausgerichtet. Wenn die natürliche Breite nach links über den Bildschirm hinausragen
+    // würde, wird das Modal mittig zentriert. Es wird nie breiter als der Viewport.
+    const recomputePanelPosition = useCallback(() => {
+        if (!bellButtonRef.current || !panelRef.current) return;
+        const bell = bellButtonRef.current.getBoundingClientRect();
+        const panel = panelRef.current.getBoundingClientRect();
+        const vw = window.innerWidth;
+        const margin = 16;
+        const top = bell.bottom + 8;
+        // Default: rechter Modal-Rand am rechten Glocken-Rand
+        let right = vw - bell.right;
+        const leftEdgeIfDefault = vw - right - panel.width;
+        if (leftEdgeIfDefault < margin) {
+            // Würde links überlaufen → mittig auf den verfügbaren Viewport setzen
+            const centeredRight = (vw - panel.width) / 2;
+            right = Math.max(margin, centeredRight);
+        }
+        setPanelPos(prev =>
+            prev && prev.top === top && prev.right === right ? prev : { top, right }
+        );
+    }, []);
+
+    useLayoutEffect(() => {
+        if (!open) return;
+        recomputePanelPosition();
+    }, [open, data, recomputePanelPosition]);
+
+    useEffect(() => {
+        if (!open) return;
+        const handler = () => recomputePanelPosition();
+        window.addEventListener('resize', handler);
+        // Wenn der Inhalt der Spalten sich ändert (z.B. Items kommen rein), ggf. neu zentrieren
+        const ro = new ResizeObserver(() => recomputePanelPosition());
+        if (panelRef.current) ro.observe(panelRef.current);
+        return () => {
+            window.removeEventListener('resize', handler);
+            ro.disconnect();
+        };
+    }, [open, recomputePanelPosition]);
+
     // Close on outside click
     useEffect(() => {
         if (!open) return;
@@ -274,6 +318,7 @@ export function NotificationBell() {
         <div className="relative" ref={dropdownRef}>
             {/* Bell button */}
             <button
+                ref={bellButtonRef}
                 onClick={() => setOpen(!open)}
                 className={cn(
                     "relative flex items-center justify-center w-10 h-10 rounded-xl transition-all",
@@ -293,9 +338,19 @@ export function NotificationBell() {
                 )}
             </button>
 
-            {/* Dropdown — Breite richtet sich nach Anzahl der sichtbaren Spalten */}
+            {/* Dropdown — Breite und Position dynamisch; nie breiter als Bildschirm,
+                und wenn nicht mehr neben der Glocke Platz ist, animiert mittig.  */}
             {open && data && (
-                <div className="absolute right-0 top-full mt-2 w-fit max-w-[calc(100vw-2rem)] max-h-[80vh] bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col">
+                <div
+                    ref={panelRef}
+                    className="fixed w-fit max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 animate-in fade-in duration-200 overflow-hidden flex flex-col"
+                    style={{
+                        top: panelPos ? `${panelPos.top}px` : '4rem',
+                        right: panelPos ? `${panelPos.right}px` : '1rem',
+                        height: 'min(640px, 80vh)',
+                        transition: 'right 240ms ease-out, top 240ms ease-out',
+                    }}
+                >
                     {/* Header */}
                     <div className="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-rose-50 to-white border-b border-slate-100 shrink-0">
                         <div className="flex items-center gap-2">
@@ -338,7 +393,7 @@ export function NotificationBell() {
                                     return (
                                         <div
                                             key={group.id}
-                                            className="flex flex-col w-[260px] shrink-0 max-h-[70vh]"
+                                            className="flex flex-col w-[260px] shrink-0 h-full min-h-0"
                                         >
                                             {/* Spalten-Header — nicht klickbar, nur Orientierung */}
                                             <div className={cn(
