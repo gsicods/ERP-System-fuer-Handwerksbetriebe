@@ -54,6 +54,7 @@ import {
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../lib/utils';
+import { refreshNotifications } from '../lib/notificationRefresh';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { EmailComposeForm } from '../components/EmailComposeForm';
 import EmailSettings from '../components/EmailSettings';
@@ -979,6 +980,7 @@ export default function EmailCenter() {
                     .then(() => {
                         setEmails(prev => prev.map(e => e.id === found.id ? { ...e, isRead: true } : e));
                         loadStats();
+                        refreshNotifications();
                     })
                     .catch(err => console.error('Failed to mark as read:', err));
             }
@@ -998,7 +1000,7 @@ export default function EmailCenter() {
                     setSelectedIds(new Set([email.id]));
                     if (!email.isRead) {
                         fetch(`/api/emails/${email.id}/mark-read`, { method: 'POST' })
-                            .then(() => loadStats())
+                            .then(() => { loadStats(); refreshNotifications(); })
                             .catch(err => console.error('Failed to mark as read:', err));
                     }
                 })
@@ -1084,8 +1086,9 @@ export default function EmailCenter() {
                     .then(() => {
                         // Update local state
                         setEmails(prev => prev.map(e => e.id === id ? { ...e, isRead: true } : e));
-                        // Refresh stats to update counters
+                        // Refresh stats + Glocke (entfernt diese E-Mail aus dem Notification-Center)
                         loadStats();
+                        refreshNotifications();
                     })
                     .catch(err => console.error('Failed to mark as read:', err));
             }
@@ -1224,6 +1227,7 @@ export default function EmailCenter() {
             toast.info(successCount === 1 ? "Als Spam markiert – Modell lernt dazu" : `${successCount} E-Mails als Spam markiert`);
             folderCacheRef.current.clear();
             loadStats();
+            refreshNotifications();
         } catch (err) {
             console.error(err);
             toast.error("Fehler beim Markieren als Spam");
@@ -1251,6 +1255,7 @@ export default function EmailCenter() {
             toast.info(successCount === 1 ? "Kein Spam – zurück im Posteingang" : `${successCount} E-Mails als Nicht-Spam markiert`);
             folderCacheRef.current.clear();
             loadStats();
+            refreshNotifications();
         } catch (err) {
             console.error(err);
             toast.error("Fehler beim Markieren als Nicht-Spam");
@@ -1277,6 +1282,7 @@ export default function EmailCenter() {
             toast.info(successCount === 1 ? "Kein Newsletter – zurück im Posteingang" : `${successCount} E-Mails in Posteingang verschoben`);
             folderCacheRef.current.clear();
             loadStats();
+            refreshNotifications();
         } catch (err) {
             console.error(err);
             toast.error("Fehler beim Verschieben in Posteingang");
@@ -1303,6 +1309,7 @@ export default function EmailCenter() {
             toast.success(successCount === 1 ? "Newsletter bestätigt – Modell lernt dazu" : `${successCount} Newsletter bestätigt`);
             folderCacheRef.current.clear();
             loadStats();
+            refreshNotifications();
         } catch (err) {
             console.error(err);
             toast.error("Fehler beim Bestätigen des Newsletters");
@@ -1355,6 +1362,7 @@ export default function EmailCenter() {
                 : `${ids.length} E-Mails nach ${label} verschoben`);
             folderCacheRef.current.clear();
             loadStats();
+            refreshNotifications();
         } catch (err) {
             console.error(err);
             toast.error('Fehler beim Verschieben');

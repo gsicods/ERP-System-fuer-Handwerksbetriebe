@@ -143,29 +143,99 @@ const GROUPS: NotificationGroup[] = [
 ];
 
 // ── Dismissal helpers ────────────────────────────────────────────────────
-// Items bleiben für die laufende Browser-Sitzung ausgeblendet, sobald sie
-// einmal angeklickt wurden – die Kategorien-Zähler kommen weiter direkt vom
-// Backend, das die Quelle der Wahrheit für „erledigt" ist (z.B. Mark-Read,
-// Annahme-Status, Anfrage-zu-Projekt-Umwandlung).
+// Wir blenden Items UND Kategorien sitzungsweise aus, sobald der User sie
+// "als gelesen" markiert hat. Dadurch sinkt der Glocken-Zähler direkt, ohne
+// auf das nächste Backend-Polling warten zu müssen. Beim nächsten Polling
+// wird die Liste mit dem realen Stand abgeglichen: Sobald für eine dismissed
+// Kategorie ein höherer Counter als beim Dismiss kommt (=neue Einträge),
+// wird sie wieder eingeblendet.
+
+const DISMISS_ITEMS_KEY = 'notification_dismissed_items';
+const DISMISS_CATS_KEY = 'notification_dismissed_categories';
 
 function dismissItem(type: string, title: string) {
     try {
-        const raw = sessionStorage.getItem('notification_dismissed_items') || '[]';
+        const raw = sessionStorage.getItem(DISMISS_ITEMS_KEY) || '[]';
         const items: string[] = JSON.parse(raw);
         const key = `${type}::${title}`;
-        if (!items.includes(key)) { items.push(key); sessionStorage.setItem('notification_dismissed_items', JSON.stringify(items)); }
+        if (!items.includes(key)) { items.push(key); sessionStorage.setItem(DISMISS_ITEMS_KEY, JSON.stringify(items)); }
+    } catch { /* ignore */ }
+}
+
+/**
+ * Markiert eine Kategorie als „erledigt": sie verschwindet, bis der Backend-
+ * Counter für dieselbe Kategorie wieder über den hier gespeicherten Wert
+ * steigt (=es ist ein echter neuer Eintrag dazugekommen).
+ */
+function dismissCategory(type: string, count: number) {
+    try {
+        const raw = sessionStorage.getItem(DISMISS_CATS_KEY) || '{}';
+        const map: Record<string, number> = JSON.parse(raw);
+        map[type] = count;
+        sessionStorage.setItem(DISMISS_CATS_KEY, JSON.stringify(map));
     } catch { /* ignore */ }
 }
 
 function filterDismissed(data: NotificationSummary): NotificationSummary {
     let dismissedItems: string[] = [];
+    let dismissedCats: Record<string, number> = {};
     try {
-        dismissedItems = JSON.parse(sessionStorage.getItem('notification_dismissed_items') || '[]');
+        dismissedItems = JSON.parse(sessionStorage.getItem(DISMISS_ITEMS_KEY) || '[]');
     } catch { /* ignore */ }
-    const recentItems = data.recentItems.filter(item => !dismissedItems.includes(`${item.type}::${item.title}`));
-    const totalCount = data.categories.reduce((sum, c) => sum + c.count, 0);
-    return { totalCount, categories: data.categories, recentItems };
+    try {
+        dismissedCats = JSON.parse(sessionStorage.getItem(DISMISS_CATS_KEY) || '{}');
+    } catch { /* ignore */ }
+    const categories = data.categories.filter(c => {
+        const dismissedCount = dismissedCats[c.type];
+        if (dismissedCount === undefined) return true;
+        return c.count > dismissedCount; // wieder einblenden, wenn neue dazukommen
+    });
+    const visibleCatTypes = new Set(categories.map(c => c.type));
+    // RecentItems verwerfen, deren Kategorie selbst dismissed ist – sonst hängen
+    // die Item-Zeilen ohne Header in der Luft (z.B. nach „alle als gelesen").
+    const recentItems = data.recentItems
+        .filter(item => !dismissedItems.includes(`${item.type}::${item.title}`))
+        .filter(item => itemTypeBelongsToVisibleCat(item.type, visibleCatTypes, data.categories, dismissedCats));
+    const totalCount = categories.reduce((sum, c) => sum + c.count, 0);
+    return { totalCount, categories, recentItems };
 }
+
+/**
+ * Ein RecentItem darf nur sichtbar bleiben, wenn mindestens eine Kategorie
+ * sichtbar ist, zu der es semantisch gehört. Wir matchen über die Gruppen-
+ * Definition unten: Ein Item-Type ist sichtbar, sofern *eine* der zugehörigen
+ * Kategorien noch sichtbar ist; sind alle dismissed, muss auch das Item gehen.
+ */
+function itemTypeBelongsToVisibleCat(
+    itemType: string,
+    visibleCatTypes: Set<string>,
+    allCats: CategoryDto[],
+    dismissedCats: Record<string, number>,
+): boolean {
+    const owningCats = ITEM_TO_CAT_TYPES[itemType];
+    if (!owningCats || owningCats.length === 0) return true; // unbekannt → durchlassen
+    // Wenn keine der zugehörigen Kategorien überhaupt im Backend-Response steht,
+    // ist das Item ohnehin „verwaist" → durchlassen, damit es wenigstens angezeigt wird.
+    const present = owningCats.some(t => allCats.some(c => c.type === t));
+    if (!present) return true;
+    // Mindestens eine zugehörige Kategorie muss sichtbar sein.
+    return owningCats.some(t => visibleCatTypes.has(t) || dismissedCats[t] === undefined);
+}
+
+// Item-Type → mögliche Category-Types, zu denen das Item gehört.
+const ITEM_TO_CAT_TYPES: Record<string, string[]> = {
+    EMAIL: ['EMAILS', 'EMAILS_PROJECTS', 'EMAILS_OFFERS', 'EMAILS_SUPPLIERS', 'EMAILS_SPAM', 'EMAILS_NEWSLETTER'],
+    URLAUBSANTRAG: ['URLAUBSANTRAEGE'],
+    BAUTAGEBUCH: ['BAUTAGEBUCH'],
+    EINGANG_FAELLIG: ['EINGANG_FAELLIG'],
+    AUSGANG_UEBERFAELLIG: ['AUSGANG_UEBERFAELLIG'],
+    RECHNUNG: ['RECHNUNGEN'],
+    TERMIN: ['TERMINE'],
+    LIEFERSCHEIN: ['LIEFERSCHEINE'],
+    REKLAMATION: ['REKLAMATIONEN'],
+    FREIGABE_ANGENOMMEN: ['FREIGABEN_ANGENOMMEN'],
+    ANFRAGE_WEBSEITE: ['ANFRAGEN_WEBSEITE'],
+};
 
 // ── Component ────────────────────────────────────────────────────────────
 
@@ -230,11 +300,17 @@ export function NotificationBell() {
         const handleVisibility = () => {
             if (document.visibilityState === 'visible') fetchNotifications();
         };
+        // Andere Komponenten (z.B. EmailCenter) feuern dieses Event nach
+        // mark-read/mark-spam/mark-not-spam, damit die Glocke sofort den
+        // verringerten Stand zeigt – ohne auf das 60s-Polling zu warten.
+        const handleRefresh = () => fetchNotifications();
         document.addEventListener('visibilitychange', handleVisibility);
+        window.addEventListener('notifications:refresh', handleRefresh);
         return () => {
             abortRef.current?.abort();
             clearInterval(interval);
             document.removeEventListener('visibilitychange', handleVisibility);
+            window.removeEventListener('notifications:refresh', handleRefresh);
         };
     }, [fetchNotifications]);
 
@@ -307,12 +383,12 @@ export function NotificationBell() {
 
     /**
      * "Spalte als gelesen markieren": blendet alle aktuell sichtbaren Items dieser
-     * Themengruppe für die laufende Sitzung aus und ruft – falls es sich um
-     * E-Mails handelt – serverseitig mark-read auf, damit der Counter dauerhaft sinkt.
+     * Themengruppe für die laufende Sitzung aus, dismissed zusätzlich die zugehörigen
+     * Kategorien (damit der Glocken-Zähler sofort sinkt) und ruft – falls es sich um
+     * E-Mails handelt – serverseitig mark-read auf.
      */
-    const handleMarkColumnRead = (e: React.MouseEvent, groupItems: RecentItemDto[]) => {
+    const handleMarkColumnRead = (e: React.MouseEvent, groupItems: RecentItemDto[], groupCats: CategoryDto[]) => {
         e.stopPropagation();
-        if (groupItems.length === 0) return;
         groupItems.forEach(item => {
             dismissItem(item.type, item.title);
             if (item.type === 'EMAIL') {
@@ -323,8 +399,11 @@ export function NotificationBell() {
                 }
             }
         });
+        // Kategorien selbst dismissen, damit der Spalten-Counter und der Glocken-
+        // Total-Zähler sofort runtergehen. Sobald wirklich neue Einträge eintrudeln,
+        // wird die Kategorie automatisch wieder sichtbar (filterDismissed-Logik).
+        groupCats.forEach(cat => dismissCategory(cat.type, cat.count));
         if (rawData) setData(filterDismissed(rawData));
-        // Nach kurzer Verzögerung den Backend-Stand nachladen, falls mark-read durchlief
         window.setTimeout(() => fetchNotifications(), 600);
     };
 
@@ -435,10 +514,10 @@ export function NotificationBell() {
                                                     )}>
                                                         {group.label}
                                                     </span>
-                                                    {groupItems.length > 0 && (
+                                                    {(groupItems.length > 0 || groupCats.length > 0) && (
                                                         <button
                                                             type="button"
-                                                            onClick={(e) => handleMarkColumnRead(e, groupItems)}
+                                                            onClick={(e) => handleMarkColumnRead(e, groupItems, groupCats)}
                                                             title="Alle als gelesen markieren"
                                                             className="shrink-0 p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-white transition-colors"
                                                         >
