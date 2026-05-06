@@ -31,6 +31,33 @@ class KundeDuplikatServiceTest {
     }
 
     @Test
+    @DisplayName("Nur-Vorwahl (< 7 Ziffern) liefert null – verhindert Massen-Duplikate durch auto-befüllte Vorwahl")
+    void nurVorwahlWirdIgnoriert() {
+        // Typischer Fall: Frontend befüllt "0931 " automatisch aus der PLZ
+        assertThat(KundeDuplikatService.normalisiereTelefon("0931 ")).isNull();
+        assertThat(KundeDuplikatService.normalisiereTelefon("0931")).isNull();
+        assertThat(KundeDuplikatService.normalisiereTelefon("030")).isNull();
+        assertThat(KundeDuplikatService.normalisiereTelefon("02")).isNull();
+        // Vollständige Nummer bleibt gültig
+        assertThat(KundeDuplikatService.normalisiereTelefon("0931 12345")).isEqualTo("093112345");
+    }
+
+    @Test
+    @DisplayName("Nur-Vorwahl im Telefon-Feld löst keinen Duplikat-Alarm aus")
+    void nurVorwahlLoestKeinenDuplikatAlarmAus() {
+        Kunde k = kunde(11L, "Mustermann");
+        k.setTelefon("0931 ");
+        given(repo.findePotenzielleDuplikate(any(), any(), any(), any(), any(), any())).willReturn(List.of(k));
+
+        // Neuer Kunde hat ebenfalls nur die Vorwahl (auto-befüllt)
+        KundeDuplikatResponseDto resp = service.findeDuplikate(
+                null, "0931 ", null, null, null, null);
+
+        assertThat(resp.getDuplikate()).isEmpty();
+        assertThat(resp.isHarterTreffer()).isFalse();
+    }
+
+    @Test
     @DisplayName("Straße: 'straße' und 'strasse' werden zu 'str.' normalisiert")
     void normalisiereStrasseUnifiesVariants() {
         assertThat(KundeDuplikatService.normalisiereStrasse("Hauptstraße 12")).isEqualTo("hauptstr. 12");

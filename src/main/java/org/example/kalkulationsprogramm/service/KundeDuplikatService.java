@@ -155,7 +155,12 @@ public class KundeDuplikatService {
             t = "0" + t.substring(4);
         }
         String digits = t.replaceAll("\\D", "");
-        return digits.isEmpty() ? null : digits;
+        // Nur reine Ortsvorwahl (< 7 Ziffern) → nicht für Duplikat-Prüfung nutzen.
+        // Z.B. "0931 " (auto-befüllt) würde sonst alle Würzburger Kunden matchen.
+        if (digits.length() < 7) {
+            return null;
+        }
+        return digits;
     }
 
     /**
