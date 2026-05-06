@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
 import {
     Bell, Mail, Plane, FileText, AlertTriangle, Truck, CalendarClock, X, Package, CheckCircle2,
-    Inbox, Wallet, Users, Building2, Briefcase, Globe
+    Inbox, Wallet, Users, Building2, Briefcase, Globe, CheckCheck
 } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -305,6 +305,29 @@ export function NotificationBell() {
         navigate(link);
     };
 
+    /**
+     * "Spalte als gelesen markieren": blendet alle aktuell sichtbaren Items dieser
+     * Themengruppe für die laufende Sitzung aus und ruft – falls es sich um
+     * E-Mails handelt – serverseitig mark-read auf, damit der Counter dauerhaft sinkt.
+     */
+    const handleMarkColumnRead = (e: React.MouseEvent, groupItems: RecentItemDto[]) => {
+        e.stopPropagation();
+        if (groupItems.length === 0) return;
+        groupItems.forEach(item => {
+            dismissItem(item.type, item.title);
+            if (item.type === 'EMAIL') {
+                const match = item.link.match(/\/emails\/\w+\/(\d+)/);
+                if (match) {
+                    fetch(`/api/emails/${match[1]}/mark-read`, { method: 'POST' })
+                        .catch(() => { /* fehler ignorieren – nächstes Polling korrigiert */ });
+                }
+            }
+        });
+        if (rawData) setData(filterDismissed(rawData));
+        // Nach kurzer Verzögerung den Backend-Stand nachladen, falls mark-read durchlief
+        window.setTimeout(() => fetchNotifications(), 600);
+    };
+
     const handleItemClick = (item: RecentItemDto) => {
         dismissItem(item.type, item.title);
         // Immediately update local display
@@ -395,7 +418,9 @@ export function NotificationBell() {
                                             key={group.id}
                                             className="flex flex-col w-[260px] shrink-0 h-full min-h-0"
                                         >
-                                            {/* Spalten-Header — nicht klickbar, nur Orientierung */}
+                                            {/* Spalten-Header — nicht klickbar, nur Orientierung;
+                                                rechts ein kleiner Button, um alle Items der Spalte als gelesen
+                                                zu markieren (E-Mails: serverseitig, andere: lokal ausblenden). */}
                                             <div className={cn(
                                                 "flex flex-col gap-1 px-4 py-3 border-b border-slate-100 sticky top-0 z-10",
                                                 isLeadGruppe ? "bg-rose-50" : "bg-slate-50/80"
@@ -405,11 +430,21 @@ export function NotificationBell() {
                                                         <GroupIcon className={cn("w-4 h-4", group.accentText)} />
                                                     </div>
                                                     <span className={cn(
-                                                        "text-[11px] font-bold uppercase tracking-wider leading-tight",
+                                                        "text-[11px] font-bold uppercase tracking-wider leading-tight flex-1 min-w-0 truncate",
                                                         isLeadGruppe ? group.accentText : "text-slate-600"
                                                     )}>
                                                         {group.label}
                                                     </span>
+                                                    {groupItems.length > 0 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => handleMarkColumnRead(e, groupItems)}
+                                                            title="Alle als gelesen markieren"
+                                                            className="shrink-0 p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-white transition-colors"
+                                                        >
+                                                            <CheckCheck className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    )}
                                                 </div>
                                                 {groupTotal > 0 && (
                                                     <span className={cn(
