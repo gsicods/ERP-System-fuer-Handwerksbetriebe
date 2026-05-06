@@ -36,6 +36,7 @@ interface Firmeninformation {
     logoDateiname: string;
     geschaeftsfuehrer: string;
     fusszeileText: string;
+    googleBewertungsLink: string;
     mahnverfahrenAktiv: boolean;
     tageBisZahlungserinnerung: number;
     tageBisErsteMahnung: number;
@@ -537,6 +538,18 @@ export default function FirmaEditor() {
                                             value={firma.website || ''}
                                             onChange={e => setFirma({ ...firma, website: e.target.value })}
                                         />
+                                    </div>
+                                    <div>
+                                        <Label>Bewertungs-Link (Google)</Label>
+                                        <Input
+                                            type="url"
+                                            value={firma.googleBewertungsLink || ''}
+                                            onChange={e => setFirma({ ...firma, googleBewertungsLink: e.target.value })}
+                                            placeholder="https://www.google.com/search?q=..."
+                                        />
+                                        <p className="text-xs text-slate-500 mt-1">
+                                            Wird in E-Mails über den Platzhalter <code className="bg-slate-100 px-1 rounded">{'{{REVIEW_LINK}}'}</code> als Link „Jetzt Bewertung abgeben" eingefügt.
+                                        </p>
                                     </div>
                                 </div>
 

@@ -41,6 +41,7 @@ public class FirmeninformationService {
         fi.setLogoDateiname(dto.getLogoDateiname());
         fi.setGeschaeftsfuehrer(dto.getGeschaeftsfuehrer());
         fi.setFusszeileText(dto.getFusszeileText());
+        fi.setGoogleBewertungsLink(normalizeUrl(dto.getGoogleBewertungsLink()));
 
         fi.setMahnverfahrenAktiv(dto.isMahnverfahrenAktiv());
         fi.setTageBisZahlungserinnerung(positivOrDefault(dto.getTageBisZahlungserinnerung(), 7));
@@ -54,6 +55,14 @@ public class FirmeninformationService {
 
     private static int positivOrDefault(int wert, int fallback) {
         return wert > 0 ? wert : fallback;
+    }
+
+    private static String normalizeUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        String trimmed = url.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private FirmeninformationDto toDto(Firmeninformation fi) {
@@ -77,6 +86,7 @@ public class FirmeninformationService {
         dto.setLogoDateiname(fi.getLogoDateiname());
         dto.setGeschaeftsfuehrer(fi.getGeschaeftsfuehrer());
         dto.setFusszeileText(fi.getFusszeileText());
+        dto.setGoogleBewertungsLink(fi.getGoogleBewertungsLink());
         dto.setMahnverfahrenAktiv(fi.isMahnverfahrenAktiv());
         dto.setTageBisZahlungserinnerung(fi.getTageBisZahlungserinnerung());
         dto.setTageBisErsteMahnung(fi.getTageBisErsteMahnung());

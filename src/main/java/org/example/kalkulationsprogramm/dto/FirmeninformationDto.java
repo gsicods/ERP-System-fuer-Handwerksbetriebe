@@ -23,6 +23,7 @@ public class FirmeninformationDto {
     private String logoDateiname;
     private String geschaeftsfuehrer;
     private String fusszeileText;
+    private String googleBewertungsLink;
 
     // Mahnverfahren — siehe Firmeninformation
     private boolean mahnverfahrenAktiv;

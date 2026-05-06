@@ -51,6 +51,11 @@ public class Firmeninformation {
     @Column(length = 1000)
     private String fusszeileText; // Text für Dokumenten-Fußzeile
 
+    // URL zur Google-Bewertungsseite des Betriebs.
+    // Wird in E-Mail-Vorlagen über den Platzhalter {{REVIEW_LINK}} als klickbarer Link eingesetzt.
+    @Column(name = "google_bewertungs_link", length = 500)
+    private String googleBewertungsLink;
+
     // --- Automatisches Mahnverfahren ---
     // Opt-In: erst aktivieren, wenn die Tage-Schwellen vom Inhaber bestaetigt sind.
     @Column(name = "mahnverfahren_aktiv", nullable = false)

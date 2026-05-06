@@ -6,8 +6,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.example.email.EmailService;
+import org.example.kalkulationsprogramm.dto.FirmeninformationDto;
 import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
 import org.example.kalkulationsprogramm.service.EmailTextTemplateService;
+import org.example.kalkulationsprogramm.service.FirmeninformationService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,10 +26,11 @@ public class EmailTemplateController {
 
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter DISPLAY_DATE_FORMAT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
-    private static final String REVIEW_LINK = "<a href='https://www.google.com/search?q=Bauschlosserei+Thomas+Kuhn+Rezensionen#lkt=LocalPoiReviews'>Jetzt Bewertung abgeben</a>";
+    private static final String REVIEW_LINK_LABEL = "Jetzt Bewertung abgeben";
 
     private final EmailTextTemplateService emailTextTemplateService;
     private final DokumentFreigabeService dokumentFreigabeService;
+    private final FirmeninformationService firmeninformationService;
 
     @PostMapping
     public ResponseEntity<EmailTemplateResponse> generateTemplate(@RequestBody EmailTemplateRequest request) {
@@ -83,7 +86,7 @@ public class EmailTemplateController {
         ctx.put("BETRAG", nullToEmpty(req.getBetrag(), ""));
         ctx.put("RECHNUNGSDATUM", formatDate(req.getRechnungsdatum()));
         ctx.put("FAELLIGKEITSDATUM", formatDate(req.getFaelligkeitsdatum()));
-        ctx.put("REVIEW_LINK", REVIEW_LINK);
+        ctx.put("REVIEW_LINK", buildReviewLink());
 
         return emailTextTemplateService.render(dokumentTyp, ctx);
     }
@@ -134,6 +137,17 @@ public class EmailTemplateController {
                 return new EmailService.EmailContent("", "");
             }
         }
+    }
+
+    private String buildReviewLink() {
+        FirmeninformationDto firma = firmeninformationService.getFirmeninformation();
+        String url = firma == null ? null : firma.getGoogleBewertungsLink();
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        // href-Wert escapen, damit doppelte Anfuehrungszeichen nicht das Attribut sprengen.
+        String safeUrl = url.trim().replace("\"", "%22");
+        return "<a href=\"" + safeUrl + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + REVIEW_LINK_LABEL + "</a>";
     }
 
     private static String formatDate(String dateStr) {
