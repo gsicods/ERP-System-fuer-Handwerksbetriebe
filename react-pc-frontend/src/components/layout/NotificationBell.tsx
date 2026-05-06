@@ -293,9 +293,9 @@ export function NotificationBell() {
                 )}
             </button>
 
-            {/* Dropdown */}
+            {/* Dropdown — Breite richtet sich nach Anzahl der sichtbaren Spalten */}
             {open && data && (
-                <div className="absolute right-0 top-full mt-2 w-[720px] max-w-[calc(100vw-2rem)] max-h-[80vh] bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col">
+                <div className="absolute right-0 top-full mt-2 w-fit max-w-[calc(100vw-2rem)] max-h-[80vh] bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden flex flex-col">
                     {/* Header */}
                     <div className="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-rose-50 to-white border-b border-slate-100 shrink-0">
                         <div className="flex items-center gap-2">
@@ -317,50 +317,58 @@ export function NotificationBell() {
                         </button>
                     </div>
 
-                    {/* Scrollable Body — Items pro Gruppe gerendert; nur Items sind klickbar. */}
-                    <div className="overflow-y-auto flex-1">
+                    {/* Body — Themengruppen als Spalten nebeneinander; nur Items klickbar. */}
+                    <div className="overflow-x-auto overflow-y-hidden flex-1">
                         {data.categories.length === 0 && data.recentItems.length === 0 ? (
-                            <div className="p-12 text-center text-slate-400">
+                            <div className="p-12 text-center text-slate-400 min-w-[420px]">
                                 <Bell className="w-10 h-10 mx-auto mb-3 text-slate-200" />
                                 <p className="text-sm font-medium">Keine neuen Benachrichtigungen</p>
                                 <p className="text-xs text-slate-400 mt-1">Alles erledigt – gut gemacht!</p>
                             </div>
                         ) : (
-                            <div className="py-1">
+                            <div className="flex items-stretch divide-x divide-slate-100 h-full">
                                 {GROUPS.map((group) => {
                                     const groupCats = data.categories.filter(c => group.types.includes(c.type));
                                     const groupItems = data.recentItems.filter(i => group.recentTypes.includes(i.type));
-                                    // Gruppe nur anzeigen, wenn es entweder einen Zähler oder konkrete Items gibt.
+                                    // Spalte nur anzeigen, wenn die Gruppe Daten hat – sonst keine leeren Spalten.
                                     if (groupCats.length === 0 && groupItems.length === 0) return null;
                                     const groupTotal = groupCats.reduce((sum, c) => sum + c.count, 0);
                                     const GroupIcon = group.icon;
                                     const isLeadGruppe = group.id === 'webseite';
                                     return (
-                                        <div key={group.id} className="mb-1 last:mb-0">
-                                            {/* Group header — bewusst NICHT klickbar, dient nur der Orientierung */}
+                                        <div
+                                            key={group.id}
+                                            className="flex flex-col w-[260px] shrink-0 max-h-[70vh]"
+                                        >
+                                            {/* Spalten-Header — nicht klickbar, nur Orientierung */}
                                             <div className={cn(
-                                                "flex items-center gap-2.5 px-4 py-2 border-y border-slate-100",
-                                                isLeadGruppe ? "bg-rose-50" : "bg-slate-50/60"
+                                                "flex flex-col gap-1 px-4 py-3 border-b border-slate-100 sticky top-0 z-10",
+                                                isLeadGruppe ? "bg-rose-50" : "bg-slate-50/80"
                                             )}>
-                                                <div className={cn("flex items-center justify-center w-7 h-7 rounded-lg", group.accentBg)}>
-                                                    <GroupIcon className={cn("w-4 h-4", group.accentText)} />
+                                                <div className="flex items-center gap-2">
+                                                    <div className={cn("flex items-center justify-center w-7 h-7 rounded-lg", group.accentBg)}>
+                                                        <GroupIcon className={cn("w-4 h-4", group.accentText)} />
+                                                    </div>
+                                                    <span className={cn(
+                                                        "text-[11px] font-bold uppercase tracking-wider leading-tight",
+                                                        isLeadGruppe ? group.accentText : "text-slate-600"
+                                                    )}>
+                                                        {group.label}
+                                                    </span>
                                                 </div>
-                                                <span className={cn(
-                                                    "text-[12px] font-bold uppercase tracking-wider",
-                                                    isLeadGruppe ? group.accentText : "text-slate-600"
-                                                )}>
-                                                    {group.label}
-                                                </span>
                                                 {groupTotal > 0 && (
-                                                    <span className={cn("px-2 py-0.5 text-[11px] font-bold rounded-full", group.accentBg, group.accentText)}>
+                                                    <span className={cn(
+                                                        "self-start text-[11px] font-bold rounded-full px-2 py-0.5",
+                                                        group.accentBg, group.accentText
+                                                    )}>
                                                         {groupTotal} {groupTotal === 1 ? 'Eintrag' : 'Einträge'}
                                                     </span>
                                                 )}
                                             </div>
-                                            {/* Items — jede Zeile öffnet exakt eine Instanz */}
-                                            {groupItems.length > 0 ? (
-                                                <div>
-                                                    {groupItems.map((item, i) => {
+                                            {/* Items — eigene Scrollbox pro Spalte, sonst werden lange Spalten zur Bremse */}
+                                            <div className="overflow-y-auto flex-1">
+                                                {groupItems.length > 0 ? (
+                                                    groupItems.map((item, i) => {
                                                         const Icon = RECENT_TYPE_ICONS[item.type] || Bell;
                                                         const iconColor = RECENT_TYPE_COLORS[item.type] || 'text-slate-400';
                                                         return (
@@ -368,7 +376,7 @@ export function NotificationBell() {
                                                                 key={`${group.id}-${item.type}-${i}`}
                                                                 onClick={() => handleItemClick(item)}
                                                                 className={cn(
-                                                                    "w-full flex items-start gap-3 px-4 py-3 transition-colors text-left group border-b border-slate-50 last:border-b-0",
+                                                                    "w-full flex items-start gap-2.5 px-3 py-2.5 transition-colors text-left group border-b border-slate-50 last:border-b-0",
                                                                     isLeadGruppe
                                                                         ? "bg-rose-50/40 hover:bg-rose-50"
                                                                         : "hover:bg-rose-50/40"
@@ -376,29 +384,29 @@ export function NotificationBell() {
                                                                 title="Direkt zu diesem Eintrag öffnen"
                                                             >
                                                                 <div className={cn(
-                                                                    "mt-0.5 p-2 rounded-lg transition-colors",
+                                                                    "mt-0.5 p-1.5 rounded-lg shrink-0 transition-colors",
                                                                     isLeadGruppe ? "bg-white" : "bg-slate-50 group-hover:bg-white",
                                                                     iconColor
                                                                 )}>
-                                                                    <Icon className="w-4 h-4" />
+                                                                    <Icon className="w-3.5 h-3.5" />
                                                                 </div>
                                                                 <div className="flex-1 min-w-0">
-                                                                    <p className="text-sm font-semibold text-slate-900 truncate">
+                                                                    <p className="text-[13px] font-semibold text-slate-900 truncate">
                                                                         {item.title}
                                                                     </p>
-                                                                    <p className="text-xs text-slate-500 truncate mt-0.5">
+                                                                    <p className="text-[11px] text-slate-500 truncate mt-0.5">
                                                                         {item.subtitle}
                                                                     </p>
                                                                 </div>
                                                             </button>
                                                         );
-                                                    })}
-                                                </div>
-                                            ) : (
-                                                <div className="px-4 py-3 text-xs text-slate-500">
-                                                    {groupTotal} {groupTotal === 1 ? 'Eintrag' : 'Einträge'} – Details werden geladen, sobald du die Übersicht öffnest.
-                                                </div>
-                                            )}
+                                                    })
+                                                ) : (
+                                                    <div className="px-3 py-3 text-[11px] text-slate-500">
+                                                        {groupTotal} {groupTotal === 1 ? 'Eintrag' : 'Einträge'} – in der Übersicht öffnen.
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     );
                                 })}
