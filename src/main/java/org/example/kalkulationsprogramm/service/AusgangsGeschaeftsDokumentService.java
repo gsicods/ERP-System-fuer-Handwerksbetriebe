@@ -1086,8 +1086,15 @@ public class AusgangsGeschaeftsDokumentService {
         verlauf.setBasisdokumentNummer(basis.getDokumentNummer());
         verlauf.setBasisdokumentTyp(basis.getTyp());
         verlauf.setBasisdokumentDatum(basis.getDatum());
-        verlauf.setBasisdokumentBetragNetto(
-                basis.getBetragNetto() != null ? basis.getBetragNetto() : BigDecimal.ZERO);
+
+        // Basisbetrag: gespeicherter Wert oder aus positionenJson berechnen.
+        // Why: AB/Angebot speichern den Betrag oft nur in positionenJson — ohne Fallback
+        // wäre der Restbetrag fälschlich 0 und die Rechnungserstellung würde blockiert.
+        BigDecimal basisNetto = basis.getBetragNetto();
+        if (basisNetto == null && basis.getPositionenJson() != null) {
+            basisNetto = berechneNettoAusPositionenJson(basis.getPositionenJson());
+        }
+        verlauf.setBasisdokumentBetragNetto(basisNetto != null ? basisNetto : BigDecimal.ZERO);
 
         // Alle Nachfolger-Dokumente laden (sortiert nach Erstellungszeitpunkt)
         List<AusgangsGeschaeftsDokument> nachfolger = dokumentRepository.findByVorgaengerIdOrderByErstelltAmAsc(basisdokumentId);

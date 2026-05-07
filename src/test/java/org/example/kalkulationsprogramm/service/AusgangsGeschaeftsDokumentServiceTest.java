@@ -691,6 +691,24 @@ class AusgangsGeschaeftsDokumentServiceTest {
             assertThat(verlauf.getBereitsAbgerechnet()).isEqualByComparingTo(BigDecimal.ZERO);
             assertThat(verlauf.getRestbetrag()).isEqualByComparingTo(new BigDecimal("10000.00"));
         }
+
+        @Test
+        void berechnetBasisbetragAusPositionenJsonWennBetragNettoNull() {
+            AusgangsGeschaeftsDokument basis = new AusgangsGeschaeftsDokument();
+            basis.setId(1L);
+            basis.setDokumentNummer("2026/05/00011");
+            basis.setTyp(AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG);
+            basis.setBetragNetto(null);
+            basis.setPositionenJson("[{\"type\":\"SERVICE\",\"id\":\"a\",\"quantity\":2,\"price\":800}]");
+            when(dokumentRepository.findById(1L)).thenReturn(Optional.of(basis));
+            when(dokumentRepository.findByVorgaengerIdOrderByErstelltAmAsc(1L))
+                    .thenReturn(List.of());
+
+            var verlauf = service.getAbrechnungsverlauf(1L);
+
+            assertThat(verlauf.getBasisdokumentBetragNetto()).isEqualByComparingTo(new BigDecimal("1600.00"));
+            assertThat(verlauf.getRestbetrag()).isEqualByComparingTo(new BigDecimal("1600.00"));
+        }
     }
 
     @Nested
