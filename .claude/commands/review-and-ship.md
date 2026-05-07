@@ -1,6 +1,6 @@
 ---
 name: review-and-ship
-description: Führt /pre-merge durch, prüft alles nochmals, erstellt dann Commit und Push – nur wenn alle Checks bestanden.
+description: Führt /pre-merge, den erp-code-reviewer-Subagenten und /security-review durch, prüft alles nochmals, erstellt dann Commit und Push – nur wenn alle Checks bestanden.
 ---
 
 # Review & Ship
@@ -8,6 +8,19 @@ description: Führt /pre-merge durch, prüft alles nochmals, erstellt dann Commi
 Du bist ein strenger Code-Reviewer. Deine Aufgabe: alles prüfen, dann nur bei 100% grüner Ampel committen und pushen.
 
 **STOPP-REGEL:** Sobald ein Check fehlschlägt → Abbruch mit detaillierter Fehlermeldung. Kein Commit, kein Push. Der Nutzer muss den Fehler zuerst beheben.
+
+## 🔁 Pflicht-Trigger (immer ausführen, ohne Ausnahme)
+
+Bevor du den Commit erstellst, MUSST du folgendes – in dieser Reihenfolge – ausführen. **Keiner dieser Schritte darf übersprungen werden**, auch nicht wenn der Diff klein wirkt.
+
+1. **Subagent `erp-code-reviewer`** über das Agent-Tool aufrufen:
+   - `subagent_type: "erp-code-reviewer"`
+   - `description: "ERP Backend+Frontend+Security Review"`
+   - Prompt: kurz beschreiben, welche Änderung committet werden soll, plus die Anweisung „Prüfe den aktuellen Diff (`git diff main...HEAD` + ungestaged) gemäß BACKEND_ARCH.md, FRONTEND_UI.md und Security-Audit-Checkliste. Gib den vorgegebenen Report inkl. Ampel zurück."
+   - Wartepunkt: Ergebnis-Ampel **muss 🟢 GRÜN** sein. 🟡 GELB nur fortsetzen, wenn der User das ausdrücklich freigibt. 🔴 ROT → harter Abbruch.
+2. **Skill `/security-review`** ausführen (über das Skill-Tool, `skill: "security-review"`). Die Findings dieses Skills mit dem Reviewer-Report zusammenführen. Auch hier gilt: kritische Befunde blocken Commit & Push.
+
+Erst wenn **beide** Trigger ohne kritische Befunde durchgelaufen sind, gehst du in Phase 1 weiter.
 
 ---
 
@@ -158,6 +171,10 @@ Nach erfolgreichem Commit und Push:
 
 Commit: <hash>
 Branch: <branch>
-Geprüfte Checks: [Liste aller bestandenen Checks]
+Geprüfte Checks:
+  - erp-code-reviewer Subagent: 🟢
+  - /security-review Skill: ✅
+  - /pre-merge Phase 1a–1d: ✅
+  - Eigener Gegencheck Phase 2a–2e: ✅
 Push: origin/<branch>
 ```
