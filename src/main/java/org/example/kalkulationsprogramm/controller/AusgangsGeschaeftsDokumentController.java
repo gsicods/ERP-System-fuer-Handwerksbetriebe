@@ -135,9 +135,10 @@ public class AusgangsGeschaeftsDokumentController {
      */
     @PostMapping
     public ResponseEntity<?> create(
-            @RequestBody AusgangsGeschaeftsDokumentErstellenDto dto) {
+            @RequestBody AusgangsGeschaeftsDokumentErstellenDto dto,
+            jakarta.servlet.http.HttpServletRequest request) {
         try {
-            AusgangsGeschaeftsDokument created = service.erstellen(dto);
+            AusgangsGeschaeftsDokument created = service.erstellen(dto, clientIp(request));
             return ResponseEntity.ok(service.findById(created.getId()));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -165,9 +166,11 @@ public class AusgangsGeschaeftsDokumentController {
      * Wird normalerweise beim PDF-Export aufgerufen.
      */
     @PostMapping("/{id}/buchen")
-    public ResponseEntity<?> buchen(@PathVariable Long id) {
+    public ResponseEntity<?> buchen(@PathVariable Long id,
+                                    @RequestParam(required = false) Long userId,
+                                    jakarta.servlet.http.HttpServletRequest request) {
         try {
-            AusgangsGeschaeftsDokument result = service.buchen(id);
+            AusgangsGeschaeftsDokument result = service.buchen(id, userId, clientIp(request));
             return ResponseEntity.ok(service.findById(result.getId()));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -179,9 +182,11 @@ public class AusgangsGeschaeftsDokumentController {
      * Setzt Versanddatum und sperrt das Dokument.
      */
     @PostMapping("/{id}/email-versendet")
-    public ResponseEntity<?> emailVersendet(@PathVariable Long id) {
+    public ResponseEntity<?> emailVersendet(@PathVariable Long id,
+                                            @RequestParam(required = false) Long userId,
+                                            jakarta.servlet.http.HttpServletRequest request) {
         try {
-            service.buchenNachEmailVersand(id);
+            service.buchenNachEmailVersand(id, userId, clientIp(request));
             return ResponseEntity.ok(service.findById(id));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -221,9 +226,12 @@ public class AusgangsGeschaeftsDokumentController {
      * Erstellt ein Storno-Gegendokument.
      */
     @PostMapping("/{id}/storno")
-    public ResponseEntity<?> stornieren(@PathVariable Long id) {
+    public ResponseEntity<?> stornieren(@PathVariable Long id,
+                                        @RequestParam(required = false) Long userId,
+                                        @RequestParam(required = false) String grund,
+                                        jakarta.servlet.http.HttpServletRequest request) {
         try {
-            AusgangsGeschaeftsDokument storno = service.stornieren(id);
+            AusgangsGeschaeftsDokument storno = service.stornieren(id, userId, clientIp(request), grund);
             return ResponseEntity.ok(service.findById(storno.getId()));
         } catch (RuntimeException e) {
             log.error("Fehler beim Stornieren von Dokument {}: {}", id, e.getMessage(), e);

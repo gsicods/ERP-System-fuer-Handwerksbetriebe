@@ -70,6 +70,7 @@ public class DokumentFreigabeService
     private final ProjektDokumentRepository projektDokumentRepository;
     private final AusgangsGeschaeftsDokumentRepository ausgangsGeschaeftsDokumentRepository;
     private final AusgangsGeschaeftsDokumentService ausgangsGeschaeftsDokumentService;
+    private final AusgangsGeschaeftsDokumentAuditService ausgangsGeschaeftsDokumentAuditService;
     private final WebPushService webPushService;
     private final DateiSpeicherService dateiSpeicherService;
     private final AutoAuftragsbestaetigungVersandService autoAuftragsbestaetigungVersandService;
@@ -453,7 +454,9 @@ public class DokumentFreigabeService
         if (!angebot.isDigitalAngenommen())
         {
             angebot.setDigitalAngenommen(true);
-            ausgangsGeschaeftsDokumentRepository.save(angebot);
+            angebot = ausgangsGeschaeftsDokumentRepository.save(angebot);
+            // GoBD-Audit: rechtsverbindlicher Akt — Hash-Kette schützt das Annahmedatum.
+            ausgangsGeschaeftsDokumentAuditService.protokolliereDigitaleAnnahme(angebot, freigabe.getAkzeptiertIp());
         }
 
         // Kein doppeltes Erzeugen: Hat das Angebot bereits eine Auftragsbestätigung als Nachfolger,
@@ -488,6 +491,9 @@ public class DokumentFreigabeService
         {
             ab.setDigitalAngenommen(true);
             ab = ausgangsGeschaeftsDokumentRepository.save(ab);
+            // GoBD-Audit: AB ist rechtlich Folge der Angebotsannahme; spiegeln wir
+            // im Audit, damit Prüfer den vollständigen Annahme-Vorgang nachvollziehen kann.
+            ausgangsGeschaeftsDokumentAuditService.protokolliereDigitaleAnnahme(ab, freigabe.getAkzeptiertIp());
         }
 
         // Auto-Versand der AB als PDF-Mail an den Kunden (Issue #55).

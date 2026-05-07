@@ -135,7 +135,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         void erstelltDokumentErfolgreich() throws Exception {
             AusgangsGeschaeftsDokument entity = new AusgangsGeschaeftsDokument();
             entity.setId(1L);
-            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class))).willReturn(entity);
+            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class), any())).willReturn(entity);
             given(service.findById(1L)).willReturn(buildResponseDto(1L, "RE-2026-001"));
 
             AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
@@ -153,7 +153,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         @Test
         @DisplayName("Erstellung mit ungültigen Daten gibt 400 zurück")
         void erstellungMitUngueltigemDtoGibt400() throws Exception {
-            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class)))
+            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class), any()))
                     .willThrow(new RuntimeException("Betrag muss positiv sein"));
 
             AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
@@ -171,7 +171,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         void sqlInjectionImBetreff() throws Exception {
             AusgangsGeschaeftsDokument entity = new AusgangsGeschaeftsDokument();
             entity.setId(1L);
-            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class))).willReturn(entity);
+            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class), any())).willReturn(entity);
             given(service.findById(1L)).willReturn(buildResponseDto(1L, "RE-001"));
 
             AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
@@ -190,7 +190,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         void xssInHtmlInhalt() throws Exception {
             AusgangsGeschaeftsDokument entity = new AusgangsGeschaeftsDokument();
             entity.setId(1L);
-            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class))).willReturn(entity);
+            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class), any())).willReturn(entity);
             given(service.findById(1L)).willReturn(buildResponseDto(1L, "RE-001"));
 
             AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
@@ -261,7 +261,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         void buchtDokumentErfolgreich() throws Exception {
             AusgangsGeschaeftsDokument entity = new AusgangsGeschaeftsDokument();
             entity.setId(1L);
-            given(service.buchen(1L)).willReturn(entity);
+            given(service.buchen(eq(1L), any(), any())).willReturn(entity);
             given(service.findById(1L)).willReturn(buildResponseDto(1L, "RE-2026-001"));
 
             mockMvc.perform(post("/api/ausgangs-dokumente/1/buchen"))
@@ -271,7 +271,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         @Test
         @DisplayName("Doppeltes Buchen gibt 400 zurück")
         void doppeltessBuchenGibt400() throws Exception {
-            given(service.buchen(1L)).willThrow(new RuntimeException("Bereits gebucht"));
+            given(service.buchen(eq(1L), any(), any())).willThrow(new RuntimeException("Bereits gebucht"));
 
             mockMvc.perform(post("/api/ausgangs-dokumente/1/buchen"))
                     .andExpect(status().isBadRequest());
@@ -285,7 +285,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         @Test
         @DisplayName("Bucht nach E-Mail-Versand erfolgreich")
         void buchtNachEmailVersandErfolgreich() throws Exception {
-            given(service.buchenNachEmailVersand(1L)).willReturn(new AusgangsGeschaeftsDokument());
+            given(service.buchenNachEmailVersand(eq(1L), any(), any())).willReturn(new AusgangsGeschaeftsDokument());
             given(service.findById(1L)).willReturn(buildResponseDto(1L, "RE-2026-001"));
 
             mockMvc.perform(post("/api/ausgangs-dokumente/1/email-versendet"))
@@ -341,7 +341,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         void storniertDokumentErfolgreich() throws Exception {
             AusgangsGeschaeftsDokument storno = new AusgangsGeschaeftsDokument();
             storno.setId(2L);
-            given(service.stornieren(1L)).willReturn(storno);
+            given(service.stornieren(eq(1L), any(), any(), any())).willReturn(storno);
             given(service.findById(2L)).willReturn(buildResponseDto(2L, "ST-2026-001"));
 
             mockMvc.perform(post("/api/ausgangs-dokumente/1/storno"))
@@ -352,7 +352,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
         @Test
         @DisplayName("Stornierung eines bereits stornierten Dokuments gibt 400")
         void doppelteStornierungGibt400() throws Exception {
-            given(service.stornieren(1L)).willThrow(new RuntimeException("Bereits storniert"));
+            given(service.stornieren(eq(1L), any(), any(), any())).willThrow(new RuntimeException("Bereits storniert"));
 
             mockMvc.perform(post("/api/ausgangs-dokumente/1/storno"))
                     .andExpect(status().isBadRequest());

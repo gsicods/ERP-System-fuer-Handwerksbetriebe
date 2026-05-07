@@ -108,6 +108,20 @@ public class AusgangsGeschaeftsDokumentService {
             AusgangsGeschaeftsDokumentTyp.SCHLUSSRECHNUNG
     );
 
+    /**
+     * Buchhaltungsrelevante Typen, für die ein GoBD-konformer Audit-Trail (§147 AO,
+     * 10-Jahres-Aufbewahrung) zwingend ist. Angebot/AB sind nur Geschäftsbriefe
+     * (§147 Abs. 1 Nr. 2 AO, 6 Jahre) und brauchen keinen Audit-Eintrag.
+     */
+    private static final Set<AusgangsGeschaeftsDokumentTyp> AUDIT_RELEVANTE_TYPEN = EnumSet.of(
+            AusgangsGeschaeftsDokumentTyp.RECHNUNG,
+            AusgangsGeschaeftsDokumentTyp.TEILRECHNUNG,
+            AusgangsGeschaeftsDokumentTyp.ABSCHLAGSRECHNUNG,
+            AusgangsGeschaeftsDokumentTyp.SCHLUSSRECHNUNG,
+            AusgangsGeschaeftsDokumentTyp.GUTSCHRIFT,
+            AusgangsGeschaeftsDokumentTyp.STORNO
+    );
+
     /** Dokumenttypen, die für die Produktkategorie-Zuordnung relevant sind */
     private static final Set<AusgangsGeschaeftsDokumentTyp> KATEGORIE_RELEVANTE_TYPEN = EnumSet.of(
             AusgangsGeschaeftsDokumentTyp.ANGEBOT,
@@ -119,6 +133,15 @@ public class AusgangsGeschaeftsDokumentService {
      */
     @Transactional
     public AusgangsGeschaeftsDokument erstellen(AusgangsGeschaeftsDokumentErstellenDto dto) {
+        return erstellen(dto, null);
+    }
+
+    /**
+     * Wie {@link #erstellen(AusgangsGeschaeftsDokumentErstellenDto)}, schreibt aber
+     * für buchhaltungsrelevante Typen einen Audit-Eintrag mit Aufrufer-IP.
+     */
+    @Transactional
+    public AusgangsGeschaeftsDokument erstellen(AusgangsGeschaeftsDokumentErstellenDto dto, String ipAdresse) {
         // Nur ein Basisdokument (ohne Vorgänger) pro Projekt/Anfrage erlaubt
         if (dto.getVorgaengerId() == null) {
             if (dto.getProjektId() != null && dokumentRepository.existsByProjektIdAndVorgaengerIsNull(dto.getProjektId())) {
@@ -263,6 +286,10 @@ public class AusgangsGeschaeftsDokumentService {
             aktualisiereProjektProduktkategorienAusDokumenten(saved.getAnfrage().getProjekt().getId());
         }
 
+        if (AUDIT_RELEVANTE_TYPEN.contains(saved.getTyp())) {
+            auditService.protokolliereErstellung(saved, saved.getErstelltVon(), ipAdresse);
+        }
+
         return saved;
     }
 
@@ -402,6 +429,15 @@ public class AusgangsGeschaeftsDokumentService {
      */
     @Transactional
     public AusgangsGeschaeftsDokument buchen(Long id) {
+        return buchen(id, null, null);
+    }
+
+    /**
+     * Wie {@link #buchen(Long)}, schreibt aber zusätzlich einen GoBD-Audit-Eintrag
+     * mit Bearbeiter und IP-Adresse.
+     */
+    @Transactional
+    public AusgangsGeschaeftsDokument buchen(Long id, Long bearbeiterId, String ipAdresse) {
         AusgangsGeschaeftsDokument dokument = dokumentRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Dokument nicht gefunden: " + id));
 
@@ -425,6 +461,13 @@ public class AusgangsGeschaeftsDokumentService {
 
         AusgangsGeschaeftsDokument saved = dokumentRepository.save(dokument);
         erstelleOffenenPostenEintrag(saved);
+
+        if (AUDIT_RELEVANTE_TYPEN.contains(saved.getTyp())) {
+            var bearbeiter = bearbeiterId != null
+                    ? frontendUserProfileRepository.findById(bearbeiterId).orElse(null)
+                    : null;
+            auditService.protokolliereBuchung(saved, bearbeiter, ipAdresse);
+        }
         return saved;
     }
 
@@ -435,6 +478,15 @@ public class AusgangsGeschaeftsDokumentService {
      */
     @Transactional
     public AusgangsGeschaeftsDokument buchenNachEmailVersand(Long id) {
+        return buchenNachEmailVersand(id, null, null);
+    }
+
+    /**
+     * Wie {@link #buchenNachEmailVersand(Long)}, schreibt aber zusätzlich einen
+     * GoBD-Audit-Eintrag (Versand und ggf. Buchung) mit Bearbeiter und IP-Adresse.
+     */
+    @Transactional
+    public AusgangsGeschaeftsDokument buchenNachEmailVersand(Long id, Long bearbeiterId, String ipAdresse) {
         AusgangsGeschaeftsDokument dokument = dokumentRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Dokument nicht gefunden: " + id));
 
@@ -462,6 +514,20 @@ public class AusgangsGeschaeftsDokumentService {
 
         // Fälligkeitsdatum nachträglich setzen falls es fehlt (z.B. bei bereits gebuchten Dokumenten)
         aktualisiereOffenenPostenFaelligkeitsdatum(saved);
+
+        if (AUDIT_RELEVANTE_TYPEN.contains(saved.getTyp())) {
+            var bearbeiter = bearbeiterId != null
+                    ? frontendUserProfileRepository.findById(bearbeiterId).orElse(null)
+                    : null;
+            // Buchung und Versand sind hier ein gemeinsamer Akt: Wenn das Dokument
+            // gerade frisch gebucht wurde, wird das als BUCHUNG protokolliert; der
+            // Versand kommt als zweiter Eintrag dazu, damit Prüfer beide Aktionen
+            // einzeln in der Hash-Kette nachvollziehen kann.
+            if (!warBereitsGebucht && !istNichtBuchbar) {
+                auditService.protokolliereBuchung(saved, bearbeiter, ipAdresse);
+            }
+            auditService.protokolliereVersand(saved, bearbeiter, ipAdresse);
+        }
 
         return saved;
     }
@@ -513,6 +579,18 @@ public class AusgangsGeschaeftsDokumentService {
      */
     @Transactional
     public AusgangsGeschaeftsDokument stornieren(Long id) {
+        return stornieren(id, null, null, null);
+    }
+
+    /**
+     * Wie {@link #stornieren(Long)}, schreibt aber zusätzlich einen GoBD-Audit-Eintrag
+     * (Stornierung des Originals + Erstellung des Storno-Gegendokuments) mit
+     * Bearbeiter, IP-Adresse und optional einem fachlichen Stornogrund. Wenn kein
+     * Grund mitkommt, wird der Standardtext "Stornierung des Originaldokuments"
+     * genutzt — der Audit-Service verlangt zwingend einen Grund (GoBD).
+     */
+    @Transactional
+    public AusgangsGeschaeftsDokument stornieren(Long id, Long bearbeiterId, String ipAdresse, String grund) {
         AusgangsGeschaeftsDokument original = dokumentRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Dokument nicht gefunden: " + id));
 
@@ -582,7 +660,8 @@ public class AusgangsGeschaeftsDokumentService {
                         && !geschwisterDok.isStorniert()) {
                     log.info("Kaskadierende Stornierung: Schlussrechnung {} wird mitstorniert (Abschlagsrechnung {} storniert)",
                             geschwisterDok.getDokumentNummer(), original.getDokumentNummer());
-                    stornieren(geschwisterDok.getId());
+                    stornieren(geschwisterDok.getId(), bearbeiterId, ipAdresse,
+                            "Kaskadierende Stornierung wegen storniertem Vorgänger " + original.getDokumentNummer());
                 }
             }
         }
@@ -595,6 +674,20 @@ public class AusgangsGeschaeftsDokumentService {
         // Anfrage-Preis aktualisieren
         if (original.getAnfrage() != null) {
             aktualisiereAnfragePreisAusDokumenten(original.getAnfrage().getId());
+        }
+
+        // GoBD-Audit: Storno + Erstellung des Gegendokuments protokollieren.
+        // Ist nur bei AUDIT_RELEVANTE_TYPEN nötig — was hier ohnehin der Fall ist,
+        // da nur Rechnungstypen + STORNO storniert werden dürfen.
+        if (AUDIT_RELEVANTE_TYPEN.contains(original.getTyp())) {
+            var bearbeiter = bearbeiterId != null
+                    ? frontendUserProfileRepository.findById(bearbeiterId).orElse(null)
+                    : null;
+            String stornoGrund = (grund == null || grund.isBlank())
+                    ? "Stornierung des Originaldokuments"
+                    : grund;
+            auditService.protokolliereStornierung(original, bearbeiter, stornoGrund, ipAdresse);
+            auditService.protokolliereErstellung(savedStorno, bearbeiter, ipAdresse);
         }
 
         return savedStorno;
