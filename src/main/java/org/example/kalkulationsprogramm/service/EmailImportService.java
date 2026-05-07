@@ -285,6 +285,10 @@ public class EmailImportService {
         email.setDirection(direction);
         email.setImapFolder(folder.getFullName());
         email.setImapUid(folder.getUID(msg));
+        // Eigene gesendete Mails gelten automatisch als gelesen.
+        if (direction == EmailDirection.OUT) {
+            email.setRead(true);
+        }
 
         // Absender
         Address[] fromArr = msg.getFrom();

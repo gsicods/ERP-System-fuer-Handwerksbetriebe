@@ -1074,6 +1074,9 @@ public class UnifiedEmailController {
         stats.setSpamCount(emailRepository.countSpamUnread());
 
         // Total Counts (Gesendet, Papierkorb, Nicht zugeordnet, Anfragen)
+        // Hinweis: sentCount ist seit V257 strukturell ~0, weil alle OUT-Mails
+        // beim Erzeugen/Importieren als gelesen markiert werden. Query bleibt
+        // als Safety-Net für eventuelle Edge-Cases (z.B. manuelle DB-Inserts).
         stats.setSentCount(emailRepository.countByDirectionAndIsReadFalse(EmailDirection.OUT));
         // Trash count
         stats.setTrashCount(emailRepository.countByDeletedAtIsNotNullAndIsReadFalse());
@@ -1372,6 +1375,7 @@ public class UnifiedEmailController {
             email.setRawBody(htmlBody);
             email.setSentAt(LocalDateTime.now());
             email.setDirection(EmailDirection.OUT);
+            email.setRead(true);
 
             // Zuordnung (optional)
             if (dto.getProjektId() != null) {
@@ -1533,6 +1537,7 @@ public class UnifiedEmailController {
             email.setRawBody(htmlBody);
             email.setSentAt(LocalDateTime.now());
             email.setDirection(EmailDirection.OUT);
+            email.setRead(true);
             email.setParentEmail(parentEmail); // Verknüpfung zur Original-Email
 
             // Zuordnung: Priorität DTO > Parent

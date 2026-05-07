@@ -442,22 +442,25 @@ public interface EmailRepository extends JpaRepository<Email, Long> {
   // NEW FOLDERS: PROJECT, OFFER, SUPPLIER
   // ═══════════════════════════════════════════════════════════════
 
-  @Query("SELECT e FROM Email e WHERE e.zuordnungTyp = 'PROJEKT' AND e.deletedAt IS NULL ORDER BY e.sentAt DESC")
+  // Nur eingehende Mails. Gesendete Mails gehören in den "Gesendet"-Ordner –
+  // sonst würde ein Klick auf eine OUT-Mail in Projekte/Anfragen/Lieferanten
+  // den aktiven Ordner auf "sent" umschalten (siehe computeFolder).
+  @Query("SELECT e FROM Email e WHERE e.zuordnungTyp = 'PROJEKT' AND e.direction = 'IN' AND e.deletedAt IS NULL ORDER BY e.sentAt DESC")
   List<Email> findProjectEmails();
 
-  @Query("SELECT COUNT(e) FROM Email e WHERE e.zuordnungTyp = 'PROJEKT' AND e.deletedAt IS NULL AND e.isRead = false")
+  @Query("SELECT COUNT(e) FROM Email e WHERE e.zuordnungTyp = 'PROJEKT' AND e.direction = 'IN' AND e.deletedAt IS NULL AND e.isRead = false")
   long countProjectEmailsUnread();
 
-  @Query("SELECT e FROM Email e WHERE e.zuordnungTyp = 'ANFRAGE' AND e.deletedAt IS NULL ORDER BY e.sentAt DESC")
+  @Query("SELECT e FROM Email e WHERE e.zuordnungTyp = 'ANFRAGE' AND e.direction = 'IN' AND e.deletedAt IS NULL ORDER BY e.sentAt DESC")
   List<Email> findAnfrageEmails();
 
-  @Query("SELECT COUNT(e) FROM Email e WHERE e.zuordnungTyp = 'ANFRAGE' AND e.deletedAt IS NULL AND e.isRead = false")
+  @Query("SELECT COUNT(e) FROM Email e WHERE e.zuordnungTyp = 'ANFRAGE' AND e.direction = 'IN' AND e.deletedAt IS NULL AND e.isRead = false")
   long countAnfrageEmailsUnread();
 
-  @Query("SELECT e FROM Email e WHERE e.zuordnungTyp = 'LIEFERANT' AND e.deletedAt IS NULL ORDER BY e.sentAt DESC")
+  @Query("SELECT e FROM Email e WHERE e.zuordnungTyp = 'LIEFERANT' AND e.direction = 'IN' AND e.deletedAt IS NULL ORDER BY e.sentAt DESC")
   List<Email> findLieferantEmails();
 
-  @Query("SELECT COUNT(e) FROM Email e WHERE e.zuordnungTyp = 'LIEFERANT' AND e.deletedAt IS NULL AND e.isRead = false")
+  @Query("SELECT COUNT(e) FROM Email e WHERE e.zuordnungTyp = 'LIEFERANT' AND e.direction = 'IN' AND e.deletedAt IS NULL AND e.isRead = false")
   long countLieferantEmailsUnread();
 
   // Updates for existing counts to use "Unread" logic if needed by user

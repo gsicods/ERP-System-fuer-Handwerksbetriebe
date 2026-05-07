@@ -370,6 +370,7 @@ public class EmailController {
                             .htmlToPlainText(request.getHtmlBody()));
                     email.setSentAt(java.time.LocalDateTime.now());
                     email.setDirection(EmailDirection.OUT);
+                    email.setRead(true);
                     email.setMessageId(messageId);
                     email = emailRepository.save(email);
 
@@ -489,6 +490,7 @@ public class EmailController {
                         .htmlToPlainText(request.getHtmlBody()));
                 email.setSentAt(java.time.LocalDateTime.now());
                 email.setDirection(EmailDirection.OUT);
+                email.setRead(true);
                 email.setMessageId(messageId);
                 email = emailRepository.save(email);
 
