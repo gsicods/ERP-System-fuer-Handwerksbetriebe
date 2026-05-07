@@ -14,6 +14,7 @@ import org.example.kalkulationsprogramm.domain.AnfrageGeschaeftsdokument;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
 import org.example.kalkulationsprogramm.domain.DokumentFreigabe;
 import org.example.kalkulationsprogramm.domain.Email;
+import org.example.kalkulationsprogramm.domain.EmailDirection;
 import org.example.kalkulationsprogramm.domain.KalenderEintrag;
 import org.example.kalkulationsprogramm.domain.LieferantDokument;
 import org.example.kalkulationsprogramm.domain.LieferantGeschaeftsdokument;
@@ -545,18 +546,22 @@ public class NotificationController {
                 } catch (Exception ignored) {
                 }
 
-                // 10. Digital angenommene Angebote / Auftragsbestätigungen (letzte 7 Tage)
+                // 10. Digital angenommene Angebote / Auftragsbestätigungen (letzte 30 Tage)
+                // Bewusst längeres Fenster als bei E-Mails/Bautagebuch: eine Angebots-Annahme
+                // ist ein wichtiges Geschäftsereignis, das man nicht nach einer Woche
+                // unsichtbar werden lassen will. 30 Tage ist auch unkritisch, weil die
+                // Glocke pro Item dismissable ist (sessionStorage).
                 try {
-                        LocalDateTime siebenTage = LocalDateTime.now().minusDays(7);
+                        LocalDateTime dreissigTage = LocalDateTime.now().minusDays(30);
                         List<DokumentFreigabe> akzeptiert = dokumentFreigabeRepository
-                                        .findKuerzlichAkzeptiert(siebenTage);
+                                        .findKuerzlichAkzeptiert(dreissigTage);
                         if (!akzeptiert.isEmpty()) {
                                 categories.add(new CategoryDto("FREIGABEN_ANGENOMMEN",
                                                 "Digital angenommen", akzeptiert.size(), "FileText",
                                                 "/anfragen?freigabe=accepted"));
 
                                 akzeptiert.stream()
-                                                .limit(3)
+                                                .limit(5)
                                                 .forEach(f -> {
                                                         String kunde = f.getKundeName() == null
                                                                         || f.getKundeName().isBlank()
@@ -590,10 +595,11 @@ public class NotificationController {
                                 .sort(Comparator.comparing(RecentItemDto::timestamp,
                                                 Comparator.nullsLast(Comparator.reverseOrder())));
 
-                // Limit auf 40 – Items werden im Frontend pro Gruppe gerendert,
-                // ein zu kleines Limit würde komplette Gruppen leerfegen.
-                List<RecentItemDto> limitedItems = recentItems.size() > 40
-                                ? new ArrayList<>(recentItems.subList(0, 40))
+                // Limit auf 60 – Items werden im Frontend pro Gruppe gerendert,
+                // ein zu kleines Limit würde komplette Gruppen leerfegen (z.B. fielen
+                // FREIGABE_ANGENOMMEN-Items raus, wenn 6 Mail-Ordner viele Treffer haben).
+                List<RecentItemDto> limitedItems = recentItems.size() > 60
+                                ? new ArrayList<>(recentItems.subList(0, 60))
                                 : recentItems;
 
                 return new NotificationSummaryDto(totalCount, categories, limitedItems);
@@ -676,7 +682,13 @@ public class NotificationController {
         private void addEmailCategory(List<CategoryDto> categories, List<RecentItemDto> recentItems,
                         List<Email> allEmails, String type, String label, String folder) {
                 try {
-                        List<Email> unread = allEmails.stream().filter(e -> !e.isRead()).toList();
+                        // Selbst gesendete E-Mails (OUT) tauchen in den Ordnern Projekte/Angebote/Lieferanten
+                        // sowie Spam/Newsletter mit auf, weil die Repo-Queries dort nicht nach Direction filtern.
+                        // Für die Benachrichtigungs-Glocke wollen wir nur eingehende, ungelesene Mails – sonst
+                        // klingelt es bei jeder eigenen Antwort.
+                        List<Email> unread = allEmails.stream()
+                                        .filter(e -> e.getDirection() == EmailDirection.IN)
+                                        .filter(e -> !e.isRead()).toList();
                         if (unread.isEmpty()) return;
                         categories.add(new CategoryDto(type, label, unread.size(), "Mail",
                                         "/emails/" + folder));
