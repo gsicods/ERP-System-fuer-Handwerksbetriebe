@@ -304,6 +304,30 @@ public class EmailImportService {
         email.setRecipient(extractAddresses(msg.getRecipients(Message.RecipientType.TO)));
         email.setCc(extractAddresses(msg.getRecipients(Message.RecipientType.CC)));
 
+        // Reply-To (für Spam-Filter: From ≠ Reply-To ist klassischer Phishing-Marker).
+        // jakarta.mail.Message#getReplyTo() liefert per Spec From zurück, wenn der
+        // Reply-To-Header NICHT gesetzt ist. Wir wollen aber nur den echten Header
+        // persistieren, damit das Feld semantisch sauber bleibt (für ML-Features später).
+        if (firstHeader(msg, "Reply-To") != null) {
+            try {
+                Address[] replyTo = msg.getReplyTo();
+                if (replyTo != null && replyTo.length > 0 && replyTo[0] instanceof InternetAddress ria) {
+                    email.setReplyToAddress(ria.getAddress());
+                }
+            } catch (MessagingException ignored) {
+                // Reply-To ist optional
+            }
+        }
+
+        // Authentication-Results (SPF, DKIM, DMARC) für strukturelle Spam-Erkennung
+        String authResults = joinHeaders(msg, "Authentication-Results");
+        if (authResults != null && !authResults.isBlank()) {
+            // Auf 2000 Zeichen begrenzen — manche Mailserver hängen sehr lange Strings an
+            email.setAuthenticationResults(authResults.length() > 2000
+                    ? authResults.substring(0, 2000)
+                    : authResults);
+        }
+
         // Subject
         email.setSubject(msg.getSubject());
 
@@ -435,6 +459,22 @@ public class EmailImportService {
         try {
             String[] values = msg.getHeader(name);
             return (values != null && values.length > 0) ? values[0] : null;
+        } catch (MessagingException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Liest alle Werte eines Headers und joined sie mit Newlines.
+     * Authentication-Results kann mehrfach vorkommen (jeder MTA hängt seine an).
+     */
+    private String joinHeaders(Message msg, String name) {
+        try {
+            String[] values = msg.getHeader(name);
+            if (values == null || values.length == 0) {
+                return null;
+            }
+            return String.join("\n", values);
         } catch (MessagingException e) {
             return null;
         }
