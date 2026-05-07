@@ -65,6 +65,7 @@ public class AutoAuftragsbestaetigungVersandService
     private final AusgangsGeschaeftsDokumentRepository ausgangsGeschaeftsDokumentRepository;
     private final FormularTemplateService formularTemplateService;
     private final FormularTextbausteinDefaultService formularTextbausteinDefaultService;
+    private final EmailSignatureService emailSignatureService;
 
     /**
      * Versendet die Auftragsbestätigung als PDF-Mail. Fehler werden geloggt
@@ -118,12 +119,14 @@ public class AutoAuftragsbestaetigungVersandService
                     systemSettingsService.getSmtpPassword());
 
             String absender = ermittleAbsenderAdresse();
+            String htmlMitSignatur = emailSignatureService
+                    .appendSystemSignatureIfConfigured(content.htmlBody());
             emailService.sendEmail(
                     empfaenger,
                     null,
                     absender,
                     content.subject(),
-                    content.htmlBody(),
+                    htmlMitSignatur,
                     tempPdf.toString(),
                     filename);
 

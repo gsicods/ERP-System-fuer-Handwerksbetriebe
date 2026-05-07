@@ -74,6 +74,7 @@ public class AutoMahnVersandService
     private final SystemSettingsService systemSettingsService;
     private final FormularTemplateService formularTemplateService;
     private final FormularTextbausteinDefaultService formularTextbausteinDefaultService;
+    private final EmailSignatureService emailSignatureService;
 
     /**
      * Taeglich um 09:00 — durchlaeuft offene Rechnungen, erzeugt fehlende
@@ -256,8 +257,10 @@ public class AutoMahnVersandService
                     systemSettingsService.getSmtpPassword());
 
             String absender = ermittleAbsenderAdresse();
+            String htmlMitSignatur = emailSignatureService
+                    .appendSystemSignatureIfConfigured(mailInhalt.htmlBody());
             emailService.sendEmail(empfaenger, null, absender,
-                    mailInhalt.subject(), mailInhalt.htmlBody(),
+                    mailInhalt.subject(), htmlMitSignatur,
                     tempPdf.toString(), dateiname);
 
             markiereVersendet(gespeichert.getId(), heute);
