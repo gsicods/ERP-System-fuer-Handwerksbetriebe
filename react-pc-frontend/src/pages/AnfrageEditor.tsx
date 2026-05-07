@@ -1691,7 +1691,7 @@ export default function AnfrageEditor() {
         if (total === 0) return 'Keine Anfragen gefunden.';
         const start = page * PAGE_SIZE + 1;
         const end = Math.min(start + anfragen.length - 1, total);
-        return `Zeige ${start}-${end} von ${total} Anfragenn`;
+        return `Zeige ${start}-${end} von ${total} Anfragen`;
     }, [loading, total, page, anfragen.length]);
 
     const loadDetails = async (id: number) => {

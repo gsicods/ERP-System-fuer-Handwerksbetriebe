@@ -2,6 +2,8 @@ package org.example.kalkulationsprogramm.controller;
 
 import org.example.kalkulationsprogramm.domain.Anfrage;
 import org.example.kalkulationsprogramm.domain.Kunde;
+import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageResponseDto;
+import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageSeiteResponseDto;
 import org.example.kalkulationsprogramm.dto.Produktkategroie.KategorieVorschlagDto;
 import org.example.kalkulationsprogramm.dto.Projekt.ProjektErstellenDto;
 import org.example.kalkulationsprogramm.repository.AnfrageNotizBildRepository;
@@ -100,5 +102,62 @@ class AnfrageControllerTest {
         assertEquals(1, response.getBody().size());
         assertEquals(7L, response.getBody().get(0).getKategorieId());
         verify(ausgangsGeschaeftsDokumentService).berechneKategorieVorschlagFuerAnfrage(99L);
+    }
+
+    private AnfrageController neuerController(AnfrageService anfrageService) {
+        return new AnfrageController(
+                anfrageService,
+                mock(AusgangsGeschaeftsDokumentService.class),
+                mock(DateiSpeicherService.class),
+                mock(ZugferdErstellService.class),
+                mock(ZugferdExtractorService.class),
+                mock(PdfAiExtractorService.class),
+                mock(KundeRepository.class),
+                mock(AnfrageNotizRepository.class),
+                mock(AnfrageNotizBildRepository.class),
+                mock(AnfrageRepository.class),
+                mock(MitarbeiterRepository.class),
+                mock(FrontendUserProfileService.class),
+                mock(DokumentFreigabeService.class));
+    }
+
+    @Test
+    void listeOhnePageGibtFlacheListeZurueck() {
+        AnfrageService anfrageService = mock(AnfrageService.class);
+        AnfrageController controller = neuerController(anfrageService);
+
+        AnfrageResponseDto dto = new AnfrageResponseDto();
+        dto.setId(1L);
+        when(anfrageService.suche(null, null, null, null, null, false))
+                .thenReturn(List.of(dto));
+
+        List<AnfrageResponseDto> result = controller.liste(null, null, null, null, null, null, false);
+
+        assertEquals(1, result.size());
+        assertEquals(1L, result.get(0).getId());
+        verify(anfrageService).suche(null, null, null, null, null, false);
+        verify(anfrageService, never()).sucheSeite(any(), any(), any(), any(), any(), anyBoolean(), anyInt(), anyInt());
+    }
+
+    @Test
+    void listeMitPageRoutetAufPaginierteVariante() {
+        AnfrageService anfrageService = mock(AnfrageService.class);
+        AnfrageController controller = neuerController(anfrageService);
+
+        AnfrageResponseDto dto = new AnfrageResponseDto();
+        dto.setId(7L);
+        AnfrageSeiteResponseDto seite = new AnfrageSeiteResponseDto(List.of(dto), 25L, 0, 12);
+        when(anfrageService.sucheSeite(null, null, null, null, null, false, 0, 12))
+                .thenReturn(seite);
+
+        AnfrageSeiteResponseDto result = controller.listeSeite(null, null, null, null, null, null, false, 0, 12);
+
+        assertEquals(25L, result.gesamt());
+        assertEquals(0, result.seite());
+        assertEquals(12, result.seitenGroesse());
+        assertEquals(1, result.anfragen().size());
+        assertEquals(7L, result.anfragen().get(0).getId());
+        verify(anfrageService).sucheSeite(null, null, null, null, null, false, 0, 12);
+        verify(anfrageService, never()).suche(any(), any(), any(), any(), any(), anyBoolean());
     }
 }

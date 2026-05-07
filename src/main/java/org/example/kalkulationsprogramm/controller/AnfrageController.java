@@ -13,6 +13,7 @@ import org.example.kalkulationsprogramm.domain.Mitarbeiter;
 import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageDokumentResponseDto;
 import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageErstellenDto;
 import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageResponseDto;
+import org.example.kalkulationsprogramm.dto.Anfrage.AnfrageSeiteResponseDto;
 import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeStatusKurzDto;
 import org.example.kalkulationsprogramm.dto.Produktkategroie.KategorieVorschlagDto;
 import org.example.kalkulationsprogramm.dto.Projekt.ProjektErstellenDto;
@@ -272,6 +273,11 @@ public class AnfrageController {
         }
     }
 
+    /**
+     * Backward-Compat-Variante: Wird aufgerufen, wenn kein {@code page}-Query-Param
+     * gesetzt ist (z.B. EmailCenter-Suche, TerminKalender, ProjektErstellenModal).
+     * Liefert weiterhin die ungeseiteten DTOs als flache Liste.
+     */
     @GetMapping
     public List<AnfrageResponseDto> liste(@RequestParam(required = false) Integer jahr,
             @RequestParam(required = false) String kundenname,
@@ -283,6 +289,26 @@ public class AnfrageController {
         // "kunde" als Alias für "kundenname" akzeptieren
         String effektiverKundenname = kundenname != null ? kundenname : kunde;
         return anfrageService.suche(jahr, effektiverKundenname, bauvorhaben, anfragesnummer, q, nurOhneProjekt);
+    }
+
+    /**
+     * Paginierte Variante: Wird aufgerufen, sobald der Aufrufer einen {@code page}-Param
+     * setzt (AnfrageEditor-Liste). Reduziert das DTO-Mapping von N auf {@code size}
+     * Anfragen pro Aufruf und entlastet damit den N+1-Pfad in {@code mapToDto}.
+     */
+    @GetMapping(params = "page")
+    public AnfrageSeiteResponseDto listeSeite(@RequestParam(required = false) Integer jahr,
+            @RequestParam(required = false) String kundenname,
+            @RequestParam(required = false) String kunde,
+            @RequestParam(required = false) String bauvorhaben,
+            @RequestParam(required = false) String anfragesnummer,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false, defaultValue = "false") boolean nurOhneProjekt,
+            @RequestParam(value = "page", defaultValue = "0") int page,
+            @RequestParam(value = "size", defaultValue = "12") int size) {
+        String effektiverKundenname = kundenname != null ? kundenname : kunde;
+        return anfrageService.sucheSeite(
+                jahr, effektiverKundenname, bauvorhaben, anfragesnummer, q, nurOhneProjekt, page, size);
     }
 
     @GetMapping("/jahre")
