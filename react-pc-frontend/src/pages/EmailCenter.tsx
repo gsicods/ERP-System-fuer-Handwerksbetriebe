@@ -2356,7 +2356,7 @@ export default function EmailCenter() {
                             <DroppableFolderButton
                                 folderId="offers"
                                 icon={FileText}
-                                label="Angebote"
+                                label="Anfragen"
                                 count={folderCounts.offers}
                                 isActive={activeFolder === 'offers'}
                                 onClick={() => setActiveFolder('offers')}
