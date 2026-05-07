@@ -43,11 +43,17 @@ public interface LieferantDokumentRepository extends JpaRepository<LieferantDoku
          */
         boolean existsByLieferantIdAndOriginalDateinameContaining(Long lieferantId, String filenameFragment);
 
-        @Query("SELECT d FROM LieferantDokument d LEFT JOIN d.geschaeftsdaten g " +
+        // FETCH auf geschaeftsdaten + attachment, weil das DTO-Mapping danach
+        // beide Felder anfasst (sonst N+1 ueber Treffer-Liste).
+        @Query("SELECT DISTINCT d FROM LieferantDokument d " +
+                        "LEFT JOIN FETCH d.geschaeftsdaten g " +
+                        "LEFT JOIN FETCH d.attachment a " +
                         "WHERE d.lieferant.id = :lieferantId " +
-                        "AND d.typ = 'LIEFERSCHEIN' " +
+                        "AND d.typ = org.example.kalkulationsprogramm.domain.LieferantDokumentTyp.LIEFERSCHEIN " +
                         "AND (LOWER(g.dokumentNummer) LIKE LOWER(CONCAT('%', :query, '%')) " +
-                        "OR LOWER(d.originalDateiname) LIKE LOWER(CONCAT('%', :query, '%')))")
+                        "OR LOWER(d.originalDateiname) LIKE LOWER(CONCAT('%', :query, '%')) " +
+                        "OR LOWER(a.originalFilename) LIKE LOWER(CONCAT('%', :query, '%'))) " +
+                        "ORDER BY d.uploadDatum DESC")
         List<LieferantDokument> searchLieferscheine(@Param("lieferantId") Long lieferantId,
                         @Param("query") String query);
 
