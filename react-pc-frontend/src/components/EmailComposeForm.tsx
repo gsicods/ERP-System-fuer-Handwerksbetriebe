@@ -243,6 +243,13 @@ export function EmailComposeForm({
     const [draftId, setDraftId] = useState<number | null>(initialDraftId ?? null);
     const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [draftSaving, setDraftSaving] = useState(false);
+    // Erst speichern, wenn der User selbst etwas ändert. Sonst legt das Öffnen aus
+    // dem DocumentEditor (mit prefilled initialBody/Subject/Recipient) sofort einen
+    // Entwurf an, der beim Abbrechen im E-Mail-Center verbleibt.
+    const userInteracted = useRef<boolean>(!!initialDraftId);
+    const markDirty = useCallback(() => {
+        userInteracted.current = true;
+    }, []);
 
     // CC State
     const [ccRecipients, setCcRecipients] = useState<string[]>([]);
@@ -309,6 +316,7 @@ export function EmailComposeForm({
 
     // Handle recipient change
     const handleRecipientChange = (val: string) => {
+        markDirty();
         setRecipient(val);
     };
 
@@ -316,6 +324,9 @@ export function EmailComposeForm({
     // DRAFT AUTO-SAVE (2s Debounce)
     // ═══════════════════════════════════════════════════════════════
     const saveDraft = useCallback(async () => {
+        // Kein Speichern, solange der User keine eigene Eingabe gemacht hat
+        // (verhindert Phantom-Entwürfe beim Öffnen aus dem DocumentEditor).
+        if (!userInteracted.current) return;
         const currentBody = editorRef.current?.innerHTML || body;
         // Nur speichern wenn mindestens Empfänger, Betreff oder Body vorhanden
         if (!recipient.trim() && !subject.trim() && !currentBody.trim()) return;
@@ -590,6 +601,7 @@ export function EmailComposeForm({
         }
         const dok = emailDokumente.find(d => String(d.id) === dokId);
         if (dok) {
+            markDirty();
             setSelectedDokument(dok);
             loadTemplate(dok);
         }
@@ -695,6 +707,7 @@ export function EmailComposeForm({
 
             // 4. Alles wieder zusammensetzen: Optimierter Text + Signatur + Zitat
             const newContent = `${htmlSuggestion}${sigHtml || signature}${quoteHtml ? '<br>' + quoteHtml : ''}`;
+            markDirty();
             setBody(newContent);
             if (editorRef.current) {
                 editorRef.current.innerHTML = newContent;
@@ -929,7 +942,7 @@ export function EmailComposeForm({
                                 <Select
                                     options={fromAddressOptions}
                                     value={fromAddress}
-                                    onChange={setFromAddress}
+                                    onChange={(val) => { markDirty(); setFromAddress(val); }}
                                     placeholder="Absender wählen"
                                     disabled={fromAddressOptions.length === 0}
                                 />
@@ -940,7 +953,7 @@ export function EmailComposeForm({
                                 <Input
                                     id="subject"
                                     value={subject}
-                                    onChange={(e) => setSubject(e.target.value)}
+                                    onChange={(e) => { markDirty(); setSubject(e.target.value); }}
                                     placeholder="Betreff eingeben"
                                     className="font-medium"
                                 />
@@ -970,11 +983,13 @@ export function EmailComposeForm({
                                                 key={idx}
                                                 value={cc}
                                                 onChange={(val) => {
+                                                    markDirty();
                                                     const newCcs = [...ccRecipients];
                                                     newCcs[idx] = val;
                                                     setCcRecipients(newCcs);
                                                 }}
                                                 onRemove={() => {
+                                                    markDirty();
                                                     const newCcs = [...ccRecipients];
                                                     newCcs.splice(idx, 1);
                                                     setCcRecipients(newCcs);
@@ -1154,7 +1169,7 @@ export function EmailComposeForm({
                                 className="email-compose-editor h-full min-h-[240px] rounded-xl border border-slate-200 p-4 outline-none overflow-auto focus-within:border-rose-300 [&_p]:min-h-[1.25em] [&_p]:my-0 [&>p+p]:mt-2 [&>div+p]:mt-2 [&>p+div]:mt-2"
                                 contentEditable
                                 suppressContentEditableWarning
-                                onInput={() => setBody(editorRef.current?.innerHTML || '')}
+                                onInput={() => { markDirty(); setBody(editorRef.current?.innerHTML || ''); }}
                             />
                         </div>
                     </div>
