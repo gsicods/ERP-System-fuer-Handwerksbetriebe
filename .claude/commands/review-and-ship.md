@@ -16,6 +16,28 @@ Du bist der **Implementations-Agent** im Window des Users. Deine Aufgabe ab jetz
 
 ---
 
+## 🚧 SCOPE-REGEL: Nur eigene Änderungen committen
+
+Es laufen oft **mehrere Claude-Instanzen parallel** im selben Repo. Du darfst deshalb **ausschließlich Dateien stagen und committen, die du in dieser Session selbst geändert hast**. Fremde Änderungen (von anderen Agents, vom User, von anderen Branches) bleiben im Working Tree liegen – nicht stagen, nicht reverten, nicht „aufräumen".
+
+**Vorgehen vor jedem `git add`:**
+
+1. Merke dir die Liste der Dateien, die DU geändert/erstellt hast (aus deinen eigenen Edit/Write-Calls).
+2. `git status` zeigt evtl. weitere Dateien – die ignorierst du.
+3. Stage **nur explizit per Pfad** (`git add <pfad1> <pfad2>`). **NIEMALS** `git add .`, `git add -A` oder `git add -u`.
+4. Vor Commit: `git diff --staged --name-only` – jede Datei darin muss aus deiner eigenen Änderungsliste stammen. Sonst unstage (`git restore --staged <pfad>`).
+
+**Ausnahme – Frontend-Build-Artefakte:** Wenn du Frontend-Code geändert und `npm run build` laufen lassen hast, darfst (und sollst) du die daraus entstehenden statischen Assets mit committen, damit der User sie nicht auf einem anderen Rechner neu bauen muss:
+
+- `src/main/resources/static/index.html`
+- `src/main/resources/static/assets/index-*.js`
+- `src/main/resources/static/assets/index-*.css`
+- analoge Dateien aus dem Mobile-Build, falls Mobile betroffen war
+
+Diese gelten als „deine eigenen Änderungen", solange sie aus deinem Build entstanden sind.
+
+---
+
 ## Phase 0: Review-Subagent im Hintergrund starten (NICHT WARTEN)
 
 **ZUERST** (bevor du irgendetwas anderes tust):
@@ -134,7 +156,13 @@ Commit-Nachricht ableiten aus `git diff main...HEAD --stat` und `git log --oneli
 
 ```bash
 git status
-git add -p   # interaktiv prüfen, oder gezielt nach Datei
+# NUR eigene Dateien stagen – siehe Scope-Regel oben.
+# Kein "git add .", kein "git add -A". Pfade explizit angeben:
+git add <pfad/zu/eigener/datei1> <pfad/zu/eigener/datei2> ...
+# Falls Frontend gebaut wurde, zusätzlich die Build-Artefakte:
+git add src/main/resources/static/index.html src/main/resources/static/assets/index-*.js src/main/resources/static/assets/index-*.css
+# Gegencheck: alles im Stage muss aus deiner eigenen Änderungsliste stammen.
+git diff --staged --name-only
 git commit -m "$(cat <<'EOF'
 <typ>(<scope>): <kurze Beschreibung>
 
@@ -190,3 +218,4 @@ Push: origin/<branch>
 - **Du wartest nicht** – während der Reviewer arbeitet, kompilierst und testest du.
 - **Jede Fix-Runde startet einen neuen Review-Lauf** – nicht nur einmal reviewen.
 - **Tests grün-fummeln ist verboten.** Root Cause finden, dann fixen.
+- **Nur eigene Dateien stagen** (parallele Sessions!) – Frontend-Build-Artefakte (`static/index.html`, `static/assets/index-*.js|css`) dürfen mit, damit der User auf anderem Rechner kein `npm run build` mehr braucht.
