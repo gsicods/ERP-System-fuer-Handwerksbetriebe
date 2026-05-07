@@ -516,6 +516,14 @@ export function EmailComposeForm({
 
     // Initialisierung - nur einmal beim Mount
     useEffect(() => {
+        // contentEditable: Enter soll konsistent <p> statt <div> erzeugen,
+        // damit Absätze sauber gestylt werden können (siehe Editor-CSS).
+        try {
+            document.execCommand('defaultParagraphSeparator', false, 'p');
+        } catch {
+            // execCommand ist deprecated – Fallback ist der Browser-Default.
+        }
+
         if (replyQuote) {
             // Antwort-Modus: Schreibbereich → Signatur → Zitat
             loadSignature().then(sig => {
@@ -1143,7 +1151,7 @@ export function EmailComposeForm({
                         <div className="flex-1 p-4 bg-white">
                             <div
                                 ref={editorRef}
-                                className="h-full min-h-[240px] rounded-xl border border-slate-200 p-4 outline-none overflow-auto focus-within:border-rose-300"
+                                className="email-compose-editor h-full min-h-[240px] rounded-xl border border-slate-200 p-4 outline-none overflow-auto focus-within:border-rose-300 [&_p]:min-h-[1.25em] [&_p]:my-0 [&>p+p]:mt-2 [&>div+p]:mt-2 [&>p+div]:mt-2"
                                 contentEditable
                                 suppressContentEditableWarning
                                 onInput={() => setBody(editorRef.current?.innerHTML || '')}
