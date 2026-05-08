@@ -14,6 +14,8 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { ImageViewer } from '../components/ui/image-viewer';
 import { useConfirm } from '../components/ui/confirm-dialog';
+import { StundenlohnHistorieList } from '../components/mitarbeiter/StundenlohnHistorieList';
+import { BeschaeftigungsWizard, type Beschaeftigungsart } from '../components/mitarbeiter/BeschaeftigungsWizard';
 
 // Interfaces
 interface Abteilung {
@@ -40,6 +42,11 @@ interface Mitarbeiter {
     abteilungNames: string | null;  // Komma-separiert
     loginToken: string | null;
     jahresUrlaub: number | null;
+    beschaeftigungsart?: Beschaeftigungsart | null;
+    beschaeftigungsartLabel?: string | null;
+    krankenkasseId?: number | null;
+    krankenkasseName?: string | null;
+    kinderlos?: boolean | null;
 }
 
 const QUALIFIKATIONEN = [
@@ -104,7 +111,7 @@ export default function MitarbeiterEditor() {
     const [previewDoc, setPreviewDoc] = useState<MitarbeiterDokument | null>(null);
 
     // Notizen States
-    const [activeTab, setActiveTab] = useState<'dokumente' | 'notizen' | 'lohnabrechnungen'>('dokumente');
+    const [activeTab, setActiveTab] = useState<'dokumente' | 'notizen' | 'lohnabrechnungen' | 'stundenlohn'>('dokumente');
     const [notizen, setNotizen] = useState<MitarbeiterNotiz[]>([]);
     const [showNotizModal, setShowNotizModal] = useState(false);
     const [neueNotiz, setNeueNotiz] = useState('');
@@ -695,11 +702,27 @@ export default function MitarbeiterEditor() {
                     <Receipt className="w-4 h-4 inline-block mr-2" />
                     Lohnabrechnungen
                 </button>
+                <button
+                    onClick={() => setActiveTab('stundenlohn')}
+                    className={`px-4 py-2 text-sm font-medium rounded-t-lg transition whitespace-nowrap ${activeTab === 'stundenlohn'
+                        ? "bg-rose-50 text-rose-700 border-b-2 border-rose-600"
+                        : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                        }`}
+                >
+                    <Euro className="w-4 h-4 inline-block mr-2" />
+                    Stundenlohn-Verlauf
+                </button>
             </div>
 
             {activeTab === 'dokumente' && <DokumenteList />}
             {activeTab === 'notizen' && <NotizenList />}
             {activeTab === 'lohnabrechnungen' && <LohnabrechnungenList />}
+            {activeTab === 'stundenlohn' && selectedMitarbeiter && (
+                <StundenlohnHistorieList
+                    mitarbeiterId={selectedMitarbeiter.id}
+                    onChange={() => loadMitarbeiter()}
+                />
+            )}
         </>
     );
 
@@ -910,7 +933,9 @@ export default function MitarbeiterEditor() {
                                     <Euro className="w-4 h-4" /> Vergütung
                                 </h3>
                                 <div className="space-y-1">
-                                    <Label htmlFor="stundenlohn" className="text-xs">Stundenlohn (€)</Label>
+                                    <Label htmlFor="stundenlohn" className="text-xs">
+                                        {formData.id ? 'Aktueller Stundenlohn (€)' : 'Stundenlohn (€) – startet ab Eintrittsdatum'}
+                                    </Label>
                                     <Input
                                         id="stundenlohn"
                                         type="number"
@@ -918,9 +943,30 @@ export default function MitarbeiterEditor() {
                                         value={formData.stundenlohn || ''}
                                         onChange={e => setFormData({ ...formData, stundenlohn: parseFloat(e.target.value) })}
                                         placeholder="25.00"
+                                        disabled={!!formData.id}
                                     />
+                                    {formData.id && (
+                                        <p className="text-xs text-slate-500">
+                                            Wird im Tab „Stundenlohn-Verlauf" gepflegt – auch rückwirkend für alte Zeitbuchungen.
+                                        </p>
+                                    )}
                                 </div>
                             </div>
+
+                            {/* Anstellungsart-Wizard (Beschäftigungsart, Krankenkasse, Kinder) */}
+                            <BeschaeftigungsWizard
+                                value={{
+                                    beschaeftigungsart: formData.beschaeftigungsart ?? null,
+                                    krankenkasseId: formData.krankenkasseId ?? null,
+                                    kinderlos: formData.kinderlos ?? null,
+                                }}
+                                onChange={v => setFormData({
+                                    ...formData,
+                                    beschaeftigungsart: v.beschaeftigungsart,
+                                    krankenkasseId: v.krankenkasseId,
+                                    kinderlos: v.kinderlos,
+                                })}
+                            />
 
                             {/* Status */}
                             <div className="space-y-3">

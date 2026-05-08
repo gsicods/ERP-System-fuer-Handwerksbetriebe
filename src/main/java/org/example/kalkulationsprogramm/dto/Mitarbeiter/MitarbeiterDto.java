@@ -25,4 +25,18 @@ public class MitarbeiterDto {
     private List<Long> abteilungIds;
     private String abteilungNames; // Komma-separierte Namen für Anzeige
     private String loginToken;
+
+    // Lohn-/Sozialversicherungs-Felder (siehe V297__mitarbeiter_sv_felder.sql).
+    private String beschaeftigungsart;
+    private String beschaeftigungsartLabel;
+    private Long krankenkasseId;
+    private String krankenkasseName;
+    private Boolean kinderlos;
+
+    // Geschaeftsfuehrer-Felder (siehe V300__mitarbeiter_geschaeftsfuehrer.sql).
+    // Wenn istGeschaeftsfuehrer=true, fliesst kalkulatorischerLohnMonat statt
+    // echtes Brutto in die Lohnsumme des Verrechnungslohn-Rechners ein.
+    private Boolean istGeschaeftsfuehrer;
+    private BigDecimal kalkulatorischerLohnMonat;
+    private BigDecimal geldwertVorteilMonat;
 }

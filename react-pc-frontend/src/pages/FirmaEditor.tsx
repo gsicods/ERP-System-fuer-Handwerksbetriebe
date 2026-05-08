@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Building2, Wallet, Users, Plus, Edit2, Trash2, Save, X, RefreshCw, FileText, Download, Calendar, Settings, ShieldCheck, AtSign } from 'lucide-react';
+import { Building2, Wallet, Users, Plus, Edit2, Trash2, Save, X, RefreshCw, FileText, Download, Calendar, Settings, ShieldCheck, AtSign, HeartPulse } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -14,6 +14,7 @@ import { useToast } from '../components/ui/toast';
 import { useConfirm } from '../components/ui/confirm-dialog';
 import { SystemSetupConfigurator } from '../components/settings/SystemSetupConfigurator';
 import { SteuerpruefungExport } from '../components/firma/SteuerpruefungExport';
+import { LohnStammdatenPanel } from '../components/firma/LohnStammdatenPanel';
 
 // Types
 interface Firmeninformation {
@@ -42,6 +43,20 @@ interface Firmeninformation {
     tageBisErsteMahnung: number;
     tageBisZweiteMahnung: number;
     mahnverfahrenNeuesZahlungszielTage: number;
+    gewerkId?: number | null;
+    gewerkName?: string | null;
+    bgName?: string | null;
+    bgSatzVorschlag?: number | null;
+    bgSatzOverride?: number | null;
+    bgSatzEffektiv?: number | null;
+}
+
+interface GewerkOption {
+    id: number;
+    name: string;
+    bgName: string;
+    bgSatzProzent: number;
+    aktiv: boolean;
 }
 
 interface Kostenstelle {
@@ -129,7 +144,7 @@ interface EmailAbsender {
     sortierung: number;
 }
 
-type ActiveTab = 'firma' | 'kostenstellen' | 'steuerberater' | 'absender' | 'systemsetup' | 'steuerpruefung';
+type ActiveTab = 'firma' | 'kostenstellen' | 'steuerberater' | 'absender' | 'systemsetup' | 'steuerpruefung' | 'lohn-stammdaten' | 'unfallversicherung';
 type SteuerberaterSubTab = 'kontakte' | 'lohnabrechnungen' | 'bwa';
 
 const KOSTENSTELLEN_TYP_OPTIONS = [
@@ -175,6 +190,9 @@ export default function FirmaEditor() {
     const [showAbsenderModal, setShowAbsenderModal] = useState(false);
     const [editingAbsender, setEditingAbsender] = useState<Partial<EmailAbsender> | null>(null);
 
+    // Gewerke (fuer Firma-Auswahl)
+    const [gewerke, setGewerke] = useState<GewerkOption[]>([]);
+
     // Load Firmeninformation
     const loadFirma = useCallback(async () => {
         try {
@@ -184,6 +202,18 @@ export default function FirmaEditor() {
             }
         } catch (e) {
             console.error('Fehler beim Laden der Firmendaten', e);
+        }
+    }, []);
+
+    // Load Gewerke (fuer Auswahl im Firma-Tab)
+    const loadGewerke = useCallback(async () => {
+        try {
+            const res = await fetch('/api/lohn-stammdaten/gewerke?nurAktive=true');
+            if (res.ok) {
+                setGewerke(await res.json());
+            }
+        } catch (e) {
+            console.error('Fehler beim Laden der Gewerke', e);
         }
     }, []);
 
@@ -286,9 +316,9 @@ export default function FirmaEditor() {
 
     useEffect(() => {
         setLoading(true);
-        Promise.all([loadFirma(), loadKostenstellen(), loadSteuerberater(), loadAbsender(), loadMeta()])
+        Promise.all([loadFirma(), loadKostenstellen(), loadSteuerberater(), loadAbsender(), loadMeta(), loadGewerke()])
             .finally(() => setLoading(false));
-    }, [loadFirma, loadKostenstellen, loadSteuerberater, loadAbsender, loadMeta]);
+    }, [loadFirma, loadKostenstellen, loadSteuerberater, loadAbsender, loadMeta, loadGewerke]);
 
     // Save Firmeninformation
     const saveFirma = async () => {
@@ -527,6 +557,30 @@ export default function FirmaEditor() {
                         >
                             <Wallet className="w-4 h-4 inline-block mr-2" />
                             Kostenstellen ({kostenstellen.length})
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('lohn-stammdaten')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-t-lg transition",
+                                activeTab === 'lohn-stammdaten'
+                                    ? "bg-rose-50 text-rose-700 border-b-2 border-rose-600"
+                                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                            )}
+                        >
+                            <HeartPulse className="w-4 h-4 inline-block mr-2" />
+                            Lohn-Stammdaten
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('unfallversicherung')}
+                            className={cn(
+                                "px-4 py-2 text-sm font-medium rounded-t-lg transition",
+                                activeTab === 'unfallversicherung'
+                                    ? "bg-rose-50 text-rose-700 border-b-2 border-rose-600"
+                                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                            )}
+                        >
+                            <ShieldCheck className="w-4 h-4 inline-block mr-2" />
+                            Unfallversicherung
                         </button>
                         <button
                             onClick={() => setActiveTab('steuerberater')}
@@ -1257,6 +1311,82 @@ export default function FirmaEditor() {
 
                     {activeTab === 'steuerpruefung' && (
                         <SteuerpruefungExport />
+                    )}
+
+                    {activeTab === 'lohn-stammdaten' && (
+                        <Card className="p-6">
+                            <LohnStammdatenPanel />
+                        </Card>
+                    )}
+
+                    {activeTab === 'unfallversicherung' && firma && (
+                        <Card className="p-6 space-y-4">
+                            <div>
+                                <h3 className="text-lg font-semibold text-slate-900">Gewerk &amp; Unfallversicherung</h3>
+                                <p className="text-sm text-slate-500 mt-1">
+                                    Wähle dein Gewerk – wir schlagen dir die passende Berufsgenossenschaft (BG) und einen
+                                    Standard-Beitragssatz vor. Wenn du den genauen Satz aus deinem Beitragsbescheid kennst,
+                                    trägst du ihn unten ein.
+                                </p>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <Label>Gewerk</Label>
+                                    <Select
+                                        value={firma.gewerkId ? String(firma.gewerkId) : ''}
+                                        onChange={(v: string) => {
+                                            const id = v ? Number(v) : null;
+                                            const g = gewerke.find(x => x.id === id);
+                                            setFirma({
+                                                ...firma,
+                                                gewerkId: id,
+                                                gewerkName: g?.name ?? null,
+                                                bgName: g?.bgName ?? null,
+                                                bgSatzVorschlag: g?.bgSatzProzent ?? null,
+                                            });
+                                        }}
+                                        options={[
+                                            { value: '', label: '— Bitte wählen —' },
+                                            ...gewerke.map(g => ({ value: String(g.id), label: `${g.name} (${g.bgName})` })),
+                                        ]}
+                                    />
+                                </div>
+                                <div>
+                                    <Label>Berufsgenossenschaft</Label>
+                                    <Input value={firma.bgName ?? ''} disabled placeholder="— wird durch Gewerk gesetzt —" />
+                                </div>
+                                <div>
+                                    <Label>BG-Satz (Vorschlag)</Label>
+                                    <Input
+                                        value={firma.bgSatzVorschlag != null ? `${Number(firma.bgSatzVorschlag).toFixed(2)} %` : ''}
+                                        disabled
+                                        placeholder="—"
+                                    />
+                                </div>
+                                <div>
+                                    <Label>Tatsächlicher BG-Satz (aus Bescheid)</Label>
+                                    <Input
+                                        type="number"
+                                        step="0.01"
+                                        min={0}
+                                        value={firma.bgSatzOverride ?? ''}
+                                        onChange={e => setFirma({ ...firma, bgSatzOverride: e.target.value === '' ? null : parseFloat(e.target.value) })}
+                                        placeholder={firma.bgSatzVorschlag != null ? `Standard ${Number(firma.bgSatzVorschlag).toFixed(2)} %` : 'optional'}
+                                    />
+                                    <p className="text-xs text-slate-500 mt-1">Leer lassen, um den Standard-Satz zu nutzen.</p>
+                                </div>
+                            </div>
+                            <div className="pt-4 border-t flex justify-end">
+                                <Button
+                                    onClick={saveFirma}
+                                    disabled={saving}
+                                    className="bg-rose-600 text-white hover:bg-rose-700"
+                                >
+                                    <Save className="w-4 h-4 mr-2" />
+                                    {saving ? 'Speichert...' : 'Speichern'}
+                                </Button>
+                            </div>
+                        </Card>
                     )}
                 </>
             )}

@@ -2,16 +2,22 @@ package org.example.kalkulationsprogramm.service;
 
 import lombok.RequiredArgsConstructor;
 import org.example.kalkulationsprogramm.domain.Abteilung;
+import org.example.kalkulationsprogramm.domain.Beschaeftigungsart;
 import org.example.kalkulationsprogramm.domain.DokumentGruppe;
+import org.example.kalkulationsprogramm.domain.Krankenkasse;
 import org.example.kalkulationsprogramm.domain.Mitarbeiter;
 import org.example.kalkulationsprogramm.domain.MitarbeiterDokument;
+import org.example.kalkulationsprogramm.domain.MitarbeiterStundenlohn;
 import org.example.kalkulationsprogramm.domain.Qualifikation;
 import org.example.kalkulationsprogramm.dto.Mitarbeiter.MitarbeiterDokumentResponseDto;
 import org.example.kalkulationsprogramm.dto.Mitarbeiter.MitarbeiterDto;
 import org.example.kalkulationsprogramm.dto.Mitarbeiter.MitarbeiterErstellenDto;
+import org.example.kalkulationsprogramm.dto.Mitarbeiter.MitarbeiterStundenlohnDto;
 import org.example.kalkulationsprogramm.repository.AbteilungRepository;
+import org.example.kalkulationsprogramm.repository.KrankenkasseRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterDokumentRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
+import org.example.kalkulationsprogramm.repository.MitarbeiterStundenlohnRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +52,8 @@ public class MitarbeiterService {
     private final MitarbeiterDokumentRepository dokumentRepository;
     private final org.example.kalkulationsprogramm.repository.MitarbeiterNotizRepository notizRepository;
     private final AbteilungRepository abteilungRepository;
+    private final KrankenkasseRepository krankenkasseRepository;
+    private final MitarbeiterStundenlohnRepository stundenlohnRepository;
 
     @Value("${file.upload-dir:uploads}")
     private String uploadDir;
@@ -93,6 +101,35 @@ public class MitarbeiterService {
         entity.setEintrittsdatum(dto.getEintrittsdatum());
         entity.setJahresUrlaub(dto.getJahresUrlaub());
         entity.setAktiv(dto.getAktiv() != null ? dto.getAktiv() : true);
+
+        // Lohn-/SV-Felder
+        if (dto.getBeschaeftigungsart() != null && !dto.getBeschaeftigungsart().isBlank()) {
+            try {
+                entity.setBeschaeftigungsart(Beschaeftigungsart.valueOf(dto.getBeschaeftigungsart()));
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalArgumentException("Unbekannte Beschaeftigungsart: " + dto.getBeschaeftigungsart());
+            }
+        } else if (entity.getBeschaeftigungsart() == null) {
+            entity.setBeschaeftigungsart(Beschaeftigungsart.REGULAER);
+        }
+        if (dto.getKrankenkasseId() != null) {
+            Krankenkasse kk = krankenkasseRepository.findById(dto.getKrankenkasseId())
+                    .orElseThrow(() -> new IllegalArgumentException("Krankenkasse nicht gefunden: " + dto.getKrankenkasseId()));
+            entity.setKrankenkasse(kk);
+        } else {
+            entity.setKrankenkasse(null);
+        }
+        entity.setKinderlos(Boolean.TRUE.equals(dto.getKinderlos()));
+
+        // Geschaeftsfuehrer-Felder
+        entity.setIstGeschaeftsfuehrer(Boolean.TRUE.equals(dto.getIstGeschaeftsfuehrer()));
+        if (Boolean.TRUE.equals(dto.getIstGeschaeftsfuehrer())) {
+            entity.setKalkulatorischerLohnMonat(dto.getKalkulatorischerLohnMonat());
+            entity.setGeldwertVorteilMonat(dto.getGeldwertVorteilMonat());
+        } else {
+            entity.setKalkulatorischerLohnMonat(null);
+            entity.setGeldwertVorteilMonat(null);
+        }
 
         // Abteilungen zuweisen (N:M)
         if (dto.getAbteilungIds() != null && !dto.getAbteilungIds().isEmpty()) {
@@ -187,6 +224,22 @@ public class MitarbeiterService {
                     .map(Abteilung::getName)
                     .collect(Collectors.joining(", ")));
         }
+
+        // Lohn-/SV-Felder
+        if (m.getBeschaeftigungsart() != null) {
+            dto.setBeschaeftigungsart(m.getBeschaeftigungsart().name());
+            dto.setBeschaeftigungsartLabel(m.getBeschaeftigungsart().getBezeichnung());
+        }
+        if (m.getKrankenkasse() != null) {
+            dto.setKrankenkasseId(m.getKrankenkasse().getId());
+            dto.setKrankenkasseName(m.getKrankenkasse().getName());
+        }
+        dto.setKinderlos(Boolean.TRUE.equals(m.getKinderlos()));
+
+        dto.setIstGeschaeftsfuehrer(Boolean.TRUE.equals(m.getIstGeschaeftsfuehrer()));
+        dto.setKalkulatorischerLohnMonat(m.getKalkulatorischerLohnMonat());
+        dto.setGeldwertVorteilMonat(m.getGeldwertVorteilMonat());
+
         return dto;
     }
 
@@ -272,5 +325,88 @@ public class MitarbeiterService {
     @Transactional
     public void deleteNotiz(Long notizId) {
         notizRepository.deleteById(notizId);
+    }
+
+    // ==================== STUNDENLOHN-HISTORIE ====================
+
+    @Transactional(readOnly = true)
+    public List<MitarbeiterStundenlohnDto> listStundenloehne(Long mitarbeiterId) {
+        return stundenlohnRepository.findByMitarbeiterIdOrderByGueltigAbDesc(mitarbeiterId).stream()
+                .map(MitarbeiterService::mapStundenlohnDto)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional(readOnly = true)
+    public java.math.BigDecimal getStundenlohnAm(Long mitarbeiterId, java.time.LocalDate stichtag) {
+        return stundenlohnRepository
+                .findFirstByMitarbeiterIdAndGueltigAbLessThanEqualOrderByGueltigAbDesc(mitarbeiterId, stichtag)
+                .map(MitarbeiterStundenlohn::getStundenlohn)
+                .orElse(null);
+    }
+
+    @Transactional
+    public MitarbeiterStundenlohnDto addStundenlohn(Long mitarbeiterId, MitarbeiterStundenlohnDto dto) {
+        Mitarbeiter mitarbeiter = repository.findById(mitarbeiterId)
+                .orElseThrow(() -> new IllegalArgumentException("Mitarbeiter nicht gefunden: " + mitarbeiterId));
+        validateStundenlohnDto(dto);
+        MitarbeiterStundenlohn entity = new MitarbeiterStundenlohn();
+        entity.setMitarbeiter(mitarbeiter);
+        entity.setStundenlohn(dto.getStundenlohn());
+        entity.setGueltigAb(dto.getGueltigAb());
+        entity.setBemerkung(dto.getBemerkung());
+        MitarbeiterStundenlohn saved = stundenlohnRepository.save(entity);
+        syncAktuellenStundenlohn(mitarbeiter);
+        return mapStundenlohnDto(saved);
+    }
+
+    @Transactional
+    public MitarbeiterStundenlohnDto updateStundenlohn(Long eintragId, MitarbeiterStundenlohnDto dto) {
+        MitarbeiterStundenlohn entity = stundenlohnRepository.findById(eintragId)
+                .orElseThrow(() -> new IllegalArgumentException("Stundenlohn-Eintrag nicht gefunden: " + eintragId));
+        validateStundenlohnDto(dto);
+        entity.setStundenlohn(dto.getStundenlohn());
+        entity.setGueltigAb(dto.getGueltigAb());
+        entity.setBemerkung(dto.getBemerkung());
+        MitarbeiterStundenlohn saved = stundenlohnRepository.save(entity);
+        syncAktuellenStundenlohn(entity.getMitarbeiter());
+        return mapStundenlohnDto(saved);
+    }
+
+    @Transactional
+    public void deleteStundenlohn(Long eintragId) {
+        MitarbeiterStundenlohn entity = stundenlohnRepository.findById(eintragId)
+                .orElseThrow(() -> new IllegalArgumentException("Stundenlohn-Eintrag nicht gefunden: " + eintragId));
+        Mitarbeiter mitarbeiter = entity.getMitarbeiter();
+        stundenlohnRepository.delete(entity);
+        syncAktuellenStundenlohn(mitarbeiter);
+    }
+
+    private void syncAktuellenStundenlohn(Mitarbeiter mitarbeiter) {
+        java.math.BigDecimal aktuell = stundenlohnRepository
+                .findFirstByMitarbeiterIdAndGueltigAbLessThanEqualOrderByGueltigAbDesc(
+                        mitarbeiter.getId(), java.time.LocalDate.now())
+                .map(MitarbeiterStundenlohn::getStundenlohn)
+                .orElse(null);
+        mitarbeiter.setStundenlohn(aktuell);
+        repository.save(mitarbeiter);
+    }
+
+    private static void validateStundenlohnDto(MitarbeiterStundenlohnDto dto) {
+        if (dto.getStundenlohn() == null || dto.getStundenlohn().signum() < 0) {
+            throw new IllegalArgumentException("Stundenlohn ist Pflicht und darf nicht negativ sein.");
+        }
+        if (dto.getGueltigAb() == null) {
+            throw new IllegalArgumentException("Gueltig-ab-Datum ist Pflicht.");
+        }
+    }
+
+    private static MitarbeiterStundenlohnDto mapStundenlohnDto(MitarbeiterStundenlohn e) {
+        MitarbeiterStundenlohnDto dto = new MitarbeiterStundenlohnDto();
+        dto.setId(e.getId());
+        dto.setMitarbeiterId(e.getMitarbeiter() != null ? e.getMitarbeiter().getId() : null);
+        dto.setStundenlohn(e.getStundenlohn());
+        dto.setGueltigAb(e.getGueltigAb());
+        dto.setBemerkung(e.getBemerkung());
+        return dto;
     }
 }

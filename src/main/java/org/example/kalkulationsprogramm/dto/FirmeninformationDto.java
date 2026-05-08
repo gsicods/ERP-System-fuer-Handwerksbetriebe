@@ -2,6 +2,8 @@ package org.example.kalkulationsprogramm.dto;
 
 import lombok.Data;
 
+import java.math.BigDecimal;
+
 @Data
 public class FirmeninformationDto {
     private Long id;
@@ -31,4 +33,12 @@ public class FirmeninformationDto {
     private int tageBisErsteMahnung;
     private int tageBisZweiteMahnung;
     private int mahnverfahrenNeuesZahlungszielTage;
+
+    // Gewerk + Unfallversicherung
+    private Long gewerkId;
+    private String gewerkName;
+    private String bgName;
+    private BigDecimal bgSatzVorschlag;   // Default vom Gewerk
+    private BigDecimal bgSatzOverride;    // Manuelle Ueberschreibung aus dem Beitragsbescheid
+    private BigDecimal bgSatzEffektiv;    // override > vorschlag (was die Berechnung tatsaechlich nutzt)
 }

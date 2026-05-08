@@ -54,6 +54,26 @@ public class Mitarbeiter {
     @Column(precision = 10, scale = 2)
     private BigDecimal stundenlohn;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "beschaeftigungsart", nullable = false)
+    private Beschaeftigungsart beschaeftigungsart = Beschaeftigungsart.REGULAER;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "krankenkasse_id")
+    private Krankenkasse krankenkasse;
+
+    @Column(nullable = false)
+    private Boolean kinderlos = false;
+
+    @Column(name = "ist_geschaeftsfuehrer", nullable = false)
+    private Boolean istGeschaeftsfuehrer = false;
+
+    @Column(name = "kalkulatorischer_lohn_monat", precision = 12, scale = 2)
+    private BigDecimal kalkulatorischerLohnMonat;
+
+    @Column(name = "geldwert_vorteil_monat", precision = 12, scale = 2)
+    private BigDecimal geldwertVorteilMonat;
+
     @Column
     private Integer jahresUrlaub;
 

@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.math.BigDecimal;
+
 /**
  * Singleton-Entity für Firmenstammdaten.
  * Enthält alle wichtigen Informationen über die eigene Firma
@@ -74,4 +76,14 @@ public class Firmeninformation {
     // Neues Zahlungsziel, das jede ausgeloeste Mahnung dem Kunden setzt.
     @Column(name = "mahnverfahren_neues_zahlungsziel_tage", nullable = false)
     private int mahnverfahrenNeuesZahlungszielTage = 7;
+
+    // Gewerk der Firma - liefert den Default-BG-Satz (Unfallversicherung).
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "gewerk_id")
+    private Gewerk gewerk;
+
+    // Tatsaechlicher BG-Satz aus dem Beitragsbescheid. Wenn NULL, gilt der
+    // Default-Satz aus dem zugeordneten Gewerk.
+    @Column(name = "bg_satz_override", precision = 5, scale = 2)
+    private BigDecimal bgSatzOverride;
 }

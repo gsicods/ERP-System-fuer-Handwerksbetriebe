@@ -116,4 +116,40 @@ public class MitarbeiterController {
         service.deleteNotiz(notizId);
         return ResponseEntity.noContent().build();
     }
+
+    // ==================== STUNDENLOHN-HISTORIE ENDPOINTS ====================
+
+    @GetMapping("/{id}/stundenlohn-historie")
+    public ResponseEntity<List<org.example.kalkulationsprogramm.dto.Mitarbeiter.MitarbeiterStundenlohnDto>> listStundenloehne(
+            @PathVariable Long id) {
+        return ResponseEntity.ok(service.listStundenloehne(id));
+    }
+
+    @PostMapping("/{id}/stundenlohn-historie")
+    public ResponseEntity<?> addStundenlohn(
+            @PathVariable Long id,
+            @jakarta.validation.Valid @RequestBody org.example.kalkulationsprogramm.dto.Mitarbeiter.MitarbeiterStundenlohnDto dto) {
+        try {
+            return ResponseEntity.ok(service.addStundenlohn(id, dto));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("message", ex.getMessage()));
+        }
+    }
+
+    @PutMapping("/stundenlohn-historie/{eintragId}")
+    public ResponseEntity<?> updateStundenlohn(
+            @PathVariable Long eintragId,
+            @jakarta.validation.Valid @RequestBody org.example.kalkulationsprogramm.dto.Mitarbeiter.MitarbeiterStundenlohnDto dto) {
+        try {
+            return ResponseEntity.ok(service.updateStundenlohn(eintragId, dto));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("message", ex.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/stundenlohn-historie/{eintragId}")
+    public ResponseEntity<Void> deleteStundenlohn(@PathVariable Long eintragId) {
+        service.deleteStundenlohn(eintragId);
+        return ResponseEntity.noContent().build();
+    }
 }

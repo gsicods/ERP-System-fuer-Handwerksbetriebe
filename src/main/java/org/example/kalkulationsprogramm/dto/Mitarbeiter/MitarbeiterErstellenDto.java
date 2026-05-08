@@ -22,4 +22,10 @@ public class MitarbeiterErstellenDto {
     private LocalDate eintrittsdatum;
     private Boolean aktiv;
     private List<Long> abteilungIds;
+    private String beschaeftigungsart;
+    private Long krankenkasseId;
+    private Boolean kinderlos;
+    private Boolean istGeschaeftsfuehrer;
+    private BigDecimal kalkulatorischerLohnMonat;
+    private BigDecimal geldwertVorteilMonat;
 }

@@ -2,8 +2,10 @@ package org.example.kalkulationsprogramm.service;
 
 import lombok.RequiredArgsConstructor;
 import org.example.kalkulationsprogramm.domain.Firmeninformation;
+import org.example.kalkulationsprogramm.domain.Gewerk;
 import org.example.kalkulationsprogramm.dto.FirmeninformationDto;
 import org.example.kalkulationsprogramm.repository.FirmeninformationRepository;
+import org.example.kalkulationsprogramm.repository.GewerkRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -12,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class FirmeninformationService {
 
     private final FirmeninformationRepository repository;
+    private final GewerkRepository gewerkRepository;
 
     @Transactional(readOnly = true)
     public FirmeninformationDto getFirmeninformation() {
@@ -48,6 +51,15 @@ public class FirmeninformationService {
         fi.setTageBisErsteMahnung(positivOrDefault(dto.getTageBisErsteMahnung(), 14));
         fi.setTageBisZweiteMahnung(positivOrDefault(dto.getTageBisZweiteMahnung(), 21));
         fi.setMahnverfahrenNeuesZahlungszielTage(positivOrDefault(dto.getMahnverfahrenNeuesZahlungszielTage(), 7));
+
+        if (dto.getGewerkId() != null) {
+            Gewerk g = gewerkRepository.findById(dto.getGewerkId())
+                    .orElseThrow(() -> new IllegalArgumentException("Gewerk nicht gefunden: " + dto.getGewerkId()));
+            fi.setGewerk(g);
+        } else {
+            fi.setGewerk(null);
+        }
+        fi.setBgSatzOverride(dto.getBgSatzOverride());
 
         fi = repository.save(fi);
         return toDto(fi);
@@ -92,6 +104,19 @@ public class FirmeninformationService {
         dto.setTageBisErsteMahnung(fi.getTageBisErsteMahnung());
         dto.setTageBisZweiteMahnung(fi.getTageBisZweiteMahnung());
         dto.setMahnverfahrenNeuesZahlungszielTage(fi.getMahnverfahrenNeuesZahlungszielTage());
+        if (fi.getGewerk() != null) {
+            Gewerk g = fi.getGewerk();
+            dto.setGewerkId(g.getId());
+            dto.setGewerkName(g.getName());
+            dto.setBgName(g.getBgName());
+            dto.setBgSatzVorschlag(g.getBgSatzProzent());
+        }
+        dto.setBgSatzOverride(fi.getBgSatzOverride());
+        if (fi.getBgSatzOverride() != null) {
+            dto.setBgSatzEffektiv(fi.getBgSatzOverride());
+        } else if (fi.getGewerk() != null) {
+            dto.setBgSatzEffektiv(fi.getGewerk().getBgSatzProzent());
+        }
         return dto;
     }
 }
