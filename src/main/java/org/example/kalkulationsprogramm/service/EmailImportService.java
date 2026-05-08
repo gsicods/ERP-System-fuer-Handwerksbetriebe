@@ -19,6 +19,7 @@ import org.example.kalkulationsprogramm.domain.EmailDirection;
 import org.example.kalkulationsprogramm.domain.EmailProcessingStatus;
 import org.example.kalkulationsprogramm.domain.EmailZuordnungTyp;
 import org.example.kalkulationsprogramm.repository.EmailAttachmentRepository;
+import org.example.kalkulationsprogramm.repository.EmailBlacklistRepository;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -69,6 +70,7 @@ public class EmailImportService {
     private final LieferantenRepository lieferantenRepository;
     private final SystemSettingsService systemSettingsService;
     private final OutOfOfficeResponder outOfOfficeResponder;
+    private final EmailBlacklistRepository emailBlacklistRepository;
 
     // Self-Injection für transactional proxy: importMessage muss durch den
     // Spring-Proxy laufen, damit @Transactional pro Mail eine eigene
@@ -298,6 +300,20 @@ public class EmailImportService {
             } else {
                 email.setFromAddress(fromArr[0].toString());
             }
+        }
+
+        // Blacklist-Check: Gesperrte Absender werden bereits beim Import komplett
+        // verworfen — keine DB-Zeile, keine Spam-Klassifikation, kein ML-Training.
+        // Damit pollutet der Absender weder Posteingang noch Bayes-Modell.
+        // Hinweis: Mail bleibt auf dem IMAP-Server liegen (Folder ist READ_ONLY);
+        // der Scheduler-Tick wiederholt den Check pro Mail. Daher debug-Level,
+        // damit kein Log-Müll entsteht. Subject wird bewusst weggelassen (DSGVO).
+        if (direction == EmailDirection.IN && email.getFromAddress() != null
+                && emailBlacklistRepository.existsByEmailAddress(
+                        email.getFromAddress().toLowerCase(java.util.Locale.ROOT))) {
+            log.debug("[EmailImport] Absender {} ist gesperrt – Mail wird verworfen (kein DB-Eintrag)",
+                    email.getFromAddress());
+            return false;
         }
 
         // Empfänger

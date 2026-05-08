@@ -33,6 +33,7 @@ class EmailImportServiceTest {
     @Mock private SpamFilterService spamFilterService;
     @Mock private SteuerberaterEmailProcessingService steuerberaterEmailProcessingService;
     @Mock private LieferantenRepository lieferantenRepository;
+    @Mock private EmailBlacklistRepository emailBlacklistRepository;
 
     @InjectMocks
     private EmailImportService service;
@@ -455,6 +456,100 @@ class EmailImportServiceTest {
             verify(emailRepository, atLeastOnce()).save(argThat(email ->
                     email.getImapUid() != null && email.getImapUid() == 146693L
             ));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 2.3.6c Gesperrte Absender (Blacklist) werden beim Import komplett verworfen
+    // Bug: Beim "Absender sperren" wurden Mails als Spam markiert → Bayes-Modell
+    //      wurde verfälscht. Fix: Blacklist-Treffer skippt Import vollständig.
+    // ═══════════════════════════════════════════════════════════════
+
+    @Nested
+    class BlacklistSkip {
+
+        private IMAPFolder mockFolder;
+        private Message mockMessage;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            mockFolder = mock(IMAPFolder.class);
+            mockMessage = mock(Message.class);
+
+            lenient().when(mockMessage.getHeader("Message-ID"))
+                    .thenReturn(new String[]{"<spam@evil.example.com>"});
+            lenient().when(mockFolder.getUID(mockMessage)).thenReturn(42L);
+            lenient().when(mockFolder.getFullName()).thenReturn("INBOX");
+            lenient().when(mockMessage.getFrom()).thenReturn(new Address[]{
+                    new InternetAddress("blocked@evil.example.com")
+            });
+            lenient().when(mockMessage.getSubject()).thenReturn("You won the lottery");
+            lenient().when(mockMessage.getRecipients(any())).thenReturn(null);
+            lenient().when(mockMessage.getHeader(any())).thenReturn(null);
+            lenient().when(mockMessage.getHeader("Message-ID"))
+                    .thenReturn(new String[]{"<spam@evil.example.com>"});
+            lenient().when(emailRepository.existsByMessageId(any())).thenReturn(false);
+        }
+
+        @Test
+        void gesperrterAbsenderWirdNichtImportiert() throws Exception {
+            // Absender steht auf der Blacklist (lowercase-Lookup)
+            when(emailBlacklistRepository.existsByEmailAddress("blocked@evil.example.com"))
+                    .thenReturn(true);
+
+            boolean imported = service.importMessage(mockMessage, mockFolder, EmailDirection.IN);
+
+            // Mail wird verworfen, kein DB-Eintrag, kein Spam-Filter, kein Auto-Assign.
+            // Genau diese Eigenschaften sind der Kern des Bugfixes — würden sie wieder
+            // verloren gehen, würde Bestandsdaten + Bayes-Modell verschmutzt.
+            assertThat(imported).isFalse();
+            verify(emailRepository, never()).save(any(Email.class));
+            verify(spamFilterService, never()).analyzeAndMarkSpam(any(Email.class));
+            verify(emailAutoAssignmentService, never()).tryAutoAssign(any(Email.class));
+        }
+
+        @Test
+        void nichtGesperrterAbsenderWirdNormalImportiert() throws Exception {
+            when(emailBlacklistRepository.existsByEmailAddress(any())).thenReturn(false);
+            when(emailRepository.save(any(Email.class))).thenAnswer(inv -> {
+                Email e = inv.getArgument(0);
+                e.setId(99L);
+                return e;
+            });
+            lenient().when(lieferantenRepository.findByEmailDomain(any()))
+                    .thenReturn(Collections.emptyList());
+            lenient().when(lieferantenRepository.existsByEmailDomain(any())).thenReturn(false);
+            lenient().when(steuerberaterEmailProcessingService.processSteuerberaterEmail(any()))
+                    .thenReturn(false);
+            lenient().when(mockMessage.getContent()).thenReturn("body");
+            lenient().when(mockMessage.getContentType()).thenReturn("text/plain");
+
+            boolean imported = service.importMessage(mockMessage, mockFolder, EmailDirection.IN);
+
+            assertThat(imported).isTrue();
+            verify(emailRepository, atLeastOnce()).save(any(Email.class));
+        }
+
+        @Test
+        void blacklistCheckGreiftNichtFuerAusgehendeMails() throws Exception {
+            // Eigene gesendete Mails dürfen niemals durch die Blacklist verworfen werden
+            // (sonst würde z.B. eine Antwort an einen geblockten Absender im "Gesendet"-
+            // Ordner verschwinden).
+            when(emailRepository.save(any(Email.class))).thenAnswer(inv -> {
+                Email e = inv.getArgument(0);
+                e.setId(100L);
+                return e;
+            });
+            lenient().when(steuerberaterEmailProcessingService.processSteuerberaterEmail(any()))
+                    .thenReturn(false);
+            lenient().when(mockMessage.getContent()).thenReturn("body");
+            lenient().when(mockMessage.getContentType()).thenReturn("text/plain");
+
+            boolean imported = service.importMessage(mockMessage, mockFolder, EmailDirection.OUT);
+
+            assertThat(imported).isTrue();
+            // Blacklist-Repository darf für ausgehende Mails gar nicht erst gefragt werden
+            verify(emailBlacklistRepository, never()).existsByEmailAddress(any());
         }
     }
 

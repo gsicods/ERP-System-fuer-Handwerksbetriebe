@@ -194,7 +194,7 @@ class UnifiedEmailControllerTest {
     class BlockSender {
 
         @Test
-        @DisplayName("Absender sperren und alle E-Mails als Spam markieren")
+        @DisplayName("Absender sperren und alle bestehenden E-Mails löschen (kein Spam-Marking)")
         void blockSenderSuccess() throws Exception {
             Email email = createTestEmail(1L, "Test", "boese@example.com");
             given(emailRepository.findById(1L)).willReturn(Optional.of(email));
@@ -204,10 +204,14 @@ class UnifiedEmailControllerTest {
 
             mockMvc.perform(post("/api/emails/1/block-sender"))
                     .andExpect(status().isOk())
-                    .andExpect(content().string(org.hamcrest.Matchers.containsString("blocked")));
+                    .andExpect(content().string(org.hamcrest.Matchers.containsString("blocked")))
+                    .andExpect(content().string(org.hamcrest.Matchers.containsString("deleted")));
 
             verify(emailBlacklistRepository).save(any(EmailBlacklistEntry.class));
-            verify(emailRepository).saveAll(anyList());
+            verify(emailImportService).deleteEmailFromServer(email);
+            verify(emailRepository).deleteAll(anyList());
+            // Wichtig: KEIN Spam-Marking — würde sonst das Bayes-Modell verfälschen.
+            verify(emailRepository, never()).saveAll(anyList());
         }
 
         @Test
@@ -228,6 +232,23 @@ class UnifiedEmailControllerTest {
 
             mockMvc.perform(post("/api/emails/999/block-sender"))
                     .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("Absender sperren: Idempotent — zweiter Aufruf legt keine Duplikate an")
+        void blockSenderIdempotent() throws Exception {
+            Email email = createTestEmail(1L, "Test", "boese@example.com");
+            given(emailRepository.findById(1L)).willReturn(Optional.of(email));
+            // Absender bereits geblockt
+            given(emailBlacklistRepository.existsByEmailAddress("boese@example.com")).willReturn(true);
+            given(emailRepository.findByFromAddressIgnoreCase("boese@example.com"))
+                    .willReturn(Collections.emptyList());
+
+            mockMvc.perform(post("/api/emails/1/block-sender"))
+                    .andExpect(status().isOk());
+
+            // Kein zweiter Blacklist-Eintrag (Duplicate-Key wäre die Folge)
+            verify(emailBlacklistRepository, never()).save(any(EmailBlacklistEntry.class));
         }
     }
 

@@ -1180,8 +1180,8 @@ export default function EmailCenter() {
 
         const count = ids.length;
         const message = count === 1
-            ? `Möchten Sie den Absender "${selectedEmail?.fromAddress}" wirklich sperren?\nAlle E-Mails dieses Absenders werden in Spam verschoben.`
-            : `Möchten Sie die Absender von ${count} E-Mails sperren?\nAlle E-Mails dieser Absender werden in Spam verschoben.`;
+            ? `Möchten Sie den Absender "${selectedEmail?.fromAddress}" wirklich sperren?\nAlle bisherigen E-Mails dieses Absenders werden gelöscht und neue Nachrichten zukünftig komplett blockiert.`
+            : `Möchten Sie die Absender von ${count} E-Mails sperren?\nAlle bisherigen E-Mails dieser Absender werden gelöscht und neue Nachrichten zukünftig komplett blockiert.`;
         if (!await confirmDialog({ title: "Absender sperren", message, variant: "danger", confirmLabel: "Sperren" })) return;
 
         // Optimistic: remove from list immediately

@@ -213,25 +213,42 @@ public class UnifiedEmailController {
             return ResponseEntity.badRequest().body("Email has no sender");
         }
 
-        sender = sender.toLowerCase();
+        sender = sender.toLowerCase(java.util.Locale.ROOT);
 
-        // 1. Add to Blacklist
+        // 1. Auf Blacklist setzen (zukünftige Mails werden bereits beim IMAP-Import
+        //    verworfen – siehe EmailImportService#importMessage).
+        //    Wichtig: ZUERST blacklisten + flush, BEVOR wir bestehende Mails laden.
+        //    Sonst kann der parallel laufende Import-Scheduler eine neue Mail
+        //    desselben Absenders einfügen, die wir hier nicht mehr abräumen.
         if (!emailBlacklistRepository.existsByEmailAddress(sender)) {
             emailBlacklistRepository.save(new EmailBlacklistEntry(sender));
+            emailBlacklistRepository.flush();
         }
 
-        // 2. Retroactive Spam Marking
-        List<Email> existingEmails = emailRepository
-                .findByFromAddressIgnoreCase(sender);
-        int count = 0;
-        for (org.example.kalkulationsprogramm.domain.Email e : existingEmails) {
-            e.setSpam(true);
-            e.setSpamScore(100);
-            count++;
+        // 2. Bestehende Mails komplett löschen — NICHT als Spam markieren.
+        //    Spam-Markierung würde das Bayes-Modell verfälschen (User trainiert
+        //    sonst implizit auf Inhalte, die er gar nicht mehr sehen will). Auch
+        //    Frontend soll diese Mails nicht mehr zeigen, also Hard-Delete.
+        List<Email> existingEmails = emailRepository.findByFromAddressIgnoreCase(sender);
+        int deleted = 0;
+        for (Email e : existingEmails) {
+            try {
+                emailImportService.deleteEmailFromServer(e);
+            } catch (Exception ex) {
+                log.warn("[BlockSender] Server-Löschung für Email {} fehlgeschlagen: {}",
+                        e.getId(), ex.getMessage());
+            }
+            // Replies vom Parent lösen, sonst FK-Constraint
+            emailRepository.detachRepliesFromParent(e.getId());
         }
-        emailRepository.saveAll(existingEmails);
+        emailRepository.flush();
+        if (!existingEmails.isEmpty()) {
+            emailRepository.deleteAll(existingEmails);
+            deleted = existingEmails.size();
+        }
 
-        return ResponseEntity.ok("Sender blocked and " + count + " emails moved to spam.");
+        log.info("[BlockSender] Absender {} gesperrt, {} bestehende Mails gelöscht", sender, deleted);
+        return ResponseEntity.ok("Sender blocked and " + deleted + " emails permanently deleted.");
     }
 
     // ═══════════════════════════════════════════════════════════════
