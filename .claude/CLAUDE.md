@@ -18,12 +18,19 @@ Du schreibst Code, der einfach zu verstehen, wartbar, testbar und skalierbar ist
 2. **Datenschutz (DSGVO):** Nutzer-, Mitarbeiter- und Zeitdaten sind personenbezogen. In Tests NUR Dummy-Daten (`Max Mustermann`). Logs/Dumps immer anonymisieren.
 3. **Sperrzone für Commits:** `application-local.properties`, `*.env`, `uploads/`, `*.key/pem/p12`.
 
-## 📚 Entwickler-Dokumentation (Lese das, was du brauchst!)
-Bevor du Code schreibst, lade dir **zwingend** die passende Dokumentation in deinen Kontext:
+## 📚 Entwickler-Dokumentation (Pflichtlektüre VOR jedem Edit/Write)
 
-- **Frontend & UI-Design anpassen?** 👉 Lese `docs\agent instructions\docs\FRONTEND_UI.md` (Farben, Pflicht-Komponenten, Tailwind-Regeln).
-- **Backend, API, Datenbank oder Architektur ändern?** 👉 Lese `docs\agent instructions\docs\BACKEND_ARCH.md` (Spring Boot, SQL, Flyway, ML-Spam-Filter).
-- **Tests schreiben oder Security-Checks durchführen?** 👉 Lese `docs\agent instructions\docs\TESTING_SECURITY.md` (JUnit, Vitest, Security-Checklisten).
+Bevor du Code schreibst oder änderst, lädst du **zwingend** die passende Dokumentation per `Read`-Tool in deinen Kontext. Das ist **keine Empfehlung** – ein PreToolUse-Hook (`.claude/hooks/check-doc-read.ps1`) blockiert deine Edit/Write/MultiEdit-Aufrufe mit Exit 2, solange das passende Doc in dieser Session noch nicht gelesen wurde:
+
+| Du willst editieren … | Pflicht-Read VORHER |
+| --- | --- |
+| `*.java` (Backend, Tests, Config) | `docs\agent instructions\docs\BACKEND_ARCH.md` |
+| `*.tsx` / `*.ts` / `*.jsx` / `*.js` in `react-pc-frontend/` oder `react-zeiterfassung/` | `docs\agent instructions\docs\FRONTEND_UI.md` |
+| Test-Dateien (`*Test.java`, `*Tests.java`, `*.test.tsx`, `*.spec.ts`, …) | `docs\agent instructions\docs\TESTING_SECURITY.md` |
+
+Das Flag wird pro Session einmalig gesetzt – ein einzelner Read pro Doc reicht für die gesamte Session. Wenn dich der Hook blockt: **nicht umgehen**, sondern das genannte Doc per Read laden und den Edit/Write danach erneut versuchen.
+
+**Hinweis:** Der Hook ersetzt nicht das tatsächliche Verständnis. Lies das Doc wirklich (nicht nur die ersten 5 Zeilen, um das Flag zu setzen) – die Regeln darin (rose-/slate-Farben, Pflicht-Komponenten, Constructor Injection, Flyway-Versionierung, Named-Params, DSGVO-Dummy-Daten) werden im Reviewer-Subagent gegengeprüft und blocken den Commit, wenn sie verletzt sind.
 
 ## 🚀 Build & Run (Quickstart)
 - Backend: `./mvnw spring-boot:run` (Port 8080)
@@ -36,4 +43,6 @@ Bevor du Code schreibst, lade dir **zwingend** die passende Dokumentation in dei
 
 4. **Abschluss jeder Aufgabe (Skill-Execution):**
    Wenn du am Ende einer Aufgabe angekommen bist und Code geschrieben oder refactored hast, führe IMMER diesen Skill / diese Aktion aus:
-   `.claude\commands\review-and-ship.md` (Überprüfe den Code auf Typensicherheit, Performance-Bottlenecks, UX-Konsistenz und bereite ihn für den Commit vor).
+   `.claude\commands\review-and-ship.md`.
+
+   **Aufgabenteilung im Skill:** Der `erp-code-reviewer`-Subagent prüft Code-Quality, Architektur, Security, DSGVO und Secrets parallel zur Build-Phase und liefert einen strukturierten Befund-Report mit Ampel. Du als Hauptagent kümmerst dich um Build, Tests und Coverage und arbeitest anschließend die Reviewer-Findings ein, bis die Ampel 🟢 ist – erst dann Commit & Push. Details zur Phasenfolge stehen im Skill selbst.

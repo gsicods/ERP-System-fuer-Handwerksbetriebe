@@ -7,10 +7,15 @@ description: Startet den erp-code-reviewer-Subagenten im Hintergrund und kümmer
 
 Du bist der **Implementations-Agent** im Window des Users. Deine Aufgabe ab jetzt:
 
-1. **Review-Subagent SOFORT im Hintergrund starten** (er reviewt parallel zu dir).
-2. **Während er reviewt**, kümmerst DU dich um Build, Tests, Lint und fehlende Test-Coverage.
-3. **Wenn der Subagent zurückmeldet**: Findings einarbeiten, dann nochmal Build/Tests prüfen.
+1. **Review-Subagent SOFORT im Hintergrund starten** – er übernimmt **komplett** Code-Review **inklusive Security** (Secrets, OWASP, DSGVO, Path-Traversal, CORS, …).
+2. **Während er reviewt**, kümmerst DU dich **ausschließlich** um Build, Tests, Lint und fehlende Test-Coverage. **Du machst KEIN eigenes Security-Audit, KEINEN Secrets-Scan, KEINEN Eigen-Gegencheck der Reviewer-Themen** – das ist Doppelarbeit. Vertraue auf den Reviewer.
+3. **Wenn der Subagent zurückmeldet**: Findings 1:1 umsetzen, dann nochmal Build/Tests prüfen.
 4. **Loop** bis alles grün → Commit & Push.
+
+**Rollenteilung – wichtig:**
+
+- **Reviewer-Subagent** = Qualität + Architektur + Security + DSGVO. Findet Probleme.
+- **Du (Hauptagent)** = Build, Tests, Coverage, Implementierung der Reviewer-Findings, am Ende Commit & Push. **Findest keine Probleme selbst** – du behebst die, die der Reviewer meldet.
 
 **STOPP-REGEL:** Kein Commit ohne 🟢 vom Reviewer UND ohne grüne Tests/Builds. Bei 🔴 → Fix → erneuter Review-Lauf.
 
@@ -60,16 +65,7 @@ Rufe das `Agent`-Tool auf mit `run_in_background: true`:
 
 Während der Subagent reviewt, arbeitest du diese Liste ab. Bei jedem Fehler: Root Cause beheben, dann weiter.
 
-### 1a. Secrets-Scan (KRITISCH – bei Fund sofort abbrechen)
-
-```bash
-git diff main...HEAD -- "*.properties" "*.yml" "*.yaml" "*.env"
-git diff main...HEAD | grep -iE "(api_key|password=|token=|secret=|passwd)" | grep -v "test@example\|mustermann\|musterstraße"
-```
-
-- Credentials, Tokens, echte Personendaten?
-- `application-local.properties` / `uploads/` / `*.key|pem|p12` im Diff?
-- **Fund → SOFORTIGER ABBRUCH**, Subagent kann weiterlaufen, aber kein Commit.
+> **Reminder:** Secrets-Scan, Security-Audit, DSGVO-Check, Architektur-Gegencheck → macht der Reviewer-Subagent. Du **nicht**. Wenn der Reviewer einen Secret-/Security-Befund meldet, behebst du ihn in Phase 2.
 
 ### 1b. Backend kompilieren + testen
 
@@ -108,14 +104,7 @@ Schau dir `git diff main...HEAD --name-only` an und prüfe:
 
 Nach jedem hinzugefügten Test: 1b/1c/1d für den betroffenen Bereich erneut laufen lassen.
 
-### 1f. Kurzer Eigen-Gegencheck (während Subagent noch läuft)
-
-- Controller mit Business-Logik?
-- Entities direkt in REST-Response statt DTO?
-- String-Konkat in JPQL/SQL?
-- `System.out.println` / `console.log` / auskommentierter Code / TODO ohne Ticket?
-- Frontend: indigo/blue statt rose/slate? `<select>`/`<input type="date">`/`<iframe src=>` statt Pflicht-Komponenten?
-- Neue Flyway-Migration: höhere Versionsnummer als alle bestehenden? Bestehende Migration verändert? (→ ABSOLUTES VERBOT)
+> **Kein Eigen-Gegencheck.** Architektur-, UI- und Security-Themen prüft der Reviewer-Subagent. Du wartest seinen Report ab und reagierst dann in Phase 2.
 
 ---
 
@@ -132,21 +121,13 @@ Sobald der Hintergrund-Agent fertig meldet:
 
 ---
 
-## Phase 3: Security-Review
-
-Skill `/security-review` ausführen (`Skill`-Tool, `skill: "security-review"`). Kritische Befunde blocken Commit.
-
----
-
-## Phase 4: Commit & Push
+## Phase 3: Commit & Push
 
 Nur wenn:
 
-- ✅ Reviewer-Ampel 🟢 (oder 🟡 mit User-Freigabe)
-- ✅ `/security-review` ohne kritische Findings
+- ✅ Reviewer-Ampel 🟢 (oder 🟡 mit User-Freigabe) – das deckt Security/DSGVO/Secrets bereits ab
 - ✅ Backend Build + Tests grün
 - ✅ Frontend Lint + Build + Tests grün (Desktop + Mobile falls betroffen)
-- ✅ Keine Secrets / DSGVO-Verstöße im Diff
 
 Commit-Nachricht ableiten aus `git diff main...HEAD --stat` und `git log --oneline -5`:
 
@@ -183,7 +164,7 @@ git push origin HEAD
 ```text
 ❌ REVIEW FEHLGESCHLAGEN – Kein Commit erstellt
 
-Phase: [0/1a/1b/1c/1d/1e/1f/2/3]
+Phase: [0/1b/1c/1d/1e/2/3]
 Problem: [Genaue Beschreibung]
 Datei(en): [Betroffene Dateien mit Zeilennummern]
 Reviewer-Ampel: [🟢/🟡/🔴]
@@ -202,11 +183,9 @@ Commit: <hash>
 Branch: <branch>
 Review-Runden: <Anzahl Phase-0-Aufrufe>
 Geprüfte Checks:
-  - erp-code-reviewer Subagent: 🟢
-  - /security-review Skill: ✅
+  - erp-code-reviewer Subagent (inkl. Security/DSGVO/Secrets): 🟢
   - Backend Build + Tests: ✅
   - Frontend Lint + Build + Tests: ✅
-  - Secrets-Scan: ✅
 Push: origin/<branch>
 ```
 
