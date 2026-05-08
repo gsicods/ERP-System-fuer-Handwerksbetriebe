@@ -169,6 +169,22 @@ class SpamBayesServiceTest {
 
             assertThat(tokens).contains("from_domain_beispiel.de", "from_tld_de");
         }
+
+        @Test
+        void senderTokensExtrahiertLetztesBracketPaarBeiDoppelBrackets() {
+            // Robustheits-Test: Manche Mail-Server schreiben den Display-Name
+            // mit eingeklammertem Spitznamen, was zu doppelten <...>-Paaren
+            // fuehrt: "Foo <Bar> <real@x.de>". Die echte Adresse steht im
+            // letzten Paar.
+            Email email = new Email();
+            email.setSubject("Test");
+            email.setBody("Body");
+            email.setFromAddress("Foo <Bar> <real@beispiel.de>");
+
+            Set<String> tokens = service.tokenize(email);
+
+            assertThat(tokens).contains("from_domain_beispiel.de", "from_tld_de");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════

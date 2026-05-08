@@ -41,6 +41,7 @@ public class SpamFilterService {
     private final AnfrageRepository anfrageRepository;
     private final ProjektRepository projektRepository;
     private final org.example.kalkulationsprogramm.repository.EmailBlacklistRepository emailBlacklistRepository;
+    private final org.example.kalkulationsprogramm.repository.SeenSenderDomainRepository seenSenderDomainRepository;
     private final SpamBayesService spamBayesService;
 
     // ... (rest of configuration)
@@ -755,6 +756,22 @@ public class SpamFilterService {
         // Free-Mailer + viele Links → +20 (KI-Cold-Mail-Indikator)
         if (isFreeMail && linkCount >= 3) {
             delta += 20;
+        }
+
+        // ─── Erstkontakt-Heuristik ───────────────────────────────────
+        // Domain noch nie gesehen + Free-Mailer + ≥2 Links ist klassisches
+        // Cold-Mail-Signal (KI-Anschreiben, SEO-Pitches, Branchenbuch-Maschen).
+        // Whitelists (Lieferant/Kunde) wurden vor diesem Block schon geprueft —
+        // wer hier landet, ist niemand Bekanntes. Beim allerersten Deployment
+        // ist die Tabelle aus existierenden Mails backfilled (siehe V293), damit
+        // Bestandsdomains nicht faelschlich als "neu" gelten.
+        if (!senderDomain.isBlank() && !seenSenderDomainRepository.existsByDomain(senderDomain)) {
+            if (isFreeMail && linkCount >= 2) {
+                delta += 25;
+            } else if (linkCount >= 3) {
+                // Auch ohne Free-Mailer: neue Domain mit mehreren Links bleibt verdaechtig.
+                delta += 10;
+            }
         }
 
         // ─── Text-Link-Ratio ─────────────────────────────────────────

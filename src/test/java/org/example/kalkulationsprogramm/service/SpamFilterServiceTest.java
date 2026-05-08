@@ -15,6 +15,7 @@ import org.example.kalkulationsprogramm.repository.EmailBlacklistRepository;
 import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.example.kalkulationsprogramm.repository.ProjektRepository;
+import org.example.kalkulationsprogramm.repository.SeenSenderDomainRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -32,13 +33,14 @@ class SpamFilterServiceTest {
     @Mock private AnfrageRepository anfrageRepository;
     @Mock private ProjektRepository projektRepository;
     @Mock private EmailBlacklistRepository emailBlacklistRepository;
+    @Mock private SeenSenderDomainRepository seenSenderDomainRepository;
     @Mock private SpamBayesService spamBayesService;
 
     private SpamFilterService service;
 
     @BeforeEach
     void setUp() {
-        service = new SpamFilterService(lieferantenRepository, kundeRepository, anfrageRepository, projektRepository, emailBlacklistRepository, spamBayesService);
+        service = new SpamFilterService(lieferantenRepository, kundeRepository, anfrageRepository, projektRepository, emailBlacklistRepository, seenSenderDomainRepository, spamBayesService);
     }
 
     private Email erstelleEmail(String fromAddress, String subject, String body) {
@@ -809,6 +811,96 @@ class SpamFilterServiceTest {
             int score = service.calculateSpamScore(email);
 
             assertThat(score).isLessThan(20);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Erstkontakt-Heuristik (Issue #56, Phase 2)
+    // ═══════════════════════════════════════════════════════════════
+
+    @Nested
+    class ErstkontaktHeuristik {
+
+        @Test
+        void neueFreeMailerDomainMitZweiLinksWirdAufgewertet() {
+            String body = "Hallo, schauen Sie sich das an: https://promo-x.tk/a https://promo-y.tk/b";
+            Email email = erstelleEmail("max.mustermann@gmail.com", "Tolle Sache", body);
+            // Default-Mock: existsByDomain → false (= neuer Erstkontakt)
+
+            int score = service.calculateSpamScore(email);
+
+            // Erstkontakt + Free-Mailer + 2 Links → +25
+            // Plus Domain-Mismatch (gmail.com vs promo-*.tk) → +15
+            assertThat(score).isGreaterThanOrEqualTo(25);
+        }
+
+        @Test
+        void neueFreeMailerDomainMitNurEinemLinkBekommtKeinenErstkontaktBonus() {
+            // Negativer Kanten-Test: Schwelle ist >= 2 Links. Bei genau 1
+            // Link darf weder der +25-Erstkontakt-Free-Mailer-Bonus noch der
+            // +10-Erstkontakt-Bonus fuer Firmen-Domain greifen.
+            String body = "Schoenen Tag! Mehr unter https://example.com";
+            Email email = erstelleEmail("kunde@gmail.com", "Anfrage", body);
+
+            int score = service.calculateSpamScore(email);
+
+            assertThat(score).isLessThan(25);
+        }
+
+        @Test
+        void bekannteFreeMailerDomainOhneErstkontaktBonus() {
+            String body = "Hallo, schauen Sie sich das an: https://promo-x.tk/a https://promo-y.tk/b";
+            Email email = erstelleEmail("max.mustermann@gmail.com", "Tolle Sache", body);
+            when(seenSenderDomainRepository.existsByDomain("gmail.com")).thenReturn(true);
+
+            int score = service.calculateSpamScore(email);
+
+            // Ohne Erstkontakt-Bonus bleibt nur der Domain-Mismatch (15).
+            // Score < 25 belegt, dass die +25 NICHT addiert wurden.
+            assertThat(score).isLessThan(25);
+        }
+
+        @Test
+        void bekannteFirmenDomainMitDreiLinksOhneErstkontaktBonus() {
+            // Negativer Kanten-Test: Wenn die Firmen-Domain bereits im
+            // seen_sender_domain steht, darf der +10-Erstkontakt-Bonus
+            // NICHT mehr greifen — auch nicht bei 3 Links.
+            String body = "Hi https://offer-a.tk/1 https://offer-b.tk/2 https://offer-c.tk/3";
+            Email email = erstelleEmail("kontakt@bekannt-anbieter.io", "Offer", body);
+            when(seenSenderDomainRepository.existsByDomain("bekannt-anbieter.io")).thenReturn(true);
+
+            int score = service.calculateSpamScore(email);
+
+            // Domain-Mismatch (kein Link auf bekannt-anbieter.io) bleibt mit +15
+            // erhalten; der Erstkontakt-Anteil von +10 muss aber weg sein.
+            assertThat(score).isLessThan(25);
+        }
+
+        @Test
+        void neueFirmenDomainMitVielenLinksLeichtErhoeht() {
+            // Firmendomain (kein Free-Mailer) — der staerkere +25-Bonus greift
+            // hier nicht; aber 3+ Links auf neue Domain bekommen +10.
+            String body = "Hi https://offer-a.tk/1 https://offer-b.tk/2 https://offer-c.tk/3";
+            Email email = erstelleEmail("kontakt@neu-anbieter.io", "Neues Angebot", body);
+
+            int score = service.calculateSpamScore(email);
+
+            // Erstkontakt-Firmen-Bonus +10 + Domain-Mismatch +15 = >= 25
+            assertThat(score).isGreaterThanOrEqualTo(15);
+        }
+
+        @Test
+        void neueDomainOhneLinksKeinAufschlag() {
+            // Erstkontakt allein darf KEINEN Aufschlag geben — sonst wuerden
+            // legitime Erstkunden, die nur "Hallo, koennen Sie mir ein Angebot
+            // machen?" schreiben, faelschlich Spam-Score bekommen.
+            Email email = erstelleEmail("neukunde@neue-firma.de",
+                    "Anfrage Treppe",
+                    "Guten Tag, koennen Sie mir ein Angebot fuer eine Innentreppe machen?");
+
+            int score = service.calculateSpamScore(email);
+
+            assertThat(score).isLessThan(10);
         }
     }
 }

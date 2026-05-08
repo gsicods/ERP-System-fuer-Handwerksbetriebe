@@ -71,6 +71,7 @@ public class EmailImportService {
     private final SystemSettingsService systemSettingsService;
     private final OutOfOfficeResponder outOfOfficeResponder;
     private final EmailBlacklistRepository emailBlacklistRepository;
+    private final org.example.kalkulationsprogramm.repository.SeenSenderDomainRepository seenSenderDomainRepository;
 
     // Self-Injection für transactional proxy: importMessage muss durch den
     // Spring-Proxy laufen, damit @Transactional pro Mail eine eigene
@@ -754,8 +755,13 @@ public class EmailImportService {
         // niemals als Spam markiert werden sollen
         emailAutoAssignmentService.tryAutoAssign(email);
 
-        // 2. Spam-Prüfung (berücksichtigt bereits die Zuordnung)
+        // 2. Spam-Prüfung (berücksichtigt bereits die Zuordnung).
+        //    WICHTIG: Erstkontakt-Lookup laeuft hier drinnen, deshalb erst
+        //    DANACH die Domain als "schon gesehen" markieren — sonst wuerde
+        //    die allererste Mail einer Domain ihren eigenen Erstkontakt-Bonus
+        //    selbst entwerten.
         spamFilterService.analyzeAndMarkSpam(email);
+        markDomainSeen(email);
 
         // 3. Bei Lieferanten-Emails: Spam/Newsletter-Flags bereinigen und Attachments analysieren
         if (email.getZuordnungTyp() == EmailZuordnungTyp.LIEFERANT && email.getLieferant() != null) {
@@ -780,6 +786,25 @@ public class EmailImportService {
 
         // Spam-Score und Zuordnungs-Änderungen persistieren
         emailRepository.save(email);
+    }
+
+    /**
+     * Markiert die Absender-Domain als "schon gesehen" — fuer die
+     * Erstkontakt-Heuristik im Spam-Filter. Nur eingehende Mails. Failures
+     * (DB hin, parallele Imports) duerfen den Import-Pfad nicht abbrechen,
+     * deshalb defensiv: alles was nicht passt, geht an log.debug.
+     */
+    private void markDomainSeen(Email email) {
+        if (email.getDirection() != EmailDirection.IN) return;
+        String domain = email.getSenderDomain();
+        if (domain == null || domain.isBlank()) return;
+        try {
+            LocalDateTime firstSeen = email.getSentAt() != null ? email.getSentAt() : LocalDateTime.now();
+            seenSenderDomainRepository.upsertSeen(domain, firstSeen);
+        } catch (Exception e) {
+            log.debug("[EmailImport] Erstkontakt-Tracking fuer Domain {} fehlgeschlagen: {}",
+                    domain, e.getMessage());
+        }
     }
 
     /**

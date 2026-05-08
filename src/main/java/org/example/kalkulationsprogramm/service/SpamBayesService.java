@@ -180,10 +180,13 @@ public class SpamBayesService {
     private void addSenderTokens(Set<String> tokens, String fromAddress) {
         if (fromAddress == null || fromAddress.isBlank()) return;
 
-        // Pure E-Mail aus "Name <email@domain.com>" extrahieren
+        // Pure E-Mail aus "Name <email@domain.com>" extrahieren.
+        // lastIndexOf('>') / lastIndexOf('<') statt indexOf, damit Adressen
+        // mit doppelten Bracket-Paaren (z.B. "Foo <bar> <real@x.de>")
+        // korrekt das letzte (= echte Adresse) Paar treffen.
         String email = fromAddress;
-        int lt = fromAddress.indexOf('<');
-        int gt = fromAddress.indexOf('>');
+        int lt = fromAddress.lastIndexOf('<');
+        int gt = fromAddress.lastIndexOf('>');
         if (lt >= 0 && gt > lt) {
             email = fromAddress.substring(lt + 1, gt);
         }
