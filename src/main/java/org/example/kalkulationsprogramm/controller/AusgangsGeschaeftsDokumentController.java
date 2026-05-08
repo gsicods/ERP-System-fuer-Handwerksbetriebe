@@ -10,15 +10,19 @@ import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsG
 import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeAuditDto;
 import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeStatusKurzDto;
 import org.example.kalkulationsprogramm.domain.Mahnstufe;
+import org.example.kalkulationsprogramm.config.FrontendUserPrincipal;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentAuditService;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
 import org.example.kalkulationsprogramm.service.AutoMahnVersandService;
 import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
+import org.example.kalkulationsprogramm.service.DokumentLockService;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,6 +50,7 @@ public class AusgangsGeschaeftsDokumentController {
     private final DokumentFreigabeService dokumentFreigabeService;
     private final AusgangsGeschaeftsDokumentAuditService auditService;
     private final AutoMahnVersandService autoMahnVersandService;
+    private final DokumentLockService dokumentLockService;
 
     /**
      * Reine Vorschau: rendert die Mahn-PDF einer beliebigen Stufe ohne irgendetwas
@@ -147,11 +152,23 @@ public class AusgangsGeschaeftsDokumentController {
 
     /**
      * Dokument aktualisieren (nur wenn nicht gebucht).
+     * Speichern setzt voraus, dass der Caller das Soft-Lock haelt — sonst
+     * 409 Conflict, damit ein zweiter offener Tab nicht ueber die Aenderungen
+     * eines anderen Users drueberschreibt.
      */
     @PutMapping("/{id}")
     public ResponseEntity<?> update(
             @PathVariable Long id,
-            @RequestBody AusgangsGeschaeftsDokumentUpdateDto dto) {
+            @RequestBody AusgangsGeschaeftsDokumentUpdateDto dto,
+            Authentication authentication) {
+        FrontendUserPrincipal principal = principal(authentication);
+        if (principal == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (!dokumentLockService.isHeldBy(DokumentLockService.TYP_AUSGANG, id, principal.getId())) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body("Dokument wird gerade von einem anderen Benutzer bearbeitet.");
+        }
         try {
             AusgangsGeschaeftsDokument updated = service.aktualisieren(id, dto);
             return ResponseEntity.ok(service.findById(updated.getId()));
@@ -159,6 +176,16 @@ public class AusgangsGeschaeftsDokumentController {
             log.error("Fehler beim Aktualisieren von Dokument {}: {}", id, e.getMessage(), e);
             return ResponseEntity.badRequest().body(e.getMessage());
         }
+    }
+
+    private FrontendUserPrincipal principal(Authentication authentication) {
+        if (authentication == null || authentication.getPrincipal() == null) {
+            return null;
+        }
+        if (authentication.getPrincipal() instanceof FrontendUserPrincipal p) {
+            return p;
+        }
+        return null;
     }
 
     /**

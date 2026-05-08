@@ -1,13 +1,18 @@
 package org.example.kalkulationsprogramm.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.kalkulationsprogramm.config.FrontendUserPrincipal;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokumentTyp;
+import org.example.kalkulationsprogramm.domain.FrontendUserRole;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentErstellenDto;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentResponseDto;
 import org.example.kalkulationsprogramm.dto.AusgangsGeschaeftsDokument.AusgangsGeschaeftsDokumentUpdateDto;
 import org.example.kalkulationsprogramm.service.AusgangsGeschaeftsDokumentService;
 import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
+import org.example.kalkulationsprogramm.service.DokumentLockService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -16,13 +21,18 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doNothing;
@@ -51,6 +61,36 @@ class AusgangsGeschaeftsDokumentControllerTest {
 
     @MockBean
     private org.example.kalkulationsprogramm.service.AutoMahnVersandService autoMahnVersandService;
+
+    @MockBean
+    private DokumentLockService dokumentLockService;
+
+    /**
+     * MockMvc-Tests laufen mit `addFilters = false`, daher wird der
+     * `Authentication`-Parameter im Controller nicht aus dem SecurityContext
+     * aufgeloest. Wir setzen den Auth-Token deshalb direkt als Request-
+     * Principal — Springs ServletRequestMethodArgumentResolver liest den von
+     * dort, weil UsernamePasswordAuthenticationToken auch java.security.Principal
+     * implementiert.
+     */
+    private UsernamePasswordAuthenticationToken testAuth() {
+        FrontendUserPrincipal principal = new FrontendUserPrincipal(
+                42L, "max.mustermann", "Max Mustermann", "hash", true,
+                Set.of(FrontendUserRole.ADMIN));
+        return new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+    }
+
+    @BeforeEach
+    void mockLockHeld() {
+        // Speichern erfordert ein gehaltenes Lock — per Default fuer alle Tests
+        // freischalten. Tests, die 409 testen wollen, ueberschreiben lokal.
+        given(dokumentLockService.isHeldBy(anyString(), anyLong(), anyLong())).willReturn(true);
+    }
+
+    @AfterEach
+    void clearAuth() {
+        SecurityContextHolder.clearContext();
+    }
 
     private AusgangsGeschaeftsDokumentResponseDto buildResponseDto(Long id, String nummer) {
         AusgangsGeschaeftsDokumentResponseDto dto = new AusgangsGeschaeftsDokumentResponseDto();
@@ -231,6 +271,7 @@ class AusgangsGeschaeftsDokumentControllerTest {
             dto.setBetragNetto(new BigDecimal("2000.00"));
 
             mockMvc.perform(put("/api/ausgangs-dokumente/1")
+                            .principal(testAuth())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(dto)))
                     .andExpect(status().isOk());
@@ -246,9 +287,37 @@ class AusgangsGeschaeftsDokumentControllerTest {
             dto.setBetreff("Versuch");
 
             mockMvc.perform(put("/api/ausgangs-dokumente/1")
+                            .principal(testAuth())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(dto)))
                     .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("Ohne Lock-Halterung: 409 Conflict")
+        void ohneLockGibt409() throws Exception {
+            given(dokumentLockService.isHeldBy(anyString(), anyLong(), anyLong())).willReturn(false);
+
+            AusgangsGeschaeftsDokumentUpdateDto dto = new AusgangsGeschaeftsDokumentUpdateDto();
+            dto.setBetreff("Versuch");
+
+            mockMvc.perform(put("/api/ausgangs-dokumente/1")
+                            .principal(testAuth())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(dto)))
+                    .andExpect(status().isConflict());
+        }
+
+        @Test
+        @DisplayName("Ohne Authentication: 401 Unauthorized")
+        void ohneAuthGibt401() throws Exception {
+            AusgangsGeschaeftsDokumentUpdateDto dto = new AusgangsGeschaeftsDokumentUpdateDto();
+            dto.setBetreff("Versuch");
+
+            mockMvc.perform(put("/api/ausgangs-dokumente/1")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(dto)))
+                    .andExpect(status().isUnauthorized());
         }
     }
 

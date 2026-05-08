@@ -7,6 +7,8 @@ import { Select } from "./ui/select-custom";
 import { DatePicker } from "./ui/datepicker";
 import { cn } from "../lib/utils";
 import type { LieferantDokument, LieferantDokumentTyp } from "../types";
+import DocumentLockedModal from "./DocumentLockedModal";
+import { useDocumentLock } from "./useDocumentLock";
 
 interface LieferantDokumentModalProps {
     isOpen: boolean;
@@ -36,6 +38,11 @@ export default function LieferantDokumentModal({
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+
+    // Soft-Lock: bei geoeffnetem Modal genau ein User darf bearbeiten.
+    // dokumentId nur an den Hook geben, wenn Modal sichtbar ist — sonst
+    // wuerde ein dauerhaft gemountetes Parent-Element heimlich Locks halten.
+    const lock = useDocumentLock("EINGANG", isOpen && dokument ? dokument.id : null);
 
     // Form State
     const [formData, setFormData] = useState({
@@ -103,6 +110,29 @@ export default function LieferantDokumentModal({
     }, [dokument?.id, dokument, lieferantId, isOpen, showPdf]);
 
     if (!isOpen || !dokument) return null;
+
+    // Solange ein anderer Bueromitarbeiter den Editor offen hat, zeigen wir
+    // nur den Lock-Hinweis statt das Bearbeitungsformular.
+    if (lock.status === "locked-by-other") {
+        return (
+            <DocumentLockedModal
+                holder={lock.holder}
+                onRetry={lock.retry}
+                onClose={onClose}
+            />
+        );
+    }
+    if (lock.status === "error") {
+        return (
+            <DocumentLockedModal
+                holder={null}
+                onRetry={lock.retry}
+                onClose={onClose}
+                errorMessage="Verbindung zum Server fehlgeschlagen. Bitte Internetverbindung pruefen und erneut versuchen."
+            />
+        );
+    }
+
     const confidence = dokument.geschaeftsdaten?.aiConfidence;
 
     // Typspezifische Feldanzeige

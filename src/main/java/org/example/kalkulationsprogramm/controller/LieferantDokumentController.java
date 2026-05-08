@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+import org.example.kalkulationsprogramm.config.FrontendUserPrincipal;
 import org.example.kalkulationsprogramm.domain.Email;
 import org.example.kalkulationsprogramm.domain.LieferantDokument;
 import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp;
@@ -17,6 +18,7 @@ import org.example.kalkulationsprogramm.dto.LieferantDokumentDto;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
 import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository;
 import org.example.kalkulationsprogramm.repository.LieferantGeschaeftsdokumentRepository;
+import org.example.kalkulationsprogramm.service.DokumentLockService;
 import org.example.kalkulationsprogramm.service.EmailAttachmentProcessingService;
 import org.example.kalkulationsprogramm.service.GeminiDokumentAnalyseService;
 import org.example.kalkulationsprogramm.service.LieferantDokumentService;
@@ -24,6 +26,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,6 +53,7 @@ public class LieferantDokumentController {
     private final EmailRepository emailRepository;
     private final EmailAttachmentProcessingService emailAttachmentProcessingService;
     private final org.example.kalkulationsprogramm.repository.EmailAttachmentRepository emailAttachmentRepository;
+    private final DokumentLockService dokumentLockService;
 
     @Value("${file.upload-dir}")
     private String uploadDir;
@@ -57,14 +61,39 @@ public class LieferantDokumentController {
     @Value("${file.mail-attachment-dir}")
     private String mailAttachmentDir;
 
+    private FrontendUserPrincipal principal(Authentication authentication) {
+        if (authentication == null || authentication.getPrincipal() == null) {
+            return null;
+        }
+        if (authentication.getPrincipal() instanceof FrontendUserPrincipal p) {
+            return p;
+        }
+        return null;
+    }
+
     /**
      * Aktualisiert ein Lieferanten-Dokument und dessen Geschäftsdaten.
+     * Speichern setzt voraus, dass der Caller das Soft-Lock haelt — sonst
+     * 409 Conflict, damit nicht zwei Bueromitarbeiter parallel an derselben
+     * Eingangsrechnung arbeiten.
      */
     @PutMapping("/{dokumentId}")
     @Transactional
     public ResponseEntity<LieferantDokumentDto.Response> updateDokument(
             @PathVariable Long dokumentId,
-            @RequestBody UpdateDokumentRequest request) {
+            @RequestBody UpdateDokumentRequest request,
+            Authentication authentication) {
+
+        FrontendUserPrincipal principal = principal(authentication);
+        if (principal == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (!dokumentLockService.isHeldBy(DokumentLockService.TYP_EINGANG, dokumentId, principal.getId())) {
+            // Body bleibt leer — DTO-Generic ist <Response>, statt das zu sprengen
+            // verlassen wir uns auf den 409-Status. Frontend-Modal blockiert
+            // Save bereits, sobald acquire/heartbeat 409 liefern.
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        }
 
         var dokument = dokumentRepository.findById(dokumentId).orElse(null);
         if (dokument == null) {

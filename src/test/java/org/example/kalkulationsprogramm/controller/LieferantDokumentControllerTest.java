@@ -1,6 +1,8 @@
 package org.example.kalkulationsprogramm.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.kalkulationsprogramm.config.FrontendUserPrincipal;
+import org.example.kalkulationsprogramm.domain.FrontendUserRole;
 import org.example.kalkulationsprogramm.domain.LieferantDokument;
 import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp;
 import org.example.kalkulationsprogramm.domain.LieferantGeschaeftsdokument;
@@ -9,9 +11,12 @@ import org.example.kalkulationsprogramm.repository.EmailAttachmentRepository;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
 import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository;
 import org.example.kalkulationsprogramm.repository.LieferantGeschaeftsdokumentRepository;
+import org.example.kalkulationsprogramm.service.DokumentLockService;
 import org.example.kalkulationsprogramm.service.EmailAttachmentProcessingService;
 import org.example.kalkulationsprogramm.service.GeminiDokumentAnalyseService;
 import org.example.kalkulationsprogramm.service.LieferantDokumentService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -20,13 +25,18 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -63,6 +73,34 @@ class LieferantDokumentControllerTest {
     @MockBean
     private EmailAttachmentRepository emailAttachmentRepository;
 
+    @MockBean
+    private DokumentLockService dokumentLockService;
+
+    /**
+     * MockMvc-Tests laufen mit `addFilters = false`, daher wird der
+     * `Authentication`-Parameter im Controller nicht aus dem SecurityContext
+     * aufgeloest. Wir setzen den Auth-Token deshalb direkt als Request-
+     * Principal — Springs ServletRequestMethodArgumentResolver liest den von
+     * dort, weil UsernamePasswordAuthenticationToken auch java.security.Principal
+     * implementiert.
+     */
+    private UsernamePasswordAuthenticationToken testAuth() {
+        FrontendUserPrincipal principal = new FrontendUserPrincipal(
+                42L, "max.mustermann", "Max Mustermann", "hash", true,
+                Set.of(FrontendUserRole.ADMIN));
+        return new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
+    }
+
+    @BeforeEach
+    void mockLockHeld() {
+        given(dokumentLockService.isHeldBy(anyString(), anyLong(), anyLong())).willReturn(true);
+    }
+
+    @AfterEach
+    void clearAuth() {
+        SecurityContextHolder.clearContext();
+    }
+
     @Nested
     @DisplayName("PUT /api/lieferant-dokumente/{dokumentId}")
     class UpdateDokument {
@@ -97,6 +135,7 @@ class LieferantDokumentControllerTest {
                     """;
 
             mockMvc.perform(put("/api/lieferant-dokumente/1")
+                            .principal(testAuth())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
                     .andExpect(status().isOk())
@@ -109,9 +148,31 @@ class LieferantDokumentControllerTest {
             given(dokumentRepository.findById(999L)).willReturn(Optional.empty());
 
             mockMvc.perform(put("/api/lieferant-dokumente/999")
+                            .principal(testAuth())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"typ\": \"RECHNUNG\"}"))
                     .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("Ohne Lock-Halterung: 409 Conflict")
+        void ohneLockGibt409() throws Exception {
+            given(dokumentLockService.isHeldBy(anyString(), anyLong(), anyLong())).willReturn(false);
+
+            mockMvc.perform(put("/api/lieferant-dokumente/1")
+                            .principal(testAuth())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"typ\": \"RECHNUNG\"}"))
+                    .andExpect(status().isConflict());
+        }
+
+        @Test
+        @DisplayName("Ohne Authentication: 401 Unauthorized")
+        void ohneAuthGibt401() throws Exception {
+            mockMvc.perform(put("/api/lieferant-dokumente/1")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"typ\": \"RECHNUNG\"}"))
+                    .andExpect(status().isUnauthorized());
         }
 
         @Test
@@ -141,6 +202,7 @@ class LieferantDokumentControllerTest {
                     """;
 
             mockMvc.perform(put("/api/lieferant-dokumente/1")
+                            .principal(testAuth())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
                     .andExpect(status().isOk());
