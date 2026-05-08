@@ -742,6 +742,47 @@ export default function BestellungenUebersicht() {
         setPreviewTitle(title);
     };
 
+    const [bulkBusy, setBulkBusy] = useState(false);
+
+    const alleZugeordnetAusblenden = useCallback(async () => {
+        if (!data || data.zugeordnet.length === 0) return;
+        const ketten = data.zugeordnet;
+        if (!window.confirm(`Möchten Sie wirklich alle ${ketten.length} zugeordneten Bestellungen ausblenden?`)) {
+            return;
+        }
+
+        setBulkBusy(true);
+
+        // Optimistic Update: Zugeordnete sofort in Ausgeblendet verschieben
+        setData(prev => prev ? {
+            ...prev,
+            zugeordnet: [],
+            ausgeblendet: [...ketten, ...prev.ausgeblendet],
+        } : prev);
+
+        const allDokumentIds = ketten.flatMap(k => k.dokumente.map(d => d.id));
+        const CHUNK_SIZE = 500; // Backend-Limit aus AusblendenRequest
+
+        try {
+            for (let i = 0; i < allDokumentIds.length; i += CHUNK_SIZE) {
+                const chunk = allDokumentIds.slice(i, i + CHUNK_SIZE);
+                const res = await fetch('/api/bestellungen-uebersicht/ausblenden', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dokumentIds: chunk }),
+                });
+                if (!res.ok) throw new Error('Fehler');
+            }
+            await loadData(true);
+            toast.success(`${ketten.length} Bestellungen ausgeblendet`);
+        } catch {
+            toast.error('Aktion fehlgeschlagen');
+            await loadData(true);
+        } finally {
+            setBulkBusy(false);
+        }
+    }, [data, loadData, toast]);
+
     const setKetteAusgeblendet = useCallback(async (kette: DokumentenKette, ausblenden: boolean) => {
         setBusyKetteId(kette.id);
 
@@ -881,22 +922,42 @@ export default function BestellungenUebersicht() {
                     </p>
                 </Card>
             ) : (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {(() => {
-                        const istAusgeblendetTab = tab === 'ausgeblendet';
-                        return currentList.map(kette => (
-                            <KetteCard
-                                key={kette.id}
-                                kette={kette}
-                                onOpenPdf={handleOpenPdf}
-                                showZuordnenButton={tab === 'abgeschlossen'}
-                                onZuordnen={setZuordnungKette}
-                                onAusblenden={istAusgeblendetTab ? undefined : (k) => setKetteAusgeblendet(k, true)}
-                                onEinblenden={istAusgeblendetTab ? (k) => setKetteAusgeblendet(k, false) : undefined}
-                                busy={busyKetteId === kette.id}
-                            />
-                        ));
-                    })()}
+                <div className="space-y-4">
+                    {tab === 'zugeordnet' && currentList.length > 0 && (
+                        <div className="flex justify-end">
+                            <Button
+                                onClick={alleZugeordnetAusblenden}
+                                disabled={bulkBusy}
+                                variant="outline"
+                                size="sm"
+                                className="text-slate-600 border-slate-300 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300"
+                            >
+                                {bulkBusy ? (
+                                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                                ) : (
+                                    <EyeOff className="w-4 h-4 mr-2" />
+                                )}
+                                Alle ausblenden ({currentList.length})
+                            </Button>
+                        </div>
+                    )}
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                        {(() => {
+                            const istAusgeblendetTab = tab === 'ausgeblendet';
+                            return currentList.map(kette => (
+                                <KetteCard
+                                    key={kette.id}
+                                    kette={kette}
+                                    onOpenPdf={handleOpenPdf}
+                                    showZuordnenButton={tab === 'abgeschlossen'}
+                                    onZuordnen={setZuordnungKette}
+                                    onAusblenden={istAusgeblendetTab ? undefined : (k) => setKetteAusgeblendet(k, true)}
+                                    onEinblenden={istAusgeblendetTab ? (k) => setKetteAusgeblendet(k, false) : undefined}
+                                    busy={busyKetteId === kette.id}
+                                />
+                            ));
+                        })()}
+                    </div>
                 </div>
             )}
 

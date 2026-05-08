@@ -528,7 +528,7 @@ public class BestellungsUebersichtController {
     /**
      * Bildet Dokumenten-Ketten basierend auf Verknüpfungen.
      */
-    private List<DokumentenKette> buildKetten(List<LieferantDokument> dokumente) {
+    List<DokumentenKette> buildKetten(List<LieferantDokument> dokumente) {
         // Map für schnellen Zugriff
         Map<Long, LieferantDokument> dokMap = dokumente.stream()
                 .collect(Collectors.toMap(LieferantDokument::getId, d -> d));
@@ -547,12 +547,21 @@ public class BestellungsUebersichtController {
 
             if (!kettenIds.isEmpty()) {
                 List<DokumentRef> refs = new ArrayList<>();
+                LieferantDokument first = null;
                 for (Long id : kettenIds) {
                     LieferantDokument d = dokMap.get(id);
                     if (d != null) {
                         refs.add(toDokumentRef(d));
                         verarbeitet.add(id);
+                        if (first == null) {
+                            first = d;
+                        }
                     }
+                }
+
+                // Falls kein einziges verknüpftes Dokument in der gefilterten Liste war, Kette überspringen
+                if (refs.isEmpty() || first == null) {
+                    continue;
                 }
 
                 // Sortiere nach Typ-Reihenfolge
@@ -560,8 +569,6 @@ public class BestellungsUebersichtController {
                 refs.sort(Comparator.comparingInt((DokumentRef r) -> getTypReihenfolge(r.typ))
                         .thenComparing(r -> r.dokumentDatum, Comparator.nullsLast(Comparator.naturalOrder())));
 
-                // Lieferant aus erstem Dokument
-                LieferantDokument first = dokMap.get(kettenIds.iterator().next());
                 String lieferantName = first.getLieferant() != null
                         ? first.getLieferant().getLieferantenname()
                         : null;
