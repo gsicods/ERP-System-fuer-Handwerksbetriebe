@@ -2,6 +2,7 @@ package org.example.kalkulationsprogramm.controller;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import org.example.kalkulationsprogramm.service.SystemSettingsService;
 import org.example.kalkulationsprogramm.service.SystemSettingsService.TestResult;
@@ -25,6 +26,13 @@ import lombok.RequiredArgsConstructor;
 public class SystemSettingsController {
 
     private final SystemSettingsService settingsService;
+
+    // Pragmatischer E-Mail-Regex – bewusst keine RFC-5322-Voll-Compliance, sondern
+    // genau das was Anwender erwarten: nicht-leerer Local-Part, "@",
+    // nicht-leerer Domain-Part mit mindestens einem Punkt, alles ohne Whitespace.
+    // Ungültiges wie "@", "a@", " @ " wird abgewiesen.
+    private static final Pattern EMAIL_PATTERN =
+            Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
 
     // ==================== Alle Einstellungen lesen ====================
 
@@ -156,6 +164,28 @@ public class SystemSettingsController {
         return ResponseEntity.ok(result);
     }
 
+    // ==================== Standard-Absender für Auto-Mails ====================
+
+    @GetMapping("/mail-from")
+    public ResponseEntity<MailFromResponse> getMailFrom() {
+        return ResponseEntity.ok(new MailFromResponse(
+                settingsService.getMailFromAddress(),
+                settingsService.getSmtpUsername()));
+    }
+
+    @PutMapping("/mail-from")
+    public ResponseEntity<Map<String, String>> saveMailFrom(@RequestBody MailFromRequest req) {
+        String address = req.address() == null ? "" : req.address().trim();
+        if (!address.isBlank() && !EMAIL_PATTERN.matcher(address).matches()) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", "Bitte eine gültige E-Mail-Adresse eintragen."));
+        }
+        settingsService.saveMailFromAddress(address);
+        return ResponseEntity.ok(Map.of("message", address.isBlank()
+                ? "Absender zurückgesetzt – Auto-Mails nutzen wieder den SMTP-Benutzer."
+                : "Absender für automatische Mails gespeichert."));
+    }
+
     // ==================== Funnel-Spam-Filter ====================
 
     @GetMapping("/anfrage-funnel-spamfilter")
@@ -200,4 +230,6 @@ public class SystemSettingsController {
     record GeminiTestRequest(String apiKey) {}
     record FunnelSpamFilterResponse(boolean aktiv) {}
     record FunnelSpamFilterRequest(boolean aktiv) {}
+    record MailFromResponse(String address, String smtpUsername) {}
+    record MailFromRequest(String address) {}
 }

@@ -795,10 +795,11 @@ public class AutoAuftragsbestaetigungVersandService
 
     private String ermittleAbsenderAdresse()
     {
-        // Bei T-Online ist der SMTP-Username gleich der Mail-Adresse;
-        // andere Provider ebenso üblich.
-        String username = systemSettingsService.getSmtpUsername();
-        return username != null && username.contains("@") ? username : "noreply@bauschlosserei-kuhn.de";
+        // Konfigurierbar im Firma-Editor → System-Setup; Fallback auf SMTP-User.
+        // Hintergrund: Wer eine separate "Sub-Email" als sichtbaren Absender
+        // hinterlegt, vermeidet dass Gmail die SMTP-Login-Adresse anhand
+        // ihres reinen Auto-Mail-Verkehrs als Bulk/Spam einstuft.
+        return systemSettingsService.getMailFromAddress();
     }
 
     private static String sanitizeForFilename(String input)

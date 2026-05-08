@@ -815,8 +815,8 @@ public class AutoMahnVersandService
 
     private String ermittleAbsenderAdresse()
     {
-        String username = systemSettingsService.getSmtpUsername();
-        return username != null && username.contains("@") ? username : "noreply@bauschlosserei-kuhn.de";
+        // Konfigurierbar im Firma-Editor → System-Setup; Fallback auf SMTP-User.
+        return systemSettingsService.getMailFromAddress();
     }
 
     private static String formatBetrag(BigDecimal betrag)

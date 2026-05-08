@@ -92,6 +92,30 @@ public class SystemSettingsService {
         return sanitizeValue(get("smtp.password", defaultSmtpPassword));
     }
 
+    /**
+     * Sichtbare Absender-Adresse für automatisch generierte System-Mails
+     * (z.B. Auftragsbestätigungen, Mahnungen). Gmail & Co. lernen den
+     * Reputationsscore pro From-Adresse — wenn das System hier eine andere
+     * Adresse als die SMTP-Login-Mailbox einträgt (z.B. eine "Sub-Email"
+     * desselben Postfachs), profitieren Auto-Mails vom Reputationsscore
+     * der manuell genutzten Hauptadresse.
+     *
+     * <p>Fallback: SMTP-Benutzername — funktioniert bei jedem Provider und
+     * passt zum bisherigen Verhalten ohne Konfiguration.</p>
+     */
+    public String getMailFromAddress() {
+        String val = sanitizeValue(get("mail.from-address", ""));
+        // Defense-in-Depth: ein direkt in die DB geschriebener Müll-Wert
+        // (kein "@") darf nicht ungeprüft als From-Adresse rausgehen — das
+        // würde sonst beim ersten Send mit einer kryptischen
+        // AddressException sterben. Lieber transparent auf den SMTP-User
+        // zurückfallen.
+        if (val.isBlank() || !val.contains("@")) {
+            return getSmtpUsername();
+        }
+        return val;
+    }
+
     public String getImapHost() {
         String val = sanitizeValue(get("imap.host", defaultImapHost));
         return val.isBlank() ? "secureimap.t-online.de" : val;
@@ -175,8 +199,17 @@ public class SystemSettingsService {
         settings.put("imap.username", getImapUsername());
         settings.put("imap.password", maskValue(getImapPassword()));
         settings.put("ai.gemini.api-key", maskValue(getGeminiApiKey()));
+        settings.put("mail.from-address", getMailFromAddress());
 
         return settings;
+    }
+
+    @Transactional
+    public void saveMailFromAddress(String address) {
+        String value = address == null ? "" : address.trim();
+        save("mail.from-address", value,
+                "Sichtbare Absender-Adresse für automatische System-Mails (leer = SMTP-Benutzer)");
+        log.info("Mail-Absender-Adresse aktualisiert: {}", value.isBlank() ? "(leer → SMTP-User)" : value);
     }
 
     // ==================== Schreiben ====================

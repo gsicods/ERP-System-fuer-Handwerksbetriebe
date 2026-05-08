@@ -109,14 +109,21 @@ export function SystemSetupConfigurator({ onSaved }: SystemSetupConfiguratorProp
     const [funnelSpamFilterAktiv, setFunnelSpamFilterAktiv] = useState(true);
     const [funnelSpamFilterSaving, setFunnelSpamFilterSaving] = useState(false);
 
+    // Standard-Absender für automatische System-Mails (z.B. Auftragsbestätigung,
+    // Mahnungen). Leer = SMTP-Benutzer wird genommen.
+    const [mailFromAddress, setMailFromAddress] = useState('');
+    const [mailFromSmtpUser, setMailFromSmtpUser] = useState('');
+    const [mailFromSaving, setMailFromSaving] = useState(false);
+
     const loadSettings = useCallback(async () => {
         setLoading(true);
         try {
-            const [smtpRes, imapRes, geminiRes, funnelSpamRes] = await Promise.all([
+            const [smtpRes, imapRes, geminiRes, funnelSpamRes, mailFromRes] = await Promise.all([
                 fetch('/api/settings/smtp'),
                 fetch('/api/settings/imap'),
                 fetch('/api/settings/gemini'),
                 fetch('/api/settings/anfrage-funnel-spamfilter'),
+                fetch('/api/settings/mail-from'),
             ]);
 
             if (smtpRes.ok) {
@@ -150,6 +157,17 @@ export function SystemSetupConfigurator({ onSaved }: SystemSetupConfiguratorProp
             if (funnelSpamRes.ok) {
                 const data = await funnelSpamRes.json();
                 setFunnelSpamFilterAktiv(data?.aktiv !== false);
+            }
+
+            if (mailFromRes.ok) {
+                const data = await mailFromRes.json();
+                // Wenn die gespeicherte Adresse identisch zum SMTP-User ist,
+                // zeigen wir das Feld leer — das macht klar, dass der Default
+                // greift und ist kein Backend-State.
+                const stored: string = data?.address || '';
+                const smtpUser: string = data?.smtpUsername || '';
+                setMailFromSmtpUser(smtpUser);
+                setMailFromAddress(stored && stored !== smtpUser ? stored : '');
             }
         } catch {
             toast.error('Einstellungen konnten nicht geladen werden.');
@@ -374,6 +392,34 @@ export function SystemSetupConfigurator({ onSaved }: SystemSetupConfiguratorProp
         }
     };
 
+    const handleSaveMailFrom = async () => {
+        const trimmed = mailFromAddress.trim();
+        if (trimmed && !trimmed.includes('@')) {
+            toast.error('Bitte eine gültige E-Mail-Adresse eintragen.');
+            return;
+        }
+        setMailFromSaving(true);
+        try {
+            const res = await fetch('/api/settings/mail-from', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ address: trimmed }),
+            });
+            if (res.ok) {
+                const data = await res.json().catch(() => null);
+                toast.success(data?.message || 'Absender gespeichert.');
+                await loadSettings();
+                onSaved?.();
+            } else {
+                toast.error(await parseErrorMessage(res, 'Absender konnte nicht gespeichert werden.'));
+            }
+        } catch {
+            toast.error('Verbindung zum Server fehlgeschlagen.');
+        } finally {
+            setMailFromSaving(false);
+        }
+    };
+
     if (loading) {
         return (
             <div className="flex items-center gap-2 text-slate-500 py-8">
@@ -445,6 +491,54 @@ export function SystemSetupConfigurator({ onSaved }: SystemSetupConfiguratorProp
                     >
                         {accountSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                         Konto speichern
+                    </Button>
+                </div>
+            </Card>
+
+            {/* === Standard-Absender für automatische Mails === */}
+            <Card className="p-6">
+                <h3 className="text-lg font-semibold text-slate-900 mb-2 flex items-center gap-2">
+                    <Send className="w-5 h-5 text-rose-600" />
+                    Absender für automatische Mails
+                </h3>
+                <p className="text-sm text-slate-500 mb-4">
+                    Welche Adresse soll im "Von:" stehen, wenn das System automatisch
+                    Auftragsbestätigungen oder Mahnungen verschickt? Wenn Sie hier eine
+                    zweite Adresse Ihres Postfachs eintragen (z.B. <span className="font-mono">info@firma.de</span>{' '}
+                    statt der SMTP-Login-Adresse), profitieren automatische Mails vom
+                    guten Ruf Ihrer Hauptadresse und landen seltener im Spam-Ordner von
+                    Gmail &amp; Co.
+                </p>
+
+                <div>
+                    <Label>Absender-Adresse</Label>
+                    <Input
+                        type="email"
+                        placeholder={mailFromSmtpUser || 'info@firma.de'}
+                        value={mailFromAddress}
+                        onChange={(e) => setMailFromAddress(e.target.value)}
+                        className="sm:max-w-md"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                        Leer lassen → das System nutzt automatisch Ihre SMTP-Adresse
+                        {mailFromSmtpUser ? (
+                            <>
+                                {' '}(<span className="font-mono">{mailFromSmtpUser}</span>)
+                            </>
+                        ) : null}
+                        . Die Adresse muss demselben Postfach gehören wie der SMTP-Login,
+                        sonst lehnt der Mail-Server das Senden ab.
+                    </p>
+                </div>
+
+                <div className="flex justify-end mt-6">
+                    <Button
+                        onClick={handleSaveMailFrom}
+                        disabled={mailFromSaving}
+                        className="bg-rose-600 text-white hover:bg-rose-700"
+                    >
+                        {mailFromSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        Absender speichern
                     </Button>
                 </div>
             </Card>
