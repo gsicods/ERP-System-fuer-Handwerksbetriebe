@@ -1,8 +1,11 @@
 package org.example.kalkulationsprogramm.repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+
+import org.example.kalkulationsprogramm.domain.ProjektArt;
 
 import org.example.kalkulationsprogramm.domain.Zeitbuchung;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -99,4 +102,20 @@ public interface ZeitbuchungRepository extends JpaRepository<Zeitbuchung, Long> 
          * Prüft ob Zeitbuchungen für eine bestimmte ProjektProduktkategorie existieren.
          */
         boolean existsByProjektProduktkategorieId(Long projektProduktkategorieId);
+
+        /**
+         * Summiert geleistete Stunden eines Mitarbeiters im Zeitraum, gefiltert nach
+         * Projekt-Art (z.B. INTERN/GARANTIE fuer unproduktive, PAUSCHAL/REGIE fuer
+         * produktive Stunden). Pausen werden ignoriert.
+         */
+        @Query("SELECT COALESCE(SUM(z.anzahlInStunden), 0) FROM Zeitbuchung z " +
+                        "WHERE z.mitarbeiter.id = :mitarbeiterId " +
+                        "AND z.startZeit >= :von AND z.startZeit < :bis " +
+                        "AND z.projekt.projektArt IN :arten " +
+                        "AND z.typ = org.example.kalkulationsprogramm.domain.BuchungsTyp.ARBEIT")
+        BigDecimal sumStundenByMitarbeiterAndProjektArtAndZeitraum(
+                        @Param("mitarbeiterId") Long mitarbeiterId,
+                        @Param("von") LocalDateTime von,
+                        @Param("bis") LocalDateTime bis,
+                        @Param("arten") List<ProjektArt> arten);
 }

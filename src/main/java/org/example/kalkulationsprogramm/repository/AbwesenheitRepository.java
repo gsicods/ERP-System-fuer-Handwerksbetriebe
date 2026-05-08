@@ -64,6 +64,18 @@ public interface AbwesenheitRepository extends JpaRepository<Abwesenheit, Long> 
                         @Param("bis") LocalDate bis);
 
         /**
+         * Summiert Stunden fuer Abwesenheiten eines Mitarbeiters nach Typ in einem
+         * Zeitraum. Wird vom Verrechnungslohn-Rechner fuer Urlaub/Krankheit getrennt
+         * benoetigt.
+         */
+        @Query("SELECT COALESCE(SUM(a.stunden), 0) FROM Abwesenheit a WHERE a.mitarbeiter.id = :mitarbeiterId AND a.typ = :typ AND a.datum >= :von AND a.datum <= :bis")
+        java.math.BigDecimal sumStundenByMitarbeiterIdAndTypAndDatumBetween(
+                        @Param("mitarbeiterId") Long mitarbeiterId,
+                        @Param("typ") AbwesenheitsTyp typ,
+                        @Param("von") LocalDate von,
+                        @Param("bis") LocalDate bis);
+
+        /**
          * Prüft ob für einen Mitarbeiter an einem Datum bereits eine Abwesenheit
          * existiert.
          */

@@ -131,6 +131,9 @@ public class SecurityConfig {
                 // System-Signatur fuer automatische E-Mails ist firmenweite Konfiguration
                 // (wirkt auf Mahnungen, Auto-Auftragsbestaetigungen) — nur Admins duerfen sie umbiegen.
                 .requestMatchers(HttpMethod.PUT, "/api/email/signatures/*/system-default").hasRole("ADMIN")
+                // Verrechnungslohn-Uebernahme schreibt Stundensaetze fuer alle Arbeitsgaenge
+                // eines Jahres - kalkulatorische Massenmutation, nur Admin.
+                .requestMatchers(HttpMethod.POST, "/api/verrechnungslohn/uebernehmen").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
             .formLogin(form -> form
