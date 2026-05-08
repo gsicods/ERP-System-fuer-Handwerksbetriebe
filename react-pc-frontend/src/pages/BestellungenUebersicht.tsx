@@ -718,8 +718,8 @@ export default function BestellungenUebersicht() {
     // Zuordnung Modal State
     const [zuordnungKette, setZuordnungKette] = useState<DokumentenKette | null>(null);
 
-    const loadData = useCallback(async () => {
-        setLoading(true);
+    const loadData = useCallback(async (silent = false) => {
+        if (!silent) setLoading(true);
         setError(null);
         try {
             const res = await fetch('/api/bestellungen-uebersicht');
@@ -729,7 +729,7 @@ export default function BestellungenUebersicht() {
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Unbekannter Fehler');
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, []);
 
@@ -744,6 +744,25 @@ export default function BestellungenUebersicht() {
 
     const setKetteAusgeblendet = useCallback(async (kette: DokumentenKette, ausblenden: boolean) => {
         setBusyKetteId(kette.id);
+
+        // Optimistic Update: Kette sofort verschieben, damit kein Ganzseiten-Spinner nötig ist
+        setData(prev => {
+            if (!prev) return prev;
+            if (ausblenden) {
+                return {
+                    offeneAnfragen: prev.offeneAnfragen.filter(k => k.id !== kette.id),
+                    laufendeBestellungen: prev.laufendeBestellungen.filter(k => k.id !== kette.id),
+                    abgeschlossen: prev.abgeschlossen.filter(k => k.id !== kette.id),
+                    zugeordnet: prev.zugeordnet.filter(k => k.id !== kette.id),
+                    ausgeblendet: [kette, ...prev.ausgeblendet.filter(k => k.id !== kette.id)],
+                };
+            }
+            return {
+                ...prev,
+                ausgeblendet: prev.ausgeblendet.filter(k => k.id !== kette.id),
+            };
+        });
+
         try {
             const res = await fetch(`/api/bestellungen-uebersicht/${ausblenden ? 'ausblenden' : 'einblenden'}`, {
                 method: 'POST',
@@ -751,10 +770,13 @@ export default function BestellungenUebersicht() {
                 body: JSON.stringify({ dokumentIds: kette.dokumente.map(d => d.id) }),
             });
             if (!res.ok) throw new Error('Fehler');
-            await loadData();
+            // Silent reload, damit beim Einblenden die Kette in die richtige Liste rutscht
+            await loadData(true);
             toast.success(ausblenden ? 'Ausgeblendet' : 'Wieder eingeblendet');
         } catch {
             toast.error('Aktion fehlgeschlagen');
+            // Server-Stand wiederherstellen, falls Optimistic Update falsch lag
+            await loadData(true);
         } finally {
             setBusyKetteId(null);
         }
@@ -786,7 +808,7 @@ export default function BestellungenUebersicht() {
                     </p>
                 </div>
                 <Button
-                    onClick={loadData}
+                    onClick={() => loadData()}
                     disabled={loading}
                     variant="outline"
                     size="sm"
@@ -890,7 +912,7 @@ export default function BestellungenUebersicht() {
                 <ZuordnungModal
                     kette={zuordnungKette}
                     onClose={() => setZuordnungKette(null)}
-                    onSuccess={loadData}
+                    onSuccess={() => loadData()}
                 />
             )}
         </div>
