@@ -14,6 +14,7 @@ import org.example.kalkulationsprogramm.repository.AnfrageDokumentRepository;
 import org.example.kalkulationsprogramm.repository.AnfrageRepository;
 import org.example.kalkulationsprogramm.repository.EmailBlacklistRepository;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
+import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.example.kalkulationsprogramm.repository.ProjektDokumentRepository;
 import org.example.kalkulationsprogramm.repository.ProjektRepository;
@@ -64,6 +65,7 @@ class UnifiedEmailControllerTest {
     @MockBean private ProjektRepository projektRepository;
     @MockBean private AnfrageRepository anfrageRepository;
     @MockBean private LieferantenRepository lieferantenRepository;
+    @MockBean private KundeRepository kundeRepository;
     @MockBean private EmailAutoAssignmentService emailAutoAssignmentService;
     @MockBean private EmailImportService emailImportService;
     @MockBean private SpamFilterService spamFilterService;
@@ -590,6 +592,96 @@ class UnifiedEmailControllerTest {
             mockMvc.perform(post("/api/emails/backfill-parents"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.updatedCount").value(0));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // KUNDE-LOOKUP (Detail-DTO)
+    // ═══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("GET /api/emails/{id} – Kunden-Lookup im Detail-DTO")
+    class KundeLookup {
+
+        private org.example.kalkulationsprogramm.domain.Kunde kundeMustermann() {
+            org.example.kalkulationsprogramm.domain.Kunde k =
+                    new org.example.kalkulationsprogramm.domain.Kunde();
+            k.setId(7L);
+            k.setKundennummer("K-007");
+            k.setName("Max Mustermann");
+            return k;
+        }
+
+        @Test
+        @DisplayName("Eingehende Mail: kundeName aus fromAddress gemappt")
+        void incomingEmail_setsKundeName() throws Exception {
+            Email email = createTestEmail(100L, "Anfrage Geländer",
+                    "\"Max Mustermann\" <max@mustermann.de>");
+            email.setDirection(EmailDirection.IN);
+            given(emailRepository.findById(100L)).willReturn(Optional.of(email));
+            given(kundeRepository.findByKundenEmailIgnoreCase("max@mustermann.de"))
+                    .willReturn(List.of(kundeMustermann()));
+
+            mockMvc.perform(get("/api/emails/100"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.kundeId").value(7))
+                    .andExpect(jsonPath("$.kundeName").value("Max Mustermann"));
+        }
+
+        @Test
+        @DisplayName("Ausgehende Mail: kundeName aus recipient gemappt")
+        void outgoingEmail_setsKundeNameFromRecipient() throws Exception {
+            Email email = createTestEmail(101L, "Rechnung", "buero@firma.de");
+            email.setDirection(EmailDirection.OUT);
+            email.setRecipient("Max Mustermann <max@mustermann.de>");
+            given(emailRepository.findById(101L)).willReturn(Optional.of(email));
+            given(kundeRepository.findByKundenEmailIgnoreCase("max@mustermann.de"))
+                    .willReturn(List.of(kundeMustermann()));
+
+            mockMvc.perform(get("/api/emails/101"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.kundeId").value(7))
+                    .andExpect(jsonPath("$.kundeName").value("Max Mustermann"));
+        }
+
+        @Test
+        @DisplayName("Unbekannte Adresse: kundeName bleibt null")
+        void noMatch_leavesKundeNameNull() throws Exception {
+            Email email = createTestEmail(102L, "Spam", "fremd@nirgendwo.com");
+            given(emailRepository.findById(102L)).willReturn(Optional.of(email));
+            given(kundeRepository.findByKundenEmailIgnoreCase("fremd@nirgendwo.com"))
+                    .willReturn(List.of());
+
+            mockMvc.perform(get("/api/emails/102"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.kundeId").doesNotExist())
+                    .andExpect(jsonPath("$.kundeName").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("Mehrere Treffer: deterministisch der mit kleinster Id gewinnt")
+        void multipleMatches_picksLowestId() throws Exception {
+            Email email = createTestEmail(103L, "Sammeladresse",
+                    "info@gemeinde-musterstadt.de");
+            given(emailRepository.findById(103L)).willReturn(Optional.of(email));
+            org.example.kalkulationsprogramm.domain.Kunde k1 =
+                    new org.example.kalkulationsprogramm.domain.Kunde();
+            k1.setId(42L);
+            k1.setKundennummer("K-042");
+            k1.setName("Spät angelegt");
+            org.example.kalkulationsprogramm.domain.Kunde k2 =
+                    new org.example.kalkulationsprogramm.domain.Kunde();
+            k2.setId(5L);
+            k2.setKundennummer("K-005");
+            k2.setName("Früher Kunde");
+            // Bewusst in „falscher" Reihenfolge zurückgeben, um Sortierung zu prüfen.
+            given(kundeRepository.findByKundenEmailIgnoreCase("info@gemeinde-musterstadt.de"))
+                    .willReturn(List.of(k1, k2));
+
+            mockMvc.perform(get("/api/emails/103"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.kundeId").value(5))
+                    .andExpect(jsonPath("$.kundeName").value("Früher Kunde"));
         }
     }
 }

@@ -47,6 +47,9 @@ public class UnifiedEmailDto {
     private String anfrageName;
     private Long lieferantId;
     private String lieferantName;
+    /** Name des erkannten Kunden (per fromAddress/recipient gegen Kunde.kundenEmails gematcht). */
+    private Long kundeId;
+    private String kundeName;
 
     // Ordner-Zuordnung (computed)
     private String folder;

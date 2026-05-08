@@ -26,6 +26,7 @@ import org.example.kalkulationsprogramm.repository.AnfrageDokumentRepository;
 import org.example.kalkulationsprogramm.repository.AnfrageRepository;
 import org.example.kalkulationsprogramm.repository.EmailBlacklistRepository;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
+import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.example.kalkulationsprogramm.repository.ProjektDokumentRepository;
 import org.example.kalkulationsprogramm.repository.ProjektRepository;
@@ -73,6 +74,7 @@ public class UnifiedEmailController {
     private final ProjektRepository projektRepository;
     private final AnfrageRepository anfrageRepository;
     private final LieferantenRepository lieferantenRepository;
+    private final KundeRepository kundeRepository;
     private final EmailAutoAssignmentService emailAutoAssignmentService;
     private final EmailImportService emailImportService;
     private final SpamFilterService spamFilterService;
@@ -1694,6 +1696,7 @@ public class UnifiedEmailController {
             dto.setLieferantId(email.getLieferant().getId());
             dto.setLieferantName(email.getLieferant().getLieferantenname());
         }
+        // Hinweis: applyKundeLookup() bewusst NICHT in der Liste aufrufen, um N+1 zu vermeiden.
 
         // Compute folder
         dto.setFolder(computeFolder(email));
@@ -1754,6 +1757,7 @@ public class UnifiedEmailController {
             dto.setLieferantId(email.getLieferant().getId());
             dto.setLieferantName(email.getLieferant().getLieferantenname());
         }
+        applyKundeLookup(email, dto);
 
         // Compute folder
         dto.setFolder(computeFolder(email));
@@ -1886,5 +1890,45 @@ public class UnifiedEmailController {
                 .map(a -> a.getEmailAdresse())
                 .filter(s -> s != null && !s.isBlank())
                 .orElse(null);
+    }
+
+    /**
+     * Versucht, die Email einem Kunden zuzuordnen (rein anhand der E-Mail-Adresse,
+     * ohne den Datensatz zu verändern). Bei IN-Mails wird die From-Adresse, bei
+     * OUT-Mails der erste Empfänger gegen {@code Kunde.kundenEmails} geprüft.
+     * Setzt {@code kundeId}/{@code kundeName} im DTO, wenn ein Treffer existiert.
+     * <p>
+     * Wird bewusst nur aus {@link #toDto(Email)} (Detailansicht) aufgerufen,
+     * nicht aus {@link #toListDto(Email)}, um N+1-Queries auf Listen-Endpoints
+     * zu vermeiden.
+     */
+    private void applyKundeLookup(Email email, UnifiedEmailDto dto) {
+        String raw = email.getDirection() == EmailDirection.OUT
+                ? email.getRecipient()
+                : email.getFromAddress();
+        String address = extractFirstEmailAddress(raw);
+        if (address == null) return;
+        // Bei mehreren Treffern (z.B. Sammeladresse) deterministisch nach Kunden-Id sortieren,
+        // damit immer derselbe Name im UI erscheint.
+        kundeRepository.findByKundenEmailIgnoreCase(address).stream()
+                .min(java.util.Comparator.comparing(k -> k.getId()))
+                .ifPresent(k -> {
+                    dto.setKundeId(k.getId());
+                    dto.setKundeName(k.getName());
+                });
+    }
+
+    /** Match-Pattern für E-Mail-Adressen in beliebigen Header-Werten (Display-Name + Adresse). */
+    private static final java.util.regex.Pattern EMAIL_PATTERN = java.util.regex.Pattern
+            .compile("[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}");
+
+    /**
+     * Extrahiert die erste E-Mail-Adresse aus einem rohen Header-Wert
+     * (z.B. {@code "Max Mustermann <max@example.com>, foo@bar.com"} → {@code "max@example.com"}).
+     */
+    private static String extractFirstEmailAddress(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        java.util.regex.Matcher m = EMAIL_PATTERN.matcher(raw);
+        return m.find() ? m.group() : null;
     }
 }

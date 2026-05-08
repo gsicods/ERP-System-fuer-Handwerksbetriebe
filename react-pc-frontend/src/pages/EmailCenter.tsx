@@ -100,6 +100,7 @@ interface EmailItem {
     projektName?: string;
     anfrageName?: string;
     lieferantName?: string;
+    kundeName?: string;
     isRead?: boolean;
     recipient?: string;
     spamScore?: number;
@@ -107,6 +108,7 @@ interface EmailItem {
     projektId?: number;
     anfrageId?: number;
     lieferantId?: number;
+    kundeId?: number;
     // Computed folder from backend
     folder?: FolderType;
     // Thread-Informationen
@@ -122,6 +124,9 @@ type FolderType = 'inbox' | 'sent' | 'drafts' | 'trash' | 'spam' | 'newsletter' 
 
 
 const getSenderName = (email: EmailItem) => {
+    // Explizit zugeordneter Lieferant gewinnt – das ist ein bewusst gesetzter FK.
+    if (email.lieferantId && email.lieferantName) return email.lieferantName;
+    if (email.kundeName) return email.kundeName;
     if (email.lieferantName) return email.lieferantName;
     if (email.projektName) return email.projektName;
     if (email.anfrageName) return email.anfrageName;
@@ -1902,12 +1907,12 @@ export default function EmailCenter() {
                                     )}>
                                         {getDisplayName(selectedEmail).charAt(0).toUpperCase()}
                                     </div>
-                                    <div>
-                                        <p className="font-medium text-slate-900 flex items-center gap-2">
+                                    <div className="min-w-0">
+                                        <p className="font-medium text-slate-900 truncate">
                                             {getSenderName(selectedEmail)}
-                                            <span className="text-slate-500 font-normal text-xs text-muted-foreground hidden sm:inline-block">
-                                                &lt;{selectedEmail.fromAddress}&gt;
-                                            </span>
+                                        </p>
+                                        <p className="text-slate-500 font-normal text-xs text-muted-foreground break-all">
+                                            &lt;{selectedEmail.fromAddress}&gt;
                                         </p>
                                         <p className="text-xs text-slate-500 mt-0.5">
                                             An: <span className="text-slate-700">{getRecipientName(selectedEmail)}</span>
