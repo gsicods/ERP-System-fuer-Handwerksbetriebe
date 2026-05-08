@@ -47,6 +47,9 @@ interface Mitarbeiter {
     krankenkasseId?: number | null;
     krankenkasseName?: string | null;
     kinderlos?: boolean | null;
+    istGeschaeftsfuehrer?: boolean | null;
+    kalkulatorischerLohnMonat?: number | null;
+    geldwertVorteilMonat?: number | null;
 }
 
 const QUALIFIKATIONEN = [
@@ -967,6 +970,77 @@ export default function MitarbeiterEditor() {
                                     kinderlos: v.kinderlos,
                                 })}
                             />
+
+                            {/* Geschäftsführer-Lohn (für Verrechnungslohn-Rechner) */}
+                            <div className="space-y-3">
+                                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-2">
+                                    <User className="w-4 h-4" /> Geschäftsführer
+                                </h3>
+                                <label className="flex items-start gap-3 cursor-pointer p-3 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!formData.istGeschaeftsfuehrer}
+                                        onChange={e => setFormData({
+                                            ...formData,
+                                            istGeschaeftsfuehrer: e.target.checked,
+                                            ...(e.target.checked ? {} : {
+                                                kalkulatorischerLohnMonat: null,
+                                                geldwertVorteilMonat: null,
+                                            }),
+                                        })}
+                                        className="mt-0.5 h-5 w-5 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                                    />
+                                    <div>
+                                        <span className="text-sm font-medium text-slate-700">Ist diese Person Geschäftsführer/in?</span>
+                                        <p className="text-xs text-slate-500 mt-1">
+                                            Dann nehmen wir statt einem echten Lohn den Wunschlohn unten für die Kalkulation des Stundensatzes.
+                                        </p>
+                                    </div>
+                                </label>
+
+                                {formData.istGeschaeftsfuehrer && (
+                                    <div className="space-y-3 pl-3 border-l-2 border-rose-200">
+                                        <div className="space-y-1">
+                                            <Label htmlFor="kalkulatorischerLohnMonat" className="text-xs">
+                                                Was möchtest du dir pro Monat als Lohn rechnen? (€)
+                                            </Label>
+                                            <Input
+                                                id="kalkulatorischerLohnMonat"
+                                                type="number"
+                                                step="0.01"
+                                                value={formData.kalkulatorischerLohnMonat ?? ''}
+                                                onChange={e => setFormData({
+                                                    ...formData,
+                                                    kalkulatorischerLohnMonat: e.target.value === '' ? null : parseFloat(e.target.value),
+                                                })}
+                                                placeholder="5000.00"
+                                            />
+                                            <p className="text-xs text-slate-500">
+                                                Wunschlohn pro Monat – fließt 12× ins Jahr in den Stundensatz ein.
+                                            </p>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <Label htmlFor="geldwertVorteilMonat" className="text-xs">
+                                                Auto/Telefon/Privatanteile pro Monat (€) – optional
+                                            </Label>
+                                            <Input
+                                                id="geldwertVorteilMonat"
+                                                type="number"
+                                                step="0.01"
+                                                value={formData.geldwertVorteilMonat ?? ''}
+                                                onChange={e => setFormData({
+                                                    ...formData,
+                                                    geldwertVorteilMonat: e.target.value === '' ? null : parseFloat(e.target.value),
+                                                })}
+                                                placeholder="500.00"
+                                            />
+                                            <p className="text-xs text-slate-500">
+                                                Pauschal: was die Firma für dich privat trägt (z.B. Firmenwagen, Handy).
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
 
                             {/* Status */}
                             <div className="space-y-3">

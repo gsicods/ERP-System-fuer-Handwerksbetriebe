@@ -124,6 +124,7 @@ public class MitarbeiterService {
         // Geschaeftsfuehrer-Felder
         entity.setIstGeschaeftsfuehrer(Boolean.TRUE.equals(dto.getIstGeschaeftsfuehrer()));
         if (Boolean.TRUE.equals(dto.getIstGeschaeftsfuehrer())) {
+            validateGeschaeftsfuehrerFelder(dto);
             entity.setKalkulatorischerLohnMonat(dto.getKalkulatorischerLohnMonat());
             entity.setGeldwertVorteilMonat(dto.getGeldwertVorteilMonat());
         } else {
@@ -397,6 +398,18 @@ public class MitarbeiterService {
         }
         if (dto.getGueltigAb() == null) {
             throw new IllegalArgumentException("Gueltig-ab-Datum ist Pflicht.");
+        }
+    }
+
+    private static void validateGeschaeftsfuehrerFelder(MitarbeiterErstellenDto dto) {
+        if (dto.getKalkulatorischerLohnMonat() == null
+                || dto.getKalkulatorischerLohnMonat().signum() < 0) {
+            throw new IllegalArgumentException(
+                    "Kalkulatorischer Lohn pro Monat ist Pflicht und darf nicht negativ sein, wenn die Person als Geschaeftsfuehrer markiert ist.");
+        }
+        if (dto.getGeldwertVorteilMonat() != null
+                && dto.getGeldwertVorteilMonat().signum() < 0) {
+            throw new IllegalArgumentException("Geldwerte Vorteile pro Monat duerfen nicht negativ sein.");
         }
     }
 
