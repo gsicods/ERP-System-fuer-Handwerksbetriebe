@@ -1895,9 +1895,6 @@ export default function EmailCenter() {
                     <div className="p-6 border-b border-slate-200">
                         <div className="flex items-start justify-between gap-4">
                             <div className="flex-1 min-w-0">
-                                <h2 className="text-xl font-bold text-slate-900 mb-2 break-words">
-                                    {selectedEmail.subject || '(Kein Betreff)'}
-                                </h2>
                                 <div className="flex items-center gap-3 text-sm text-slate-600">
                                     <div className={cn(
                                         "w-9 h-9 rounded-full flex items-center justify-center text-white font-medium text-sm shadow-sm",
@@ -2128,6 +2125,9 @@ export default function EmailCenter() {
                                 </Button>
                             </div>
                         </div>
+                        <h2 className="text-xl font-bold text-slate-900 mt-4 break-words">
+                            {selectedEmail.subject || '(Kein Betreff)'}
+                        </h2>
                     </div>
 
                     {/* Thread-Verlauf */}
