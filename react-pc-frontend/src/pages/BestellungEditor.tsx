@@ -283,8 +283,13 @@ const BestellungEmailModal: React.FC<BestellungEmailModalProps> = ({
                 setShowCustomRecipient(true);
             });
 
-        // Absender-Adressen laden
-        fetch('/api/email/from-addresses')
+        // Absender-Adressen laden – User-Adresse steht durch frontendUserId
+        // an erster Stelle und wird damit als Default uebernommen.
+        const userForAddresses = getCurrentFrontendUser();
+        const addressesUrl = userForAddresses?.id
+            ? `/api/email/from-addresses?frontendUserId=${userForAddresses.id}`
+            : '/api/email/from-addresses';
+        fetch(addressesUrl)
             .then(res => res.json())
             .then(data => {
                 const addresses = Array.isArray(data) ? data : [];
@@ -382,7 +387,8 @@ const BestellungEmailModal: React.FC<BestellungEmailModalProps> = ({
             const formData = new FormData();
 
             const dtoPayload = {
-                sender: fromAddress || 'bauschlosserei-kuhn@t-online.de',
+                // Leerer sender = Backend loest aus frontendUserId auf.
+                sender: fromAddress || null,
                 recipients: [finalRecipient],
                 cc: (cc === 'manual' ? ccManual : cc)
                     .split(',')

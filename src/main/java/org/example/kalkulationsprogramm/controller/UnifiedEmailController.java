@@ -85,6 +85,8 @@ public class UnifiedEmailController {
     private final SpamBayesService spamBayesService;
     private final EmailThreadService emailThreadService;
     private final org.example.kalkulationsprogramm.service.SystemSettingsService systemSettingsService;
+    private final org.example.kalkulationsprogramm.service.EmailAbsenderService emailAbsenderService;
+    private final org.example.kalkulationsprogramm.service.FrontendUserProfileService frontendUserProfileService;
 
     @org.springframework.beans.factory.annotation.Value("${file.mail-attachment-dir}")
     private String mailAttachmentDir;
@@ -1238,7 +1240,7 @@ public class UnifiedEmailController {
 
     @PostMapping(value = "/send", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
     @Transactional
-    public ResponseEntity<UnifiedEmailDto> sendEmail(
+    public ResponseEntity<?> sendEmail(
             @RequestPart("dto") ProjektEmailDto dto,
             @RequestPart(value = "attachments", required = false) MultipartFile[] attachments,
             @RequestPart(value = "dokumentId", required = false) String dokumentIdStr) {
@@ -1356,7 +1358,18 @@ public class UnifiedEmailController {
                     ? String.join(",", dto.getCc())
                     : null;
 
-            String sender = dto.getSender() != null ? dto.getSender() : "bauschlosserei-kuhn@t-online.de";
+            String sender;
+            try {
+                sender = resolveSenderAddress(dto.getSender(), dto.getFrontendUserId());
+            } catch (IllegalArgumentException ex) {
+                log.warn("Sender-Aufloesung fehlgeschlagen: {}", ex.getMessage());
+                return ResponseEntity.badRequest().body(Map.of("message", ex.getMessage()));
+            }
+            if (sender == null) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "message",
+                        "Kein Absender konfiguriert. Bitte unter Firma -> E-Mail-Absender mindestens eine Adresse anlegen."));
+            }
 
             String messageId = emailService.sendEmailWithMultipleAttachments(
                     recipient,
@@ -1477,7 +1490,7 @@ public class UnifiedEmailController {
 
     @PostMapping(value = "/{emailId}/reply", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Transactional
-    public ResponseEntity<UnifiedEmailDto> replyToEmail(
+    public ResponseEntity<?> replyToEmail(
             @PathVariable Long emailId,
             @RequestPart("dto") ProjektEmailDto dto,
             @RequestPart(value = "attachments", required = false) MultipartFile[] attachments) {
@@ -1518,7 +1531,18 @@ public class UnifiedEmailController {
             String recipient = dto.getRecipients() != null && !dto.getRecipients().isEmpty()
                     ? dto.getRecipients().get(0)
                     : parentEmail.getFromAddress();
-            String sender = dto.getSender() != null ? dto.getSender() : "bauschlosserei-kuhn@t-online.de";
+            String sender;
+            try {
+                sender = resolveSenderAddress(dto.getSender(), dto.getFrontendUserId());
+            } catch (IllegalArgumentException ex) {
+                log.warn("Sender-Aufloesung fehlgeschlagen: {}", ex.getMessage());
+                return ResponseEntity.badRequest().body(Map.of("message", ex.getMessage()));
+            }
+            if (sender == null) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "message",
+                        "Kein Absender konfiguriert. Bitte unter Firma -> E-Mail-Absender mindestens eine Adresse anlegen."));
+            }
 
             String messageId = emailService.sendEmailWithMultipleAttachments(
                     recipient,
@@ -1797,5 +1821,53 @@ public class UnifiedEmailController {
             current = current.getParentEmail();
         }
         return count;
+    }
+
+    /**
+     * Loest die Absender-Adresse fuer einen ausgehenden E-Mail-Versand auf.
+     * Reihenfolge:
+     *   1. Explizit vom Frontend uebergebener Sender. Liegt er nicht in der
+     *      Liste der aktiv konfigurierten Absender, wird {@link IllegalArgumentException}
+     *      geworfen - kein stilles Umfallen auf einen anderen Absender (sonst
+     *      koennte ein deaktivierter/geloeschter Sender unbemerkt durch einen
+     *      anderen ersetzt werden).
+     *   2. Adresse, die dem eingeloggten Benutzer (frontendUserId) zugewiesen
+     *      ist - das ist der Standard-Pfad nach diesem Refactoring.
+     *   3. Erster aktiver konfigurierter Absender als Fallback (z.B. fuer
+     *      Cron-Jobs ohne Benutzerkontext).
+     * Liefert {@code null}, wenn ueberhaupt kein Absender konfiguriert ist;
+     * der Aufrufer antwortet dann mit 400.
+     */
+    private String resolveSenderAddress(String requestedSender, Long frontendUserId) {
+        java.util.List<String> aktive = emailAbsenderService.findActiveEmailAddresses();
+        java.util.Set<String> aktiveLower = aktive.stream()
+                .map(s -> s.toLowerCase(java.util.Locale.ROOT))
+                .collect(java.util.stream.Collectors.toSet());
+
+        if (requestedSender != null && !requestedSender.isBlank()) {
+            String trimmed = requestedSender.trim();
+            if (!aktiveLower.contains(trimmed.toLowerCase(java.util.Locale.ROOT))) {
+                throw new IllegalArgumentException(
+                        "Absender '" + trimmed + "' ist nicht (mehr) in der Liste der konfigurierten Absender. "
+                                + "Bitte unter Firma -> E-Mail-Absender pflegen oder eine andere Adresse waehlen.");
+            }
+            return trimmed;
+        }
+
+        if (frontendUserId != null) {
+            String fromUser = frontendUserProfileService.findById(frontendUserId)
+                    .map(p -> p.getEmailAbsender())
+                    .map(a -> a.getEmailAdresse())
+                    .filter(s -> s != null && !s.isBlank())
+                    .orElse(null);
+            if (fromUser != null) {
+                return fromUser;
+            }
+        }
+
+        return emailAbsenderService.findFirstActive()
+                .map(a -> a.getEmailAdresse())
+                .filter(s -> s != null && !s.isBlank())
+                .orElse(null);
     }
 }

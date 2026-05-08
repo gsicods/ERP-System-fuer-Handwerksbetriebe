@@ -76,6 +76,8 @@ class UnifiedEmailControllerTest {
     @MockBean private SpamBayesService spamBayesService;
     @MockBean private EmailThreadService emailThreadService;
     @MockBean private org.example.kalkulationsprogramm.service.SystemSettingsService systemSettingsService;
+    @MockBean private org.example.kalkulationsprogramm.service.EmailAbsenderService emailAbsenderService;
+    @MockBean private org.example.kalkulationsprogramm.service.FrontendUserProfileService frontendUserProfileService;
 
     private Email createTestEmail(Long id, String subject, String from) {
         Email email = new Email();

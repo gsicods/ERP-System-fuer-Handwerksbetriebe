@@ -27,6 +27,7 @@ import org.example.kalkulationsprogramm.repository.AnfrageRepository;
 import org.example.kalkulationsprogramm.repository.ProjektDokumentRepository;
 import org.example.kalkulationsprogramm.service.DateiSpeicherService;
 import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
+import org.example.kalkulationsprogramm.service.EmailAbsenderService;
 import org.example.kalkulationsprogramm.service.EmailAiService;
 import org.example.kalkulationsprogramm.service.EmailSignatureService;
 import org.example.kalkulationsprogramm.service.FrontendUserProfileService;
@@ -35,6 +36,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -58,9 +60,37 @@ public class EmailController {
     private final DateiSpeicherService dateiSpeicherService;
     private final SystemSettingsService systemSettingsService;
     private final DokumentFreigabeService dokumentFreigabeService;
+    private final EmailAbsenderService emailAbsenderService;
 
     @Value("${file.mail-attachment-dir}")
     private String mailAttachmentDir;
+
+    /**
+     * Liefert die im FirmaEditor konfigurierten, aktiven Absender-Adressen.
+     * Wird {@code frontendUserId} mitgegeben, steht die dem Benutzer zuge-
+     * wiesene Adresse als ERSTER Eintrag in der Liste - das Frontend kann
+     * dann direkt {@code addresses[0]} als Default uebernehmen.
+     */
+    @GetMapping("/from-addresses")
+    public ResponseEntity<java.util.List<String>> getFromAddresses(
+            @org.springframework.web.bind.annotation.RequestParam(value = "frontendUserId", required = false) Long frontendUserId) {
+        java.util.List<String> aktive = new java.util.ArrayList<>(emailAbsenderService.findActiveEmailAddresses());
+
+        if (frontendUserId != null) {
+            String userAdresse = frontendUserProfileService.findById(frontendUserId)
+                    .map(FrontendUserProfile::getEmailAbsender)
+                    .map(a -> a.getEmailAdresse())
+                    .filter(s -> s != null && !s.isBlank())
+                    .orElse(null);
+            if (userAdresse != null) {
+                // User-Adresse an den Anfang stellen, Duplikate vermeiden.
+                aktive.removeIf(a -> a.equalsIgnoreCase(userAdresse));
+                aktive.add(0, userAdresse);
+            }
+        }
+
+        return ResponseEntity.ok(aktive);
+    }
 
     @PostMapping("/beautify")
     public ResponseEntity<EmailBeautifyResponse> beautifyEmail(@RequestBody EmailBeautifyRequest request) {

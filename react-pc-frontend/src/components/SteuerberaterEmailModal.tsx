@@ -350,7 +350,9 @@ ${sig}
             const formData = new FormData();
 
             const dtoPayload = {
-                sender: 'bauschlosserei-kuhn@t-online.de',
+                // Leerer sender = Backend loest aus frontendUserId auf (im
+                // FirmaEditor konfigurierte und am Benutzer hinterlegte Adresse).
+                sender: null,
                 recipients: [recipient.trim()],
                 cc: [],
                 subject: subject.trim(),

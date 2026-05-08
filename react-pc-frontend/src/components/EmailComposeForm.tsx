@@ -417,7 +417,16 @@ export function EmailComposeForm({
 
     const loadFromAddresses = useCallback(async () => {
         try {
-            const res = await fetch('/api/email/from-addresses');
+            const currentUser = getCurrentFrontendUser();
+            const params = new URLSearchParams();
+            if (currentUser?.id) {
+                params.set('frontendUserId', String(currentUser.id));
+            }
+            const url = params.toString()
+                ? `/api/email/from-addresses?${params.toString()}`
+                : '/api/email/from-addresses';
+
+            const res = await fetch(url);
             if (!res.ok) return;
             const data = await res.json();
             const addresses = Array.isArray(data)
@@ -425,6 +434,7 @@ export function EmailComposeForm({
                 : [];
             setFromAddresses(addresses);
             if (addresses.length > 0) {
+                // Adressen sind bereits sortiert: User-Adresse steht an erster Stelle.
                 setFromAddress(prev => prev || addresses[0]);
             }
         } catch (err) {
@@ -743,7 +753,8 @@ export function EmailComposeForm({
             const formData = new FormData();
 
             const dtoPayload = {
-                sender: fromAddress || 'bauschlosserei-kuhn@t-online.de',
+                // Leerer sender = Backend loest aus frontendUserId auf (zugewiesene Adresse).
+                sender: fromAddress || null,
                 recipients: [finalRecipient],
                 cc: ccRecipients.filter(c => c.trim().length > 0),
                 subject: subject.trim(),

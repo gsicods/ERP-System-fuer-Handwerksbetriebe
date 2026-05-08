@@ -6,10 +6,12 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
+import org.example.kalkulationsprogramm.domain.EmailAbsender;
 import org.example.kalkulationsprogramm.domain.EmailSignature;
 import org.example.kalkulationsprogramm.domain.FrontendUserProfile;
 import org.example.kalkulationsprogramm.domain.FrontendUserRole;
 import org.example.kalkulationsprogramm.domain.Mitarbeiter;
+import org.example.kalkulationsprogramm.repository.EmailAbsenderRepository;
 import org.example.kalkulationsprogramm.repository.EmailSignatureRepository;
 import org.example.kalkulationsprogramm.repository.FrontendUserProfileRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
@@ -26,6 +28,7 @@ public class FrontendUserProfileService {
     private final FrontendUserProfileRepository repository;
     private final EmailSignatureRepository emailSignatureRepository;
     private final MitarbeiterRepository mitarbeiterRepository;
+    private final EmailAbsenderRepository emailAbsenderRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Transactional(readOnly = true)
@@ -64,7 +67,7 @@ public class FrontendUserProfileService {
 
     @Transactional
     public FrontendUserProfile saveOrUpdate(FrontendUserProfile profile, Long defaultSignatureId, Long mitarbeiterId) {
-        return saveOrUpdate(profile, defaultSignatureId, mitarbeiterId, profile.getUsername(), null, profile.getRoleSet(), null);
+        return saveOrUpdate(profile, defaultSignatureId, mitarbeiterId, profile.getUsername(), null, profile.getRoleSet(), null, null);
     }
 
     @Transactional
@@ -77,6 +80,20 @@ public class FrontendUserProfileService {
             Set<FrontendUserRole> roles,
             Boolean active
     ) {
+        return saveOrUpdate(profile, defaultSignatureId, mitarbeiterId, username, rawPassword, roles, active, null);
+    }
+
+    @Transactional
+    public FrontendUserProfile saveOrUpdate(
+            FrontendUserProfile profile,
+            Long defaultSignatureId,
+            Long mitarbeiterId,
+            String username,
+            String rawPassword,
+            Set<FrontendUserRole> roles,
+            Boolean active,
+            Long emailAbsenderId
+    ) {
         EmailSignature signature = null;
         if (defaultSignatureId != null) {
             signature = emailSignatureRepository.findById(defaultSignatureId).orElseThrow();
@@ -84,6 +101,11 @@ public class FrontendUserProfileService {
         Mitarbeiter mitarbeiter = null;
         if (mitarbeiterId != null) {
             mitarbeiter = mitarbeiterRepository.findById(mitarbeiterId).orElse(null);
+        }
+        EmailAbsender emailAbsender = null;
+        if (emailAbsenderId != null) {
+            emailAbsender = emailAbsenderRepository.findById(emailAbsenderId).orElseThrow(
+                    () -> new IllegalArgumentException("E-Mail-Absender nicht gefunden: " + emailAbsenderId));
         }
 
         boolean usernameProvided = username != null && !username.isBlank();
@@ -124,6 +146,7 @@ public class FrontendUserProfileService {
 
         target.setDefaultSignature(signature);
         target.setMitarbeiter(mitarbeiter);
+        target.setEmailAbsender(emailAbsender);
 
         if (target.getShortCode() == null || target.getShortCode().isBlank()) {
             target.setShortCode(generateShortCode(target.getDisplayName()));

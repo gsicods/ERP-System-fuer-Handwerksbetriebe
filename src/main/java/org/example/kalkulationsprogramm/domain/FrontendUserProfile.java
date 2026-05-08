@@ -66,6 +66,10 @@ public class FrontendUserProfile {
     @JoinColumn(name = "default_signature_id")
     private EmailSignature defaultSignature;
 
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "email_absender_id")
+    private EmailAbsender emailAbsender;
+
     // Links this PC frontend profile to an employee for document upload tracking
     @OneToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "mitarbeiter_id")
@@ -158,6 +162,14 @@ public class FrontendUserProfile {
 
     public void setDefaultSignature(EmailSignature defaultSignature) {
         this.defaultSignature = defaultSignature;
+    }
+
+    public EmailAbsender getEmailAbsender() {
+        return emailAbsender;
+    }
+
+    public void setEmailAbsender(EmailAbsender emailAbsender) {
+        this.emailAbsender = emailAbsender;
     }
 
     public Mitarbeiter getMitarbeiter() {

@@ -9,6 +9,7 @@ import org.example.kalkulationsprogramm.repository.AnfrageRepository;
 import org.example.kalkulationsprogramm.repository.ProjektDokumentRepository;
 import org.example.kalkulationsprogramm.service.DateiSpeicherService;
 import org.example.kalkulationsprogramm.service.DokumentFreigabeService;
+import org.example.kalkulationsprogramm.service.EmailAbsenderService;
 import org.example.kalkulationsprogramm.service.EmailAiService;
 import org.example.kalkulationsprogramm.service.EmailSignatureService;
 import org.example.kalkulationsprogramm.service.FrontendUserProfileService;
@@ -69,6 +70,9 @@ class EmailControllerTest {
 
     @MockBean
     private DokumentFreigabeService dokumentFreigabeService;
+
+    @MockBean
+    private EmailAbsenderService emailAbsenderService;
 
     @Nested
     @DisplayName("POST /api/email/beautify")

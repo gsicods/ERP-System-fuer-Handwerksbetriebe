@@ -55,7 +55,8 @@ public class FrontendUserController {
                     request.getUsername(),
                     request.getPassword(),
                     request.getRolesAsEnum(),
-                    request.getActive()
+                    request.getActive(),
+                    request.getEmailAbsenderId()
             );
             return ResponseEntity.ok(saved);
         } catch (IllegalArgumentException | IllegalStateException ex) {
@@ -99,6 +100,7 @@ public class FrontendUserController {
         private Boolean active;
         private Long defaultSignatureId;
         private Long mitarbeiterId;
+        private Long emailAbsenderId;
 
         public Set<FrontendUserRole> getRolesAsEnum() {
             LinkedHashSet<FrontendUserRole> result = new LinkedHashSet<>();
