@@ -10,10 +10,15 @@ import {
     ChevronLeft,
     ChevronRight,
     Filter,
+    Globe,
     Loader2,
+    Mail,
     MapPin,
+    Monitor,
     Package,
+    Phone,
     RefreshCw,
+    Send,
     TrendingUp,
     Users,
     Wallet,
@@ -128,6 +133,28 @@ interface UmsatzStatistiken {
     konversion: ConversionRateDto;
     ortHeatmap: OrtHeatmapDto[];
     topKunden: TopKundeDto[];
+}
+
+interface WebsiteAnalyticsSnapshotDto {
+    schemaVersion: number;
+    snapshotDate: string;
+    generatedAt: string;
+    receivedAt: string;
+    totals: {
+        visitors: number;
+        pageviews: number;
+        leadsPhone: number;
+        leadsMail: number;
+        submissions: number;
+    };
+    visitorsToday: number;
+    visitorsYesterday: number;
+    conversion: number;
+    funnel: { name: string; label: string; count: number }[];
+    topPages: { path: string; count: number }[];
+    devices: { device: string; count: number }[];
+    browsers: { browser: string; count: number }[];
+    cities: { city: string; country: string; count: number }[];
 }
 
 const MONATE = [
@@ -372,6 +399,7 @@ export default function ErfolgsanalyseEditor() {
     const [statistiken, setStatistiken] = useState<UmsatzStatistiken | null>(null);
     const [lieferantenkostenJahre, setLieferantenkostenJahre] = useState<LieferantenkostenJahr[]>([]);
     const [lieferantPerformance, setLieferantPerformance] = useState<LieferantPerformance[]>([]);
+    const [websiteAnalytics, setWebsiteAnalytics] = useState<WebsiteAnalyticsSnapshotDto | null>(null);
 
     // Lade Daten
     const loadData = useCallback(async () => {
@@ -380,11 +408,12 @@ export default function ErfolgsanalyseEditor() {
             const params = new URLSearchParams({ jahr: jahr.toString() });
             if (monat) params.append('monat', monat);
 
-            const [docsRes, statsRes, liefkostenRes, liefPerfRes] = await Promise.all([
+            const [docsRes, statsRes, liefkostenRes, liefPerfRes, websiteRes] = await Promise.all([
                 fetch(`/api/projekte/umsatz?${params.toString()}`),
                 fetch(`/api/projekte/umsatz/statistiken?jahr=${jahr}${monat ? `&monat=${monat}` : ''}`),
                 fetch('/api/projekte/umsatz/lieferantenkosten-jahresuebersicht'),
                 fetch(`/api/projekte/umsatz/lieferanten-performance?jahr=${jahr}${monat ? `&monat=${monat}` : ''}`),
+                fetch('/api/website-analytics/latest'),
             ]);
 
             if (docsRes.ok) {
@@ -405,6 +434,18 @@ export default function ErfolgsanalyseEditor() {
             if (liefPerfRes.ok) {
                 const liefPerf = await liefPerfRes.json();
                 setLieferantPerformance(Array.isArray(liefPerf) ? liefPerf : []);
+            }
+
+            if (websiteRes.ok) {
+                // 204 No Content -> noch kein Snapshot vorhanden
+                if (websiteRes.status === 204) {
+                    setWebsiteAnalytics(null);
+                } else {
+                    const snap: WebsiteAnalyticsSnapshotDto = await websiteRes.json();
+                    setWebsiteAnalytics(snap);
+                }
+            } else {
+                setWebsiteAnalytics(null);
             }
         } catch (err) {
             console.error('Fehler beim Laden:', err);
@@ -644,6 +685,38 @@ export default function ErfolgsanalyseEditor() {
             ],
         };
     }, [lieferantPerformance]);
+
+    // Website-Funnel Bar-Chart
+    const websiteFunnelChartData = useMemo(() => {
+        if (!websiteAnalytics?.funnel || websiteAnalytics.funnel.length === 0) return null;
+        return {
+            labels: websiteAnalytics.funnel.map(f => f.label || f.name),
+            datasets: [{
+                label: 'Besucher',
+                data: websiteAnalytics.funnel.map(f => f.count),
+                backgroundColor: [
+                    'rgba(225, 29, 72, 0.85)',
+                    'rgba(225, 29, 72, 0.7)',
+                    'rgba(225, 29, 72, 0.55)',
+                    'rgba(225, 29, 72, 0.4)',
+                ],
+                borderWidth: 0,
+            }],
+        };
+    }, [websiteAnalytics]);
+
+    // Website-Devices Doughnut
+    const websiteDevicesChartData = useMemo(() => {
+        if (!websiteAnalytics?.devices || websiteAnalytics.devices.length === 0) return null;
+        return {
+            labels: websiteAnalytics.devices.map(d => d.device || 'Unbekannt'),
+            datasets: [{
+                data: websiteAnalytics.devices.map(d => d.count),
+                backgroundColor: CHART_COLORS,
+                borderWidth: 0,
+            }],
+        };
+    }, [websiteAnalytics]);
 
     // Sortierte Top-Kunden
     const sortedTopKunden = useMemo(() => {
@@ -1085,6 +1158,215 @@ export default function ErfolgsanalyseEditor() {
                                 </div>
                             </Card>
                         </div>
+
+                        {/* 5. Website-Daten (bauschlosserei-kuhn.de) */}
+                        <Card className="p-6 border-0 shadow-sm rounded-xl">
+                            <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
+                                <div className="flex items-center gap-3">
+                                    <Globe className="w-5 h-5 text-rose-600" />
+                                    <h2 className="text-lg font-bold text-slate-900">Website-Daten</h2>
+                                </div>
+                                {websiteAnalytics && (
+                                    <p className="text-xs text-slate-500">
+                                        Stand {websiteAnalytics.snapshotDate.split('-').reverse().join('.')}
+                                        {' '}({websiteAnalytics.totals.visitors.toLocaleString('de-DE')} Besucher gesamt)
+                                    </p>
+                                )}
+                            </div>
+
+                            {!websiteAnalytics ? (
+                                <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-2 border-2 border-dashed border-slate-100 rounded-xl">
+                                    <Globe className="w-8 h-8 text-slate-300" />
+                                    <p className="font-medium">Noch kein Website-Snapshot vorhanden</p>
+                                    <p className="text-xs">Die Webseite liefert ihren ersten Snapshot heute Nacht (~02:00).</p>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Website KPIs */}
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+                                        <div className="p-4 rounded-xl bg-rose-50">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <Users className="w-4 h-4 text-rose-600" />
+                                                <p className="text-xs font-semibold uppercase text-rose-600">Besucher heute</p>
+                                            </div>
+                                            <p className="text-lg font-bold text-rose-700">
+                                                {websiteAnalytics.visitorsToday.toLocaleString('de-DE')}
+                                            </p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-slate-50">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <Users className="w-4 h-4 text-slate-600" />
+                                                <p className="text-xs font-semibold uppercase text-slate-500">Besucher gestern</p>
+                                            </div>
+                                            <p className="text-lg font-bold text-slate-900">
+                                                {websiteAnalytics.visitorsYesterday.toLocaleString('de-DE')}
+                                            </p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-rose-50">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <TrendingUp className="w-4 h-4 text-rose-600" />
+                                                <p className="text-xs font-semibold uppercase text-rose-600">Conversion</p>
+                                            </div>
+                                            <p className="text-lg font-bold text-rose-700">
+                                                {websiteAnalytics.conversion}%
+                                            </p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-slate-50">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <Phone className="w-4 h-4 text-rose-600" />
+                                                <p className="text-xs font-semibold uppercase text-slate-500">Klicks Anrufen</p>
+                                            </div>
+                                            <p className="text-lg font-bold text-slate-900">
+                                                {websiteAnalytics.totals.leadsPhone.toLocaleString('de-DE')}
+                                            </p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-slate-50">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <Mail className="w-4 h-4 text-rose-600" />
+                                                <p className="text-xs font-semibold uppercase text-slate-500">Klicks E-Mail</p>
+                                            </div>
+                                            <p className="text-lg font-bold text-slate-900">
+                                                {websiteAnalytics.totals.leadsMail.toLocaleString('de-DE')}
+                                            </p>
+                                        </div>
+                                        <div className="p-4 rounded-xl bg-slate-50">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <Send className="w-4 h-4 text-rose-600" />
+                                                <p className="text-xs font-semibold uppercase text-slate-500">Anfragen</p>
+                                            </div>
+                                            <p className="text-lg font-bold text-slate-900">
+                                                {websiteAnalytics.totals.submissions.toLocaleString('de-DE')}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Funnel + Devices */}
+                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                                        <div className="lg:col-span-2 p-4 rounded-xl bg-slate-50/50">
+                                            <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                                <BarChart3 className="w-4 h-4 text-rose-600" />
+                                                Anfrage-Trichter (lifetime)
+                                            </h3>
+                                            <div className="h-[260px] w-full relative">
+                                                {websiteFunnelChartData ? (
+                                                    <Bar
+                                                        key={`web-funnel-${websiteAnalytics.snapshotDate}`}
+                                                        data={websiteFunnelChartData}
+                                                        options={{
+                                                            ...barChartOptions,
+                                                            indexAxis: 'y' as const,
+                                                            maintainAspectRatio: false,
+                                                            plugins: { legend: { display: false } },
+                                                            scales: {
+                                                                x: { beginAtZero: true },
+                                                            },
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div className="h-full flex items-center justify-center text-slate-400">
+                                                        Keine Funnel-Daten
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="p-4 rounded-xl bg-slate-50/50">
+                                            <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                                <Monitor className="w-4 h-4 text-rose-600" />
+                                                Geräte
+                                            </h3>
+                                            <div className="h-[260px] w-full relative">
+                                                {websiteDevicesChartData ? (
+                                                    <Doughnut
+                                                        key={`web-dev-${websiteAnalytics.snapshotDate}`}
+                                                        data={websiteDevicesChartData}
+                                                        options={{
+                                                            ...doughnutChartOptions,
+                                                            maintainAspectRatio: false,
+                                                            plugins: { legend: { position: 'bottom' as const } },
+                                                            cutout: '60%',
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div className="h-full flex items-center justify-center text-slate-400">
+                                                        Keine Daten
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Top Pages + Browsers + Cities */}
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div className="p-4 rounded-xl bg-slate-50/50">
+                                            <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                                <Package className="w-4 h-4 text-rose-600" />
+                                                Top-Seiten
+                                            </h3>
+                                            {websiteAnalytics.topPages.length === 0 ? (
+                                                <p className="text-sm text-slate-400">Keine Daten</p>
+                                            ) : (
+                                                <ul className="space-y-2">
+                                                    {websiteAnalytics.topPages.slice(0, 8).map((p, idx) => (
+                                                        <li key={`${p.path}-${idx}`} className="flex items-center justify-between gap-2 text-sm">
+                                                            <span className="truncate text-slate-700 font-mono text-xs">{p.path || '/'}</span>
+                                                            <span className="font-semibold text-slate-900 shrink-0">
+                                                                {p.count.toLocaleString('de-DE')}
+                                                            </span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+
+                                        <div className="p-4 rounded-xl bg-slate-50/50">
+                                            <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                                <Globe className="w-4 h-4 text-rose-600" />
+                                                Browser
+                                            </h3>
+                                            {websiteAnalytics.browsers.length === 0 ? (
+                                                <p className="text-sm text-slate-400">Keine Daten</p>
+                                            ) : (
+                                                <ul className="space-y-2">
+                                                    {websiteAnalytics.browsers.map((b, idx) => (
+                                                        <li key={`${b.browser}-${idx}`} className="flex items-center justify-between gap-2 text-sm">
+                                                            <span className="truncate text-slate-700">{b.browser || 'Unbekannt'}</span>
+                                                            <span className="font-semibold text-slate-900 shrink-0">
+                                                                {b.count.toLocaleString('de-DE')}
+                                                            </span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+
+                                        <div className="p-4 rounded-xl bg-slate-50/50">
+                                            <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
+                                                <MapPin className="w-4 h-4 text-rose-600" />
+                                                Top-Städte
+                                            </h3>
+                                            {websiteAnalytics.cities.length === 0 ? (
+                                                <p className="text-sm text-slate-400">Keine Daten</p>
+                                            ) : (
+                                                <ul className="space-y-2">
+                                                    {websiteAnalytics.cities.map((c, idx) => (
+                                                        <li key={`${c.city}-${idx}`} className="flex items-center justify-between gap-2 text-sm">
+                                                            <span className="truncate text-slate-700">
+                                                                {c.city || 'Unbekannt'}
+                                                                {c.country && <span className="text-slate-400 ml-1">({c.country})</span>}
+                                                            </span>
+                                                            <span className="font-semibold text-slate-900 shrink-0">
+                                                                {c.count.toLocaleString('de-DE')}
+                                                            </span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                        </Card>
                     </div>
 
 
