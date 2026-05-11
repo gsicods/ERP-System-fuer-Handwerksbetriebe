@@ -74,6 +74,8 @@ import LieferantReklamationCreatePage from './pages/LieferantReklamationCreatePa
 import { LieferantReklamationenPage } from './pages/LieferantReklamationenPage'
 import LieferantLieferscheinePage from './pages/LieferantLieferscheinePage'
 import BelegScannerPage from './pages/BelegScannerPage'
+import BelegPositionenAuswahlPage from './pages/BelegPositionenAuswahlPage'
+import MwstRechnerPage from './pages/MwstRechnerPage'
 import { LieferantReklamationDetailPage } from './pages/LieferantReklamationDetailPage'
 import KalenderPage from './pages/KalenderPage'
 import { OfflineService } from './services/OfflineService'
@@ -357,6 +359,8 @@ function App() {
         <Route path="/tagesbuchungen" element={<TagesbuchungenPage syncStatus={syncStatus} onSync={syncData} />} />
         <Route path="/kalender" element={<KalenderPage mitarbeiter={mitarbeiter} token={localStorage.getItem('zeiterfassung_token')} syncStatus={syncStatus} onSync={syncData} />} />
         <Route path="/belege" element={<BelegScannerPage />} />
+        <Route path="/belege/:id/positionen" element={<BelegPositionenAuswahlPage />} />
+        <Route path="/mwst-rechner" element={<MwstRechnerPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

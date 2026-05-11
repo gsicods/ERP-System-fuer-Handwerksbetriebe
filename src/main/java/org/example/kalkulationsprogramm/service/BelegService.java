@@ -252,12 +252,12 @@ public class BelegService {
         } else {
             list = belegRepository.findAllByOrderByUploadDatumDesc();
         }
-        return list.stream().map(this::toDto).toList();
+        return list.stream().map(b -> toDto(b, false)).toList();
     }
 
     @Transactional(readOnly = true)
     public BelegDto.Response getBeleg(Long id) {
-        return belegRepository.findById(id).map(this::toDto).orElse(null);
+        return belegRepository.findById(id).map(b -> toDto(b, true)).orElse(null);
     }
 
     @Transactional(readOnly = true)
@@ -527,6 +527,13 @@ public class BelegService {
     // ===================== DTO-Mapping =====================
 
     public BelegDto.Response toDto(Beleg b) {
+        // Default: mit Positionen — fuer Detail-Views und Auto-Tests, in denen
+        // direkt nach Upload das DTO gerendert wird. Listen-Endpoints rufen
+        // den (Beleg, boolean)-Overload mit mitPositionen=false.
+        return toDto(b, true);
+    }
+
+    public BelegDto.Response toDto(Beleg b, boolean mitPositionen) {
         // Sub-Query auf lieferant_dokument(beleg_id) — wird nur fuer Belege benoetigt,
         // die als RECHNUNG/GUTSCHRIFT klassifiziert wurden. Spart eine Spalte am Beleg,
         // ist aber bei Listings ein N+1. Bei groesseren Datenmengen sollte das Repository
@@ -597,7 +604,7 @@ public class BelegService {
                 .betragFirmaNetto(b.getBetragFirmaNetto())
                 .betragFirmaBrutto(b.getBetragFirmaBrutto())
                 .betragFirmaMwst(b.getBetragFirmaMwst())
-                .positionen(b.getAufteilungsModus() == BelegAufteilungsModus.TEILWEISE
+                .positionen(mitPositionen && b.getAufteilungsModus() == BelegAufteilungsModus.TEILWEISE
                         ? toPositionResponse(belegPositionRepository.findByBelegIdOrderBySortierungAsc(b.getId()))
                         : java.util.Collections.emptyList())
                 .build();

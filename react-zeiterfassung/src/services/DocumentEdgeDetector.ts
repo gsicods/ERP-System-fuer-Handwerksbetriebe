@@ -1,11 +1,12 @@
 /**
- * Lädt OpenCV.js + jscanify on-demand und liefert die vier erkannten
- * Eckpunkte eines Dokuments in einem Bild (in dessen Pixel-Koordinaten).
+ * Lädt OpenCV.js + jscanify und liefert die vier erkannten Eckpunkte
+ * eines Dokuments in einem Bild (in dessen Pixel-Koordinaten).
  *
  * OpenCV.js (~8.6 MB) liegt als statisches Asset unter `/scanner/opencv.js`
- * und wird nur beim ersten Aufruf nachgeladen — der initiale PWA-Bundle
- * bleibt klein. Der Service-Worker-Precache ignoriert diese Datei
- * (siehe vite.config.ts → globIgnores).
+ * und wird beim ersten Aufruf via <script>-Tag nachgeladen. Seit der PWA-
+ * Service-Worker beide Dateien precached (vite.config.ts), kommt der Fetch
+ * nach dem ersten Install offline aus dem Cache — Ecken-Erkennung
+ * funktioniert dann auch ohne (gute) Internetverbindung.
  */
 
 export interface Point {

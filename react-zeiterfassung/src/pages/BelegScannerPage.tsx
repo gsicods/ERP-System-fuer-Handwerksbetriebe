@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     ArrowLeft, ScanLine, Upload, Loader2, CheckCircle2, AlertCircle,
-    Receipt, RefreshCw, X, Building2, ChevronRight,
+    Receipt, RefreshCw, X, Building2, ChevronRight, SplitSquareHorizontal, CheckSquare, ListChecks, Calculator,
 } from 'lucide-react'
 import ScannerModal from '../components/ScannerModal'
 import { SupplierSelectionModal } from '../components/SupplierSelectionModal'
@@ -26,6 +26,11 @@ interface LieferantOption {
  */
 type ItemStatus = 'pending' | 'uploading' | 'done' | 'failed'
 
+// Aufteilungs-Modus: vom Nutzer VOR dem Scan gewaehlt.
+// VOLLSTAENDIG = ganzer Beleg fuer die Firma (Standardfall)
+// TEILWEISE    = Mischbon, Positionen-Auswahl per Checkbox-Liste folgt nach KI-Extraktion
+type AufteilungsModus = 'VOLLSTAENDIG' | 'TEILWEISE'
+
 interface QueueItem {
     localId: string
     file: File
@@ -37,6 +42,7 @@ interface QueueItem {
     // mitgegeben, damit die KI-Auto-Eingangsrechnung sofort verknuepft werden kann.
     lieferantId?: number
     lieferantName?: string
+    aufteilungsModus: AufteilungsModus
 }
 
 interface Permissions {
@@ -56,6 +62,9 @@ export default function BelegScannerPage() {
     const [supplierPickerOpen, setSupplierPickerOpen] = useState(false)
     const [pendingAction, setPendingAction] = useState<'scan' | 'gallery' | null>(null)
     const [chosenLieferant, setChosenLieferant] = useState<LieferantOption | null>(null)
+    // Aufteilungs-Modus fuer ALLE Scans dieser Session, bis der Nutzer es umschaltet.
+    // Beim Mischbon-Workflow waehlt er einmal "Teilweise" und scannt direkt mehrere.
+    const [aufteilungsModus, setAufteilungsModus] = useState<AufteilungsModus>('VOLLSTAENDIG')
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('zeiterfassung_token') : null
 
@@ -80,7 +89,7 @@ export default function BelegScannerPage() {
         return () => { releaseCameraStream() }
     }, [])
 
-    const enqueue = (file: File, lieferant: LieferantOption | null) => {
+    const enqueue = (file: File, lieferant: LieferantOption | null, modus: AufteilungsModus) => {
         const item: QueueItem = {
             localId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             file,
@@ -88,6 +97,7 @@ export default function BelegScannerPage() {
             addedAt: Date.now(),
             lieferantId: lieferant?.id,
             lieferantName: lieferant?.firmenname,
+            aufteilungsModus: modus,
         }
         setQueue(q => [item, ...q])
         // Fire-and-forget: kein await — Scanner ist sofort wieder bereit.
@@ -102,6 +112,7 @@ export default function BelegScannerPage() {
             const url = new URL(`/api/buchhaltung/mobile/belege`, window.location.origin)
             if (token) url.searchParams.set('token', token)
             if (item.lieferantId != null) url.searchParams.set('lieferantId', String(item.lieferantId))
+            url.searchParams.set('aufteilungsModus', item.aufteilungsModus)
             const res = await fetch(url.pathname + url.search, {
                 method: 'POST',
                 body: fd,
@@ -133,7 +144,7 @@ export default function BelegScannerPage() {
 
     const handleScanComplete = async (file: File) => {
         setShowScanner(false)
-        enqueue(file, chosenLieferant)
+        enqueue(file, chosenLieferant, aufteilungsModus)
         // chosenLieferant wird NICHT zurueckgesetzt: ein Buchhalter scannt
         // typischerweise mehrere Belege desselben Lieferanten direkt hintereinander.
         // Der User aendert die Auswahl via "Lieferant aendern"-Chip oben.
@@ -143,7 +154,7 @@ export default function BelegScannerPage() {
         const files = e.target.files
         if (!files) return
         for (let i = 0; i < files.length; i++) {
-            enqueue(files[i], chosenLieferant)
+            enqueue(files[i], chosenLieferant, aufteilungsModus)
         }
         if (fileInputRef.current) fileInputRef.current.value = ''
     }
@@ -264,12 +275,53 @@ export default function BelegScannerPage() {
                     )}
                 </button>
 
+                {/* Aufteilungs-Modus VOR dem Scan auswaehlen. Bei "Teilweise" extrahiert
+                    die KI alle Positionen und der Nutzer hakt sie nach dem Upload an. */}
+                <div className="grid grid-cols-2 gap-2">
+                    <button
+                        onClick={() => setAufteilungsModus('VOLLSTAENDIG')}
+                        className={`rounded-xl px-3 py-3 flex items-center gap-2 border-2 text-left transition-colors active:scale-[0.98] ${
+                            aufteilungsModus === 'VOLLSTAENDIG'
+                                ? 'bg-rose-50 border-rose-500 text-rose-800'
+                                : 'bg-white border-slate-200 text-slate-600'
+                        }`}
+                    >
+                        <CheckSquare className={`w-5 h-5 ${aufteilungsModus === 'VOLLSTAENDIG' ? 'text-rose-600' : 'text-slate-400'}`} />
+                        <div className="min-w-0">
+                            <p className="font-semibold text-sm leading-tight">Ganz für Firma</p>
+                            <p className="text-xs text-slate-500 leading-tight mt-0.5">Komplette Rechnung</p>
+                        </div>
+                    </button>
+                    <button
+                        onClick={() => setAufteilungsModus('TEILWEISE')}
+                        className={`rounded-xl px-3 py-3 flex items-center gap-2 border-2 text-left transition-colors active:scale-[0.98] ${
+                            aufteilungsModus === 'TEILWEISE'
+                                ? 'bg-rose-50 border-rose-500 text-rose-800'
+                                : 'bg-white border-slate-200 text-slate-600'
+                        }`}
+                    >
+                        <SplitSquareHorizontal className={`w-5 h-5 ${aufteilungsModus === 'TEILWEISE' ? 'text-rose-600' : 'text-slate-400'}`} />
+                        <div className="min-w-0">
+                            <p className="font-semibold text-sm leading-tight">Nur Teile</p>
+                            <p className="text-xs text-slate-500 leading-tight mt-0.5">Positionen auswählen</p>
+                        </div>
+                    </button>
+                </div>
+
                 <button
                     onClick={requestScan}
                     className="w-full bg-rose-600 hover:bg-rose-700 active:scale-[0.98] text-white font-bold rounded-2xl py-5 flex items-center justify-center gap-3 shadow-lg transition-all"
                 >
                     <ScanLine className="w-7 h-7" />
                     <span className="text-lg">Beleg scannen</span>
+                </button>
+
+                <button
+                    onClick={() => navigate('/mwst-rechner')}
+                    className="w-full bg-white border-2 border-slate-200 hover:border-rose-300 active:scale-[0.98] text-slate-700 font-semibold rounded-2xl py-3 flex items-center justify-center gap-2 text-sm"
+                >
+                    <Calculator className="w-4 h-4 text-rose-600" />
+                    MwSt-Rechner öffnen
                 </button>
 
                 <button
@@ -305,7 +357,15 @@ export default function BelegScannerPage() {
                         <p className="text-xs mt-1">Tippe oben auf <strong>Beleg scannen</strong>.</p>
                     </div>
                 ) : queue.map(item => (
-                    <QueueRow key={item.localId} item={item} onRetry={retry} onRemove={removeItem} />
+                    <QueueRow
+                        key={item.localId}
+                        item={item}
+                        onRetry={retry}
+                        onRemove={removeItem}
+                        onOpenPositionen={(beleg) =>
+                            navigate(`/belege/${beleg}/positionen`)
+                        }
+                    />
                 ))}
             </div>
 
@@ -334,10 +394,11 @@ function StatBox({ label, value, color }: { label: string; value: number; color:
     )
 }
 
-function QueueRow({ item, onRetry, onRemove }: {
+function QueueRow({ item, onRetry, onRemove, onOpenPositionen }: {
     item: QueueItem
     onRetry: (item: QueueItem) => void
     onRemove: (localId: string) => void
+    onOpenPositionen: (belegId: number) => void
 }) {
     const Icon = item.status === 'done' ? CheckCircle2
         : item.status === 'failed' ? AlertCircle
@@ -368,6 +429,16 @@ function QueueRow({ item, onRetry, onRemove }: {
             {item.status === 'failed' && (
                 <button onClick={() => onRetry(item)} className="p-2 hover:bg-white rounded-lg" aria-label="Erneut versuchen">
                     <RefreshCw className="w-4 h-4 text-slate-600" />
+                </button>
+            )}
+            {item.status === 'done' && item.aufteilungsModus === 'TEILWEISE' && item.serverId != null && (
+                <button
+                    onClick={() => onOpenPositionen(item.serverId!)}
+                    className="px-2 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1"
+                    aria-label="Positionen auswählen"
+                >
+                    <ListChecks className="w-4 h-4" />
+                    Auswählen
                 </button>
             )}
             {(item.status === 'done' || item.status === 'failed') && (

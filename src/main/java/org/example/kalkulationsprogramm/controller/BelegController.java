@@ -3,11 +3,13 @@ package org.example.kalkulationsprogramm.controller;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.kalkulationsprogramm.domain.Beleg;
+import org.example.kalkulationsprogramm.domain.BelegAufteilungsModus;
 import org.example.kalkulationsprogramm.domain.BelegKategorie;
 import org.example.kalkulationsprogramm.domain.BelegStatus;
 import org.example.kalkulationsprogramm.domain.Mitarbeiter;
 import org.example.kalkulationsprogramm.dto.BelegDto;
 import org.example.kalkulationsprogramm.service.BelegService;
+import org.example.kalkulationsprogramm.service.MwstRechnerService;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -46,6 +48,7 @@ import java.util.Map;
 public class BelegController {
 
     private final BelegService belegService;
+    private final MwstRechnerService mwstRechnerService;
 
     // ===================== Helpers =====================
 
@@ -93,8 +96,9 @@ public class BelegController {
     public ResponseEntity<?> uploadBelegMobile(
             @RequestPart("datei") MultipartFile datei,
             @RequestParam(value = "lieferantId", required = false) Long lieferantId,
+            @RequestParam(value = "aufteilungsModus", required = false) String aufteilungsModus,
             @RequestParam(value = "token", required = false) String token) {
-        return uploadBeleg(datei, lieferantId, token, null);
+        return uploadBeleg(datei, lieferantId, aufteilungsModus, token, null);
     }
 
     // ===================== Upload (Mobile + PC) =====================
@@ -103,6 +107,7 @@ public class BelegController {
     public ResponseEntity<?> uploadBeleg(
             @RequestPart("datei") MultipartFile datei,
             @RequestParam(value = "lieferantId", required = false) Long lieferantId,
+            @RequestParam(value = "aufteilungsModus", required = false) String aufteilungsModus,
             @RequestParam(value = "token", required = false) String token,
             Authentication auth) {
         Mitarbeiter caller = resolveCaller(token, auth);
@@ -112,8 +117,10 @@ public class BelegController {
         if (!belegService.darfScannen(caller)) {
             return forbidden("Keine Berechtigung zum Scannen von Belegen");
         }
+        BelegAufteilungsModus modus = parseEnum(BelegAufteilungsModus.class, aufteilungsModus);
+        if (modus == null) modus = BelegAufteilungsModus.VOLLSTAENDIG;
         try {
-            Beleg b = belegService.uploadBeleg(datei, lieferantId, caller);
+            Beleg b = belegService.uploadBeleg(datei, lieferantId, modus, caller);
             return ResponseEntity.ok(belegService.toDto(b));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
@@ -121,6 +128,82 @@ public class BelegController {
             log.error("Beleg-Upload fehlgeschlagen", e);
             return ResponseEntity.internalServerError().body(Map.of("message", "Upload fehlgeschlagen"));
         }
+    }
+
+    // ===================== Positions-Aufteilung =====================
+
+    /**
+     * Speichert die Checkbox-Auswahl des Mobile-Clients. Die Request-Liste ist
+     * die vollstaendige Ist-Auswahl — was nicht enthalten ist, wird auf
+     * istFuerFirma=false gesetzt. Der Service rechnet anschliessend die
+     * Firma-Summen am Beleg neu durch.
+     */
+    @PutMapping("/belege/{id}/positionen")
+    public ResponseEntity<?> setzePositionsAuswahl(
+            @PathVariable Long id,
+            @RequestBody BelegDto.PositionAuswahlRequest req,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+        Mitarbeiter caller = resolveCaller(token, auth);
+        if (caller == null || !belegService.darfScannen(caller)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        try {
+            return ResponseEntity.ok(belegService.setzePositionsAuswahl(id, req.getFirmaPositionIds()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/mobile/belege/{id}/positionen")
+    public ResponseEntity<?> setzePositionsAuswahlMobile(
+            @PathVariable Long id,
+            @RequestBody BelegDto.PositionAuswahlRequest req,
+            @RequestParam(value = "token", required = false) String token) {
+        return setzePositionsAuswahl(id, req, token, null);
+    }
+
+    // ===================== MwSt-Rechner =====================
+
+    /**
+     * Rechen-Endpoint fuer das MwSt-Rechner-UI (Mobile + PC). Aus zwei der
+     * drei Eingaben (netto/brutto/satz) wird der dritte Wert plus der
+     * Steuerbetrag berechnet. Keine DB-Aenderung — reiner Rechen-Call.
+     *
+     * Auth verpflichtend: VPN ersetzt keine User-Auth — sonst waere der
+     * Endpoint ein unauthentifizierter Compute-DoS-Vektor.
+     */
+    @PostMapping("/mwst-rechner")
+    public ResponseEntity<?> mwstRechner(
+            @RequestBody(required = false) BelegDto.MwstRechnerRequest req,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+        Mitarbeiter caller = resolveCaller(token, auth);
+        if (caller == null || !belegService.darfSehen(caller)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        if (req == null) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Request-Body fehlt"));
+        }
+        try {
+            MwstRechnerService.MwstErgebnis e = mwstRechnerService.berechne(
+                    req.getNetto(), req.getBrutto(), req.getSatzProzent());
+            return ResponseEntity.ok(BelegDto.MwstRechnerResponse.builder()
+                    .netto(e.getNetto())
+                    .brutto(e.getBrutto())
+                    .satzProzent(e.getSatzProzent())
+                    .mwstBetrag(e.getMwstBetrag())
+                    .build());
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(Map.of("message", ex.getMessage()));
+        }
+    }
+
+    @PostMapping("/mobile/mwst-rechner")
+    public ResponseEntity<?> mwstRechnerMobile(
+            @RequestBody(required = false) BelegDto.MwstRechnerRequest req,
+            @RequestParam(value = "token", required = false) String token) {
+        return mwstRechner(req, token, null);
     }
 
     // ===================== Umbuchung (ohne Beleg-Datei, nur PC) =====================
