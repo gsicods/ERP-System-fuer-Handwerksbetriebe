@@ -33,6 +33,7 @@ class AnfrageFunnelServiceTest {
     private KundennummerService kundennummerService;
     private DateiSpeicherService dateiSpeicherService;
     private AnfrageFunnelSpamFilterService spamFilterService;
+    private AnfrageBestaetigungVersandService bestaetigungVersandService;
 
     private AnfrageFunnelService service;
 
@@ -48,11 +49,12 @@ class AnfrageFunnelServiceTest {
         dateiSpeicherService = mock(DateiSpeicherService.class);
         spamFilterService = mock(AnfrageFunnelSpamFilterService.class);
         given(spamFilterService.pruefe(any())).willReturn(AnfrageFunnelSpamFilterService.Result.ok());
+        bestaetigungVersandService = mock(AnfrageBestaetigungVersandService.class);
 
         service = new AnfrageFunnelService(
                 kundeRepository, anfrageRepository, anfrageNotizRepository,
                 mitarbeiterRepository, kundennummerService, dateiSpeicherService,
-                spamFilterService
+                spamFilterService, bestaetigungVersandService
         );
 
         systemMitarbeiter = new Mitarbeiter();
@@ -172,6 +174,39 @@ class AnfrageFunnelServiceTest {
         assertThat(notiz.getNotiz()).contains("Service: Neubau");
         assertThat(notiz.getNotiz()).contains("Datenschutz akzeptiert");
         assertThat(notiz.getBilder()).isEmpty();
+    }
+
+    @Test
+    void triggertBestaetigungsmailMitFunnelDaten() {
+        given(kundeRepository.findByKundenEmailIgnoreCase(any())).willReturn(List.of());
+        given(kundennummerService.reserviereNaechsteKundennummer()).willReturn("1042");
+
+        AnfrageFunnelRequestDto dto = baseDto();
+
+        service.verarbeiteFunnelAnfrage(dto, List.of());
+
+        ArgumentCaptor<Anfrage> anfrageCaptor = ArgumentCaptor.forClass(Anfrage.class);
+        verify(bestaetigungVersandService).versendeBestaetigung(
+                anfrageCaptor.capture(),
+                org.mockito.ArgumentMatchers.eq("Max"),
+                org.mockito.ArgumentMatchers.eq("Mustermann"),
+                org.mockito.ArgumentMatchers.eq("asfdds"));
+        assertThat(anfrageCaptor.getValue().getId()).isEqualTo(1L);
+    }
+
+    @Test
+    void schicktKeineBestaetigungsmailWennSpamErkanntWurde() {
+        given(spamFilterService.pruefe(any()))
+                .willReturn(AnfrageFunnelSpamFilterService.Result.spam("Spam"));
+
+        try {
+            service.verarbeiteFunnelAnfrage(baseDto(), List.of());
+        } catch (FunnelAnfrageAbgelehntException ignored) {
+            // erwartetes Verhalten — wir interessieren uns hier nur fuer den
+            // ausbleibenden Versand der Bestaetigungsmail.
+        }
+
+        verify(bestaetigungVersandService, never()).versendeBestaetigung(any(), any(), any(), any());
     }
 
     @Test

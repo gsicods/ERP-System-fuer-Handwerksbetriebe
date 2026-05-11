@@ -2,13 +2,16 @@ package org.example.kalkulationsprogramm.controller;
 
 import jakarta.validation.Valid;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.example.kalkulationsprogramm.domain.Dokumenttyp;
 import org.example.kalkulationsprogramm.domain.EmailTextTemplate;
+import org.example.kalkulationsprogramm.domain.EmailTextTemplateKategorie;
 import org.example.kalkulationsprogramm.dto.Email.EmailTextTemplateDto;
+import org.example.kalkulationsprogramm.service.EmailTextTemplateKategorien;
 import org.example.kalkulationsprogramm.service.EmailTextTemplateService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -28,6 +31,9 @@ public class EmailTextTemplateController {
     // Single Source of Truth: Doc-Typen kommen aus dem Dokumenttyp-Enum.
     // ZEICHNUNG existiert nicht im Enum, wird aber als E-Mail-Vorlage benötigt
     // (Versand der ersten Entwurfs-PDF an den Kunden) und daher manuell ergänzt.
+    // WEBSITE_ANFRAGE_BESTAETIGUNG ist die automatische Bestätigungsmail an
+    // Leads aus dem Funnel der Marketing-Webseite — kein Geschaeftsdokument,
+    // aber per E-Mail-Vorlage genauso editierbar.
     private static final List<Map<String, String>> DOKUMENT_TYPEN = buildDokumentTypen();
 
     private static List<Map<String, String>> buildDokumentTypen() {
@@ -37,10 +43,24 @@ public class EmailTextTemplateController {
                 case ANGEBOT -> "Anfrage / Angebot";
                 default -> d.getLabel();
             };
-            list.add(Map.of("value", d.name(), "label", label));
+            list.add(buildOption(d.name(), label));
         }
-        list.add(Map.of("value", "ZEICHNUNG", "label", "Zeichnung / Entwurf"));
+        list.add(buildOption("ZEICHNUNG", "Zeichnung / Entwurf"));
+        list.add(buildOption("WEBSITE_ANFRAGE_BESTAETIGUNG", "Webseite — Anfragebestätigung"));
         return List.copyOf(list);
+    }
+
+    private static Map<String, String> buildOption(String value, String label) {
+        // LinkedHashMap, damit die Reihenfolge der Keys im JSON deterministisch
+        // ist — Map.of() ist intern unsortiert, was beim Snapshot-Vergleich in
+        // den Controller-Tests irritierende Diff-Treffer erzeugen kann.
+        Map<String, String> option = new LinkedHashMap<>();
+        option.put("value", value);
+        option.put("label", label);
+        EmailTextTemplateKategorie kat = EmailTextTemplateKategorien.kategorieFuer(value);
+        option.put("kategorie", kat.name());
+        option.put("kategorieLabel", kat.getLabel());
+        return option;
     }
 
     private static final List<Map<String, String>> PLACEHOLDERS = List.of(
@@ -54,7 +74,11 @@ public class EmailTextTemplateController {
             Map.of("token", "{{FAELLIGKEITSDATUM}}", "label", "Fälligkeitsdatum"),
             Map.of("token", "{{BETRAG}}", "label", "Betrag (formatiert)"),
             Map.of("token", "{{BENUTZER}}", "label", "Sachbearbeiter / Benutzer"),
-            Map.of("token", "{{REVIEW_LINK}}", "label", "Google-Bewertungs-Link"));
+            Map.of("token", "{{REVIEW_LINK}}", "label", "Google-Bewertungs-Link"),
+            // Webseiten-Lead-Bestätigung
+            Map.of("token", "{{NACHRICHT}}", "label", "Nachricht aus dem Webseiten-Funnel"),
+            Map.of("token", "{{ANFRAGE_DATUM}}", "label", "Anfrage-Datum (Webseite)"),
+            Map.of("token", "{{ANFRAGENUMMER}}", "label", "Anfrage-Nummer (Webseite)"));
 
     private final EmailTextTemplateService service;
 

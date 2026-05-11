@@ -23,9 +23,12 @@ import { PageLayout } from '../components/layout/PageLayout';
 import { TiptapEditor } from '../components/TiptapEditor';
 import { useToast } from '../components/ui/toast';
 
+type Kategorie = 'DOKUMENT' | 'MAHNWESEN' | 'WEBSITE' | 'SYSTEM';
+
 interface EmailTemplate {
   id?: number | string;
   dokumentTyp: string;
+  kategorie?: Kategorie;
   name: string;
   subjectTemplate: string;
   htmlBody: string;
@@ -35,12 +38,36 @@ interface EmailTemplate {
 interface DokumentTypOption {
   value: string;
   label: string;
+  kategorie?: Kategorie;
+  kategorieLabel?: string;
 }
 
 interface PlaceholderDef {
   token: string;
   label: string;
 }
+
+/* Reihenfolge der Kategorien in der UI — bewusst hartkodiert, damit
+   "Dokumente" oben stehen (die mit Abstand häufigsten Vorlagen) und
+   "System" als generischer Sammeltopf unten. */
+const KATEGORIE_REIHENFOLGE: Kategorie[] = ['DOKUMENT', 'MAHNWESEN', 'WEBSITE', 'SYSTEM'];
+
+const KATEGORIE_LABEL: Record<Kategorie, string> = {
+  DOKUMENT: 'Dokumente',
+  MAHNWESEN: 'Mahnwesen',
+  WEBSITE: 'Webseite & Anfragen',
+  SYSTEM: 'System'
+};
+
+/* Tonal subtile Badges pro Kategorie — strikt innerhalb der von
+   FRONTEND_UI.md vorgeschriebenen rose/slate-Palette. Unterscheidung der
+   vier Gruppen ueber Saettigung/Helligkeit, nicht ueber Farbton. */
+const KATEGORIE_BADGE: Record<Kategorie, string> = {
+  DOKUMENT: 'bg-rose-50 text-rose-700 border border-rose-100',
+  MAHNWESEN: 'bg-slate-100 text-slate-700 border border-slate-200',
+  WEBSITE: 'bg-rose-100 text-rose-800 border border-rose-200',
+  SYSTEM: 'bg-slate-50 text-slate-500 border border-slate-100'
+};
 
 const PREVIEW_BADGE_CLASSES =
   'inline-flex items-center px-2 py-0.5 bg-yellow-200 text-slate-900 font-mono text-sm rounded';
@@ -56,7 +83,10 @@ const SAMPLE_CONTEXT: Record<string, string> = {
   FAELLIGKEITSDATUM: '15.05.2026',
   BETRAG: '1.234,56 €',
   BENUTZER: 'Thomas Kuhn',
-  REVIEW_LINK: '<em>(Bewertungs-Link)</em>'
+  REVIEW_LINK: '<em>(Bewertungs-Link)</em>',
+  NACHRICHT: 'Wir möchten den Wintergarten neu eindecken und benötigen ein Angebot.',
+  ANFRAGE_DATUM: '11.05.2026',
+  ANFRAGENUMMER: '00042'
 };
 
 function escapeHtml(value: string) {
@@ -145,7 +175,7 @@ function TemplateCard({
           </p>
           <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">{preview || 'Leer'}</p>
           <div className="flex flex-wrap gap-1 mt-1.5">
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-white text-slate-500 border border-slate-100">
               {dokumenttypLabel}
             </span>
             {template.aktiv === false && (
@@ -285,10 +315,21 @@ function TemplateEditorPanel({
             <Label htmlFor="email-template-doktyp">Dokumenttyp</Label>
             <Select
               value={template.dokumentTyp}
-              onChange={(value) => onChange({ ...template, dokumentTyp: value })}
+              onChange={(value) => {
+                const opt = dokumenttypOptions.find((o) => o.value === value);
+                onChange({
+                  ...template,
+                  dokumentTyp: value,
+                  // Kategorie folgt dem Dokumenttyp — manueller Override im UI
+                  // ist nicht vorgesehen, sonst zerfaellt die Gruppierung.
+                  kategorie: opt?.kategorie ?? template.kategorie
+                });
+              }}
               options={dokumenttypOptions.map((option) => ({
                 value: option.value,
-                label: option.label
+                label: option.kategorieLabel
+                  ? `${option.label} — ${option.kategorieLabel}`
+                  : option.label
               }))}
               placeholder="Dokumenttyp wählen"
             />
@@ -401,7 +442,8 @@ function TemplateView({
   copied,
   onCopy,
   onEdit,
-  onDelete
+  onDelete,
+  kategorie
 }: {
   template: EmailTemplate;
   dokumenttypLabel: string;
@@ -413,6 +455,7 @@ function TemplateView({
   onCopy: (type: 'text' | 'html', content: string) => Promise<void>;
   onEdit: () => void;
   onDelete: () => void;
+  kategorie: Kategorie;
 }) {
   const subjectPreview = useMemo(
     () =>
@@ -437,6 +480,14 @@ function TemplateView({
             <div className="min-w-0">
               <h3 className="text-lg font-semibold text-slate-900 truncate">{template.name}</h3>
               <div className="flex flex-wrap gap-1 mt-0.5">
+                <span
+                  className={cn(
+                    'text-xs px-2 py-0.5 rounded-full font-medium',
+                    KATEGORIE_BADGE[kategorie]
+                  )}
+                >
+                  {KATEGORIE_LABEL[kategorie]}
+                </span>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 font-medium">
                   {dokumenttypLabel}
                 </span>
@@ -630,6 +681,11 @@ export default function EmailTextvorlagenEditor() {
 
     const payload = {
       dokumentTyp: template.dokumentTyp,
+      // Kategorie folgt im UI automatisch dem Dokumenttyp (siehe
+      // TemplateEditorPanel.onChange) — wir muessen sie mit-senden, damit das
+      // Backend nicht auf seinen eigenen Fallback zurueckfaellt und der UI-
+      // Zustand verbindlich persistiert wird.
+      kategorie: template.kategorie,
       name: template.name.trim(),
       subjectTemplate: template.subjectTemplate,
       htmlBody: template.htmlBody,
@@ -709,6 +765,12 @@ export default function EmailTextvorlagenEditor() {
     [activeTemplate, useSampleData]
   );
 
+  const dokumenttypKategorie = useCallback(
+    (value: string): Kategorie =>
+      (dokumenttypOptions.find((option) => option.value === value)?.kategorie ?? 'SYSTEM'),
+    [dokumenttypOptions]
+  );
+
   const filteredTemplates = useMemo(() => {
     if (!searchQuery.trim()) return templates;
     const q = searchQuery.toLowerCase();
@@ -721,6 +783,23 @@ export default function EmailTextvorlagenEditor() {
       );
     });
   }, [templates, searchQuery, dokumenttypLabel]);
+
+  // Vorlagen pro Kategorie gruppieren, Sortierung innerhalb der Gruppe per
+  // Anzeigename. Leere Gruppen werden im Render unten ausgeblendet.
+  const groupedTemplates = useMemo(() => {
+    const groups = new Map<Kategorie, EmailTemplate[]>();
+    for (const kat of KATEGORIE_REIHENFOLGE) groups.set(kat, []);
+    for (const tpl of filteredTemplates) {
+      const kat: Kategorie = (tpl.kategorie ?? dokumenttypKategorie(tpl.dokumentTyp));
+      const list = groups.get(kat) ?? [];
+      list.push(tpl);
+      groups.set(kat, list);
+    }
+    for (const list of groups.values()) {
+      list.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+    }
+    return groups;
+  }, [filteredTemplates, dokumenttypKategorie]);
 
   const usedDokumentTypen = useMemo(
     () => new Set(templates.map((tpl) => tpl.dokumentTyp)),
@@ -741,7 +820,7 @@ export default function EmailTextvorlagenEditor() {
     <PageLayout
       ribbonCategory="Kommunikation"
       title="E-MAIL-TEXTVORLAGEN"
-      subtitle="Verwalten Sie die E-Mail-Texte, die beim Versand von Rechnungen, Aufträgen und Anfragen verwendet werden."
+      subtitle="Verwalten Sie die E-Mail-Texte für Rechnungen, Aufträge, Mahnungen und automatische Webseiten-Bestätigungen — gruppiert nach Verwendungszweck."
       actions={
         <Button
           size="sm"
@@ -796,21 +875,42 @@ export default function EmailTextvorlagenEditor() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-1.5 max-h-[calc(100vh-340px)] overflow-y-auto pr-1">
-                {filteredTemplates.map((template) => (
-                  <TemplateCard
-                    key={template.id}
-                    template={template}
-                    active={String(activeTemplate?.id) === String(template.id) && !editing}
-                    dokumenttypLabel={dokumenttypLabel(template.dokumentTyp)}
-                    onSelect={() => {
-                      setSelectedId(template.id ?? null);
-                      setEditing(null);
-                    }}
-                    onEdit={() => setEditing({ ...template })}
-                    onDelete={() => deleteTemplate(template)}
-                  />
-                ))}
+              <div className="space-y-4 max-h-[calc(100vh-340px)] overflow-y-auto pr-1">
+                {KATEGORIE_REIHENFOLGE.map((kat) => {
+                  const list = groupedTemplates.get(kat) ?? [];
+                  if (list.length === 0) return null;
+                  return (
+                    <div key={kat} className="space-y-1.5">
+                      <div className="flex items-center gap-2 px-1">
+                        <span
+                          className={cn(
+                            'text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded',
+                            KATEGORIE_BADGE[kat]
+                          )}
+                        >
+                          {KATEGORIE_LABEL[kat]}
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          {list.length}
+                        </span>
+                      </div>
+                      {list.map((template) => (
+                        <TemplateCard
+                          key={template.id}
+                          template={template}
+                          active={String(activeTemplate?.id) === String(template.id) && !editing}
+                          dokumenttypLabel={dokumenttypLabel(template.dokumentTyp)}
+                          onSelect={() => {
+                            setSelectedId(template.id ?? null);
+                            setEditing(null);
+                          }}
+                          onEdit={() => setEditing({ ...template })}
+                          onDelete={() => deleteTemplate(template)}
+                        />
+                      ))}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </Card>
@@ -850,7 +950,9 @@ export default function EmailTextvorlagenEditor() {
                         ? [
                             {
                               value: editing.dokumentTyp,
-                              label: dokumenttypLabel(editing.dokumentTyp)
+                              label: dokumenttypLabel(editing.dokumentTyp),
+                              kategorie: dokumenttypKategorie(editing.dokumentTyp),
+                              kategorieLabel: KATEGORIE_LABEL[dokumenttypKategorie(editing.dokumentTyp)]
                             }
                           ]
                         : [])
@@ -863,6 +965,7 @@ export default function EmailTextvorlagenEditor() {
             <TemplateView
               template={activeTemplate}
               dokumenttypLabel={dokumenttypLabel(activeTemplate.dokumentTyp)}
+              kategorie={activeTemplate.kategorie ?? dokumenttypKategorie(activeTemplate.dokumentTyp)}
               preview={previewHtml}
               rawPreview={previewHtml}
               useSampleData={useSampleData}

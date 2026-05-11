@@ -55,6 +55,7 @@ public class AnfrageFunnelService {
     private final KundennummerService kundennummerService;
     private final DateiSpeicherService dateiSpeicherService;
     private final AnfrageFunnelSpamFilterService spamFilterService;
+    private final AnfrageBestaetigungVersandService anfrageBestaetigungVersandService;
 
     @Transactional
     public Anfrage verarbeiteFunnelAnfrage(AnfrageFunnelRequestDto dto, List<MultipartFile> bilder) {
@@ -80,6 +81,14 @@ public class AnfrageFunnelService {
 
         log.info("Funnel-Anfrage angelegt: anfrageId={}, kundeId={}, bilder={}",
                 anfrage.getId(), kunde.getId(), bilder != null ? bilder.size() : 0);
+
+        // Bestaetigungsmail an den Lead — fire & forget. Der Service schluckt
+        // alle Exceptions, sodass ein SMTP-Ausfall die Funnel-Persistenz nicht
+        // rollbacked. Tonalitaet/Inhalt sind ueber die DB-Vorlage
+        // "WEBSITE_ANFRAGE_BESTAETIGUNG" im UI Kommunikation → E-Mail-Textvorlagen
+        // editierbar.
+        anfrageBestaetigungVersandService.versendeBestaetigung(
+                anfrage, dto.getVorname(), dto.getNachname(), dto.getNachricht());
 
         return anfrage;
     }
