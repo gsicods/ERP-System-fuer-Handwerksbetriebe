@@ -44,7 +44,10 @@ export default defineConfig({
       },
       injectManifest: {
         maximumFileSizeToCacheInBytes: 20 * 1024 * 1024, // 20MB limit to ensure build passes
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}']
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        // OpenCV.js (~8.6 MB) wird on-demand vom Scanner geladen – nicht in den
+        // Service-Worker-Precache packen, sonst bläht jeder PWA-Install auf.
+        globIgnores: ['**/scanner/opencv.js', '**/scanner/jscanify.js']
       }
     }),
     basicSsl()

@@ -1,7 +1,8 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import Webcam from 'react-webcam'
-import { X, Loader2, Check, ArrowRight, Plus, Trash2, Layers } from 'lucide-react'
+import { X, Loader2, Check, ArrowRight, Plus, Trash2, Layers, Wand2, ScanLine } from 'lucide-react'
 import { jsPDF } from "jspdf"
+import { detectDocumentCorners, detectDocumentCornersOnCanvasSync, preloadEdgeDetector } from '../services/DocumentEdgeDetector'
 
 interface ScannerModalProps {
     onClose: () => void
@@ -10,6 +11,66 @@ interface ScannerModalProps {
 
 // Coordinate type
 interface Point { x: number; y: number }
+
+// --- Live-Overlay-Helfer (außerhalb der Komponente, weil zustandslos) ---
+
+function quadsAreClose(a: Point[], b: Point[], tolerancePx: number): boolean {
+    for (let i = 0; i < 4; i++) {
+        if (Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y) > tolerancePx) return false
+    }
+    return true
+}
+
+function clearOverlay(canvas: HTMLCanvasElement | null) {
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+}
+
+function drawOverlayQuad(
+    canvas: HTMLCanvasElement | null,
+    videoW: number,
+    videoH: number,
+    quad: Point[],
+    locking: boolean,
+) {
+    if (!canvas) return
+    // Interne Canvas-Auflösung an Video anpassen (object-cover zeigt das
+    // dann identisch zum Video-Stream).
+    if (canvas.width !== videoW || canvas.height !== videoH) {
+        canvas.width = videoW
+        canvas.height = videoH
+    }
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, videoW, videoH)
+
+    // Farbschema gemäß FRONTEND_UI.md: nur rose + slate. Locking = rose-600
+    // (Primärfarbe, Aktion bestätigt), Tracking = neutrales Hellgrau, damit
+    // der „Halte still"-Zustand klar vom Auslöser unterscheidbar bleibt.
+    const stroke = locking ? '#dc2626' : '#e2e8f0'
+    const fill = locking ? 'rgba(220,38,38,0.20)' : 'rgba(226,232,240,0.14)'
+
+    ctx.beginPath()
+    ctx.moveTo(quad[0].x, quad[0].y)
+    for (let i = 1; i < 4; i++) ctx.lineTo(quad[i].x, quad[i].y)
+    ctx.closePath()
+    ctx.fillStyle = fill
+    ctx.fill()
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = Math.max(6, videoW / 240)
+    ctx.stroke()
+
+    // Eck-Marker
+    ctx.fillStyle = stroke
+    const r = Math.max(10, videoW / 150)
+    for (const p of quad) {
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+        ctx.fill()
+    }
+}
 
 // --- HELPER: Matrix Solver for Homography ---
 // Solves for h0..h7 in the equation:  x_src = (h0*u + h1*v + h2) / (h6*u + h7*v + 1) ...
@@ -102,28 +163,262 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
     }
     const [magnifier, setMagnifier] = useState<MagnifierState | null>(null)
 
-    // Capture Photo
+    // Auto-Erkennung der Dokumentkanten (jscanify + OpenCV.js, lazy geladen).
+    // 'idle' = noch nicht versucht, 'detecting' = läuft, 'detected' = erkannt,
+    // 'fallback' = manuelle Defaults verwendet.
+    const [autoDetectStatus, setAutoDetectStatus] = useState<'idle' | 'detecting' | 'detected' | 'fallback'>('idle')
+
+    // Live-Erkennung im Kamerabild
+    // 'loading'  = OpenCV wird gerade geladen
+    // 'searching'= bereit, aber gerade kein Dokument erkannt
+    // 'tracking' = Dokument erkannt (gelbes Overlay)
+    // 'locking'  = stabile Erkennung, Auto-Capture in Kürze (grünes Overlay + Countdown)
+    type LiveStatus = 'loading' | 'searching' | 'tracking' | 'locking'
+    const [liveStatus, setLiveStatus] = useState<LiveStatus>('loading')
+    const [autoCaptureCountdown, setAutoCaptureCountdown] = useState<number | null>(null)
+    const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
+    const detectionCanvasRef = useRef<HTMLCanvasElement | null>(null)
+    const detectionRafRef = useRef<number | null>(null)
+    const lastDetectedQuadRef = useRef<Point[] | null>(null)
+    const stableFramesRef = useRef(0)
+    const opencvReadyRef = useRef(false)
+    // Pre-erkannte Ecken aus dem Live-Tracking: werden in handleImageLoad
+    // verwendet, statt die Defaults zu setzen oder erneut zu detektieren.
+    // Enthält zusätzlich die Quell-Auflösung des Video-Frames, damit
+    // handleImageLoad bei abweichender Screenshot-Auflösung (z.B. iOS Safari
+    // ignoriert forceScreenshotSourceSize) auf die natural-Größe skalieren kann.
+    const pendingCornersRef = useRef<{ quad: Point[]; sourceW: number; sourceH: number } | null>(null)
+    // Race-Guard: verhindert, dass ein manueller Shutter und der Auto-Capture
+    // gleichzeitig getScreenshot()+setStep auslösen.
+    const captureInFlightRef = useRef(false)
+
+    // Warm-Start: OpenCV.js schon laden, sobald der Modal aufgeht — dann
+    // ist die Runtime in der Regel fertig, bevor das erste Foto da ist.
+    useEffect(() => {
+        preloadEdgeDetector()
+        // Beobachte, ab wann window.cv tatsächlich nutzbar ist.
+        let cancelled = false
+        let pollTimer: ReturnType<typeof setTimeout> | null = null
+        const poll = () => {
+            if (cancelled) return
+            const w = window as unknown as { cv?: { imread?: unknown }, jscanify?: unknown }
+            if (w.cv && typeof w.cv.imread === 'function' && w.jscanify) {
+                opencvReadyRef.current = true
+                setLiveStatus(prev => (prev === 'loading' ? 'searching' : prev))
+                return
+            }
+            pollTimer = setTimeout(poll, 250)
+        }
+        poll()
+        return () => {
+            cancelled = true
+            if (pollTimer !== null) clearTimeout(pollTimer)
+        }
+    }, [])
+
+    // Reset des Capture-Guards beim Zurückkehren zur Kamera (z.B. nach
+    // "Seite hinzufügen" oder über den Zurück-Button im CROP-Schritt).
+    useEffect(() => {
+        if (step === 'CAMERA') captureInFlightRef.current = false
+    }, [step])
+
+    // Capture Photo (manueller Auslöser)
     const capture = useCallback(() => {
+        if (captureInFlightRef.current) return
         if (!webcamRef.current) return
         const imageSrc = webcamRef.current.getScreenshot()
         if (imageSrc) {
+            captureInFlightRef.current = true
+            pendingCornersRef.current = null // manuelle Aufnahme -> normale Detection
+            setAutoDetectStatus('idle')
             setOriginalImageSrc(imageSrc)
             setStep('CROP')
         }
     }, [])
+
+    // Auto-Capture: gleiche Logik, aber mit vor-erkannten Ecken aus dem
+    // Live-Tracker. Die Ecken sind in Video-Pixel-Koordinaten; handleImageLoad
+    // skaliert sie ggf. auf die natural-Größe des Screenshots.
+    const autoCapture = useCallback((quad: Point[]) => {
+        if (captureInFlightRef.current) return
+        if (!webcamRef.current) return
+        const video = webcamRef.current.video
+        const sourceW = video?.videoWidth ?? 0
+        const sourceH = video?.videoHeight ?? 0
+        if (!sourceW || !sourceH) return
+        const imageSrc = webcamRef.current.getScreenshot()
+        if (imageSrc) {
+            captureInFlightRef.current = true
+            pendingCornersRef.current = { quad, sourceW, sourceH }
+            setAutoDetectStatus('detected')
+            setOriginalImageSrc(imageSrc)
+            setStep('CROP')
+        }
+    }, [])
+
+    // Live-Detection-Loop: läuft nur im CAMERA-Schritt, sobald OpenCV bereit ist.
+    useEffect(() => {
+        if (step !== 'CAMERA') {
+            if (detectionRafRef.current !== null) {
+                cancelAnimationFrame(detectionRafRef.current)
+                detectionRafRef.current = null
+            }
+            lastDetectedQuadRef.current = null
+            stableFramesRef.current = 0
+            setAutoCaptureCountdown(null)
+            return
+        }
+
+        // Detection-Canvas einmalig anlegen (off-screen, zum Downscalen).
+        if (!detectionCanvasRef.current) {
+            detectionCanvasRef.current = document.createElement('canvas')
+        }
+
+        const TICK_MS = 120                       // ~8 fps – genug für UX, schont CPU
+        const SCAN_WIDTH = 480                    // downscale auf 480 px breit
+        const STABLE_FRAMES_REQUIRED = 6          // ~0.7 s ruhig halten
+        const MOVEMENT_TOL_PERCENT = 0.025        // 2.5 % Bildbreite max. Bewegung
+
+        let lastTick = 0
+        let cancelled = false
+        // Snapshot des Overlay-Canvas-Refs für die Cleanup-Funktion. Beim
+        // Step-Wechsel ist der Canvas-Knoten gleich unmounted; den Wert von
+        // damals zu lesen, ist sauberer als `ref.current` zur Cleanup-Zeit.
+        const overlayAtMount = overlayCanvasRef.current
+
+        const tick = (now: number) => {
+            if (cancelled) return
+            detectionRafRef.current = requestAnimationFrame(tick)
+            if (now - lastTick < TICK_MS) return
+            lastTick = now
+
+            if (!opencvReadyRef.current) return
+            const video = webcamRef.current?.video
+            if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return
+
+            const scanCanvas = detectionCanvasRef.current
+            if (!scanCanvas) return
+            const scale = SCAN_WIDTH / video.videoWidth
+            const scanH = Math.round(video.videoHeight * scale)
+            if (scanCanvas.width !== SCAN_WIDTH || scanCanvas.height !== scanH) {
+                scanCanvas.width = SCAN_WIDTH
+                scanCanvas.height = scanH
+            }
+            const sctx = scanCanvas.getContext('2d')
+            if (!sctx) return
+            sctx.drawImage(video, 0, 0, SCAN_WIDTH, scanH)
+
+            const overlay = overlayCanvasRef.current
+            const detected = detectDocumentCornersOnCanvasSync(scanCanvas, 0.18)
+
+            if (!detected) {
+                lastDetectedQuadRef.current = null
+                stableFramesRef.current = 0
+                setAutoCaptureCountdown(prev => prev === null ? prev : null)
+                setLiveStatus(prev => prev === 'searching' ? prev : 'searching')
+                clearOverlay(overlay)
+                return
+            }
+
+            // Auf Video-Pixel-Koordinaten zurückskalieren – das ist auch die
+            // Auflösung des Screenshots (forceScreenshotSourceSize).
+            const inv = 1 / scale
+            const quad: Point[] = detected.map(p => ({ x: p.x * inv, y: p.y * inv }))
+
+            // Stabilität prüfen
+            const tolPx = video.videoWidth * MOVEMENT_TOL_PERCENT
+            const prev = lastDetectedQuadRef.current
+            if (prev && quadsAreClose(prev, quad, tolPx)) {
+                stableFramesRef.current += 1
+            } else {
+                stableFramesRef.current = 0
+            }
+            lastDetectedQuadRef.current = quad
+
+            const isLocking = stableFramesRef.current >= STABLE_FRAMES_REQUIRED
+            drawOverlayQuad(overlay, video.videoWidth, video.videoHeight, quad, isLocking)
+
+            if (isLocking) {
+                setLiveStatus(prev => prev === 'locking' ? prev : 'locking')
+                setAutoCaptureCountdown(prev => prev === null ? prev : null)
+                // Stoppe den Loop und löse die Aufnahme aus
+                if (detectionRafRef.current !== null) {
+                    cancelAnimationFrame(detectionRafRef.current)
+                    detectionRafRef.current = null
+                }
+                cancelled = true
+                autoCapture(quad)
+            } else {
+                setLiveStatus(prev => prev === 'tracking' ? prev : 'tracking')
+                const remaining = STABLE_FRAMES_REQUIRED - stableFramesRef.current
+                setAutoCaptureCountdown(prev => prev === remaining ? prev : remaining)
+            }
+        }
+
+        detectionRafRef.current = requestAnimationFrame(tick)
+        return () => {
+            cancelled = true
+            if (detectionRafRef.current !== null) {
+                cancelAnimationFrame(detectionRafRef.current)
+                detectionRafRef.current = null
+            }
+            clearOverlay(overlayAtMount)
+        }
+    }, [step, autoCapture])
 
     const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
         const img = e.currentTarget;
         const width = img.naturalWidth;
         const height = img.naturalHeight;
 
-        // Initialize corners (TL, TR, BR, BL) with 10% margin
+        // Aus Auto-Capture vor-erkannte Ecken? Direkt verwenden und
+        // weitere Detection sparen. Falls iOS Safari den Screenshot in einer
+        // anderen Auflösung als videoWidth/Height geliefert hat (kein
+        // forceScreenshotSourceSize-Support), skalieren wir die Quad-Werte
+        // entsprechend dem Verhältnis natural/source.
+        const pre = pendingCornersRef.current
+        pendingCornersRef.current = null
+        if (pre && pre.quad.length === 4 && pre.sourceW > 0 && pre.sourceH > 0) {
+            const sx = width / pre.sourceW
+            const sy = height / pre.sourceH
+            const scaled = pre.quad.map(p => ({
+                x: Math.max(0, Math.min(width, p.x * sx)),
+                y: Math.max(0, Math.min(height, p.y * sy)),
+            }))
+            const valid = scaled.every(p => p.x >= 0 && p.y >= 0 && p.x <= width && p.y <= height)
+            if (valid) {
+                setCorners(scaled)
+                setAutoDetectStatus('detected')
+                return
+            }
+        }
+
+        // Erst mit Defaults (10 % Rand) initialisieren, damit der User sofort
+        // etwas sieht. Die Auto-Erkennung läuft asynchron und überschreibt
+        // die Ecken, sobald sie ein gutes Ergebnis hat.
         setCorners([
             { x: width * 0.1, y: height * 0.1 },             // TL
             { x: width * 0.9, y: height * 0.1 },             // TR
             { x: width * 0.9, y: height * 0.9 },             // BR
             { x: width * 0.1, y: height * 0.9 }              // BL
         ]);
+
+        setAutoDetectStatus('detecting')
+        detectDocumentCorners(img).then(detected => {
+            // Falls der User zwischenzeitlich schon eine Ecke gepackt hat,
+            // nicht mehr drüberschreiben.
+            setDraggingIndex(currentDragging => {
+                if (currentDragging === null && detected) {
+                    setCorners(detected)
+                    setAutoDetectStatus('detected')
+                } else {
+                    setAutoDetectStatus('fallback')
+                }
+                return currentDragging
+            })
+        }).catch(() => {
+            setAutoDetectStatus('fallback')
+        })
     };
 
     // DRAG LOGIC
@@ -435,9 +730,56 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
                             }}
                             className="absolute inset-0 w-full h-full object-cover"
                         />
-                         {/* Visual Guide Overlay (A4 approx) */}
-                         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                            <div className="w-[70%] h-[85%] border-2 border-white/30 rounded-lg"></div>
+
+                        {/* Live-Erkennungs-Overlay: Canvas hat dieselbe object-cover-
+                            Geometrie wie das Video, daher decken sich die gezeichneten
+                            Polygone exakt mit den sichtbaren Pixeln. */}
+                        <canvas
+                            ref={overlayCanvasRef}
+                            className="absolute inset-0 w-full h-full object-cover pointer-events-none z-10"
+                            aria-hidden="true"
+                        />
+
+                        {/* Statischer A4-Rahmen nur, solange noch nicht live erkannt wird */}
+                        {(liveStatus === 'loading' || liveStatus === 'searching') && (
+                            <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
+                                <div className="w-[70%] h-[85%] border-2 border-white/30 rounded-lg"></div>
+                            </div>
+                        )}
+
+                        {/* Live-Status-Pille oben. aria-live=polite für Suche/Tracking,
+                            assertive für Auto-Aufnahme – Screenreader sollen den
+                            Auslöser nicht überhören. */}
+                        <div
+                            className="absolute top-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
+                            role="status"
+                            aria-live="polite"
+                            aria-atomic="true"
+                        >
+                            {liveStatus === 'loading' && (
+                                <div className="bg-black/70 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-2 shadow-lg">
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Live-Erkennung lädt…
+                                </div>
+                            )}
+                            {liveStatus === 'searching' && (
+                                <div className="bg-black/60 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-2 shadow-lg">
+                                    <ScanLine className="w-3 h-3" />
+                                    Beleg ins Bild halten
+                                </div>
+                            )}
+                            {liveStatus === 'tracking' && (
+                                <div className="bg-slate-700/90 text-rose-200 text-xs px-3 py-1.5 rounded-full flex items-center gap-2 shadow-lg font-semibold">
+                                    <ScanLine className="w-3 h-3" />
+                                    Halten… {autoCaptureCountdown !== null && autoCaptureCountdown > 0 ? `(${autoCaptureCountdown})` : ''}
+                                </div>
+                            )}
+                            {liveStatus === 'locking' && (
+                                <div className="bg-rose-600/95 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-2 shadow-lg font-semibold">
+                                    <Check className="w-3 h-3" />
+                                    Auto-Aufnahme!
+                                </div>
+                            )}
                         </div>
 
                         <div className="absolute bottom-12 left-0 right-0 flex flex-col gap-4 items-center justify-center z-20">
@@ -450,6 +792,7 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
                             <button
                                 onClick={capture}
                                 className="w-20 h-20 rounded-full border-4 border-white bg-white/20 active:bg-white/50 transition-all flex items-center justify-center"
+                                aria-label="Foto manuell aufnehmen"
                             >
                                 <div className="w-16 h-16 rounded-full bg-white"></div>
                             </button>
@@ -459,6 +802,28 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
 
                 {step === 'CROP' && originalImageSrc && (
                     <div ref={containerRef} className="relative w-full max-h-full p-4 flex items-center justify-center">
+                        {/* Status-Pille zur Auto-Erkennung */}
+                        {autoDetectStatus !== 'idle' && (
+                            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+                                {autoDetectStatus === 'detecting' && (
+                                    <div className="bg-black/70 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-2 shadow-lg">
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                        Ecken werden erkannt…
+                                    </div>
+                                )}
+                                {autoDetectStatus === 'detected' && (
+                                    <div className="bg-rose-600/90 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-2 shadow-lg">
+                                        <Wand2 className="w-3 h-3" />
+                                        Ecken automatisch erkannt
+                                    </div>
+                                )}
+                                {autoDetectStatus === 'fallback' && (
+                                    <div className="bg-slate-700/90 text-rose-200 text-xs px-3 py-1.5 rounded-full flex items-center gap-2 shadow-lg">
+                                        Bitte Ecken manuell anpassen
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         <div className="relative inline-block">
                             <img
                                 ref={imageRef}
@@ -577,7 +942,7 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
                         <button
                             onClick={handleFinish}
                             disabled={isProcessing}
-                            className="bg-green-600 px-6 py-3 rounded-full font-bold flex items-center gap-2 flex-1 justify-center"
+                            className="bg-rose-600 hover:bg-rose-700 text-white border border-rose-600 px-6 py-3 rounded-full font-bold flex items-center gap-2 flex-1 justify-center"
                         >
                             {isProcessing ? <Loader2 className="animate-spin" /> : <Check />}
                             Fertig
