@@ -161,6 +161,14 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
         if (step === 'CAMERA') captureInFlightRef.current = false
     }, [step])
 
+    // Object-URL-Lifecycle: jeder Preview-URL aus URL.createObjectURL muss
+    // wieder freigegeben werden, sonst lecken pro Multi-Page-Scan Blobs in
+    // der MB-Klasse — auf einem Smartphone-Tab schnell relevant.
+    useEffect(() => {
+        if (!currentPreviewUrl) return
+        return () => { URL.revokeObjectURL(currentPreviewUrl) }
+    }, [currentPreviewUrl])
+
     // Capture Photo (manueller Auslöser)
     const capture = useCallback(() => {
         if (captureInFlightRef.current) return
@@ -555,7 +563,7 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
     // Save Logic (Generate PDF from ALL pages)
     const handleFinish = async () => {
         if (!currentProcessedBlob && pages.length === 0) return;
-        
+
         setIsProcessing(true);
 
         try {
@@ -567,33 +575,61 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
 
             if (allPages.length === 0) return;
 
-            // Initialize jsPDF
-            const pdf = new jsPDF({
-                orientation: 'p',
-                unit: 'mm',
-                format: 'a4'
-            });
-
-            // Process each page
-            for(let i=0; i<allPages.length; i++) {
-                const blob = allPages[i];
-                
-                // Convert Blob to Data URL
-                const imgData = await new Promise<string>((resolve, reject) => {
+            // Bilder dekodieren, um pro Seite das Seitenverhältnis zu kennen.
+            // Wir setzen das PDF-Seitenformat pro Seite exakt auf das AR des
+            // gecroppten Belegs — sonst werden Sonderformate (Tankbons,
+            // schmale Kassenzettel) auf A4-Breite gestreckt und der untere
+            // Teil abgeschnitten. Apple-Scanner verhält sich genauso.
+            const pageData = await Promise.all(allPages.map(async (blob, idx) => {
+                const dataUrl = await new Promise<string>((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onloadend = () => resolve(reader.result as string);
-                    reader.onerror = reject;
+                    reader.onerror = () => reject(new Error(`FileReader failed for page ${idx + 1}`));
                     reader.readAsDataURL(blob);
                 });
+                const dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+                    const probe = new Image();
+                    probe.onload = () => resolve({ w: probe.naturalWidth, h: probe.naturalHeight });
+                    probe.onerror = () => reject(new Error(`Image decode failed for page ${idx + 1}`));
+                    probe.src = dataUrl;
+                });
+                return { dataUrl, ...dims };
+            }));
 
-                if (i > 0) pdf.addPage();
+            // Längsseite = 297 mm (A4-Höhe) als Referenz, kurze Seite folgt
+            // dem AR. Die Bild-Pixel bleiben verlustfrei eingebettet — es
+            // ändert sich nur das logische Seitenformat im PDF.
+            //
+            // jsPDF-Eigenheit: `format`-Array MUSS in Hochformat-Reihenfolge
+            // angegeben werden ([short, long]), die `orientation` entscheidet
+            // dann über Quer-/Hochformat. Wer [long, short] + 'l' übergibt,
+            // bekommt eine intern transponierte Seite — `addImage(0,0,w,h)`
+            // zeichnet dann ggf. außerhalb der Seitengrenzen.
+            const MAX_MM = 297;
+            const pageGeometry = (w: number, h: number) => {
+                const long = MAX_MM;
+                const short = (Math.min(w, h) / Math.max(w, h)) * MAX_MM;
+                const landscape = w >= h;
+                return {
+                    format: [short, long] as [number, number],   // immer Hochformat
+                    orientation: (landscape ? 'l' : 'p') as 'l' | 'p',
+                    imgW: landscape ? long : short,              // tatsächliche Bildmaße
+                    imgH: landscape ? short : long,              // im jeweiligen Modus
+                };
+            };
 
-                // Get Image Properties
-                const props = pdf.getImageProperties(imgData);
-                const pdfWidth = pdf.internal.pageSize.getWidth();
-                const pdfHeight = (props.height * pdfWidth) / props.width;
+            const first = pageGeometry(pageData[0].w, pageData[0].h);
+            const pdf = new jsPDF({
+                orientation: first.orientation,
+                unit: 'mm',
+                format: first.format,
+            });
+            pdf.addImage(pageData[0].dataUrl, 'JPEG', 0, 0, first.imgW, first.imgH);
 
-                pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+            for (let i = 1; i < pageData.length; i++) {
+                const g = pageGeometry(pageData[i].w, pageData[i].h);
+                pdf.addPage(g.format, g.orientation);
+                pdf.addImage(pageData[i].dataUrl, 'JPEG', 0, 0, g.imgW, g.imgH);
             }
 
             // Generate PDF Blob
