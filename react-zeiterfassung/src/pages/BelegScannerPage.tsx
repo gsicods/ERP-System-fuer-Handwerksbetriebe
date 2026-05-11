@@ -12,15 +12,6 @@ interface LieferantOption {
     firmenname: string
 }
 
-// Backend liefert `lieferantenname`, das Modal erwartet `firmenname`.
-interface LieferantSucheItem {
-    id: number
-    lieferantenname: string
-}
-interface LieferantSucheResponse {
-    items?: LieferantSucheItem[]
-}
-
 /**
  * Mobile-Beleg-Scanner für die Buchhaltung.
  *
@@ -61,7 +52,6 @@ export default function BelegScannerPage() {
     const fileInputRef = useRef<HTMLInputElement>(null)
     // Lieferanten-Picker laeuft VOR dem Scanner/File-Picker.
     // pendingAction merkt sich, was nach der Auswahl getriggert werden soll.
-    const [lieferanten, setLieferanten] = useState<LieferantOption[]>([])
     const [supplierPickerOpen, setSupplierPickerOpen] = useState(false)
     const [pendingAction, setPendingAction] = useState<'scan' | 'gallery' | null>(null)
     const [chosenLieferant, setChosenLieferant] = useState<LieferantOption | null>(null)
@@ -80,22 +70,6 @@ export default function BelegScannerPage() {
             .catch(() => setPermission({ darfScannen: false, darfSehen: false }))
             .finally(() => setPermissionLoading(false))
     }, [token])
-
-    // Lieferanten-Liste fuer den Picker — einmalig nach Permissions-Check laden,
-    // damit der Picker beim Oeffnen schon befuellt ist (kein Spinner ueber Loading).
-    useEffect(() => {
-        if (!permission?.darfScannen) return
-        fetch('/api/lieferanten?size=500')
-            .then(res => res.ok ? res.json() : { items: [] } as LieferantSucheResponse)
-            .then((data: LieferantSucheResponse) => {
-                const items = (data.items ?? [])
-                    .filter(l => l.lieferantenname)
-                    .map(l => ({ id: l.id, firmenname: l.lieferantenname }))
-                items.sort((a, b) => a.firmenname.localeCompare(b.firmenname, 'de'))
-                setLieferanten(items)
-            })
-            .catch(() => setLieferanten([]))
-    }, [permission?.darfScannen])
 
     const enqueue = (file: File, lieferant: LieferantOption | null) => {
         const item: QueueItem = {
@@ -337,7 +311,6 @@ export default function BelegScannerPage() {
                 isOpen={supplierPickerOpen}
                 onClose={() => { setSupplierPickerOpen(false); setPendingAction(null) }}
                 onSelect={handleSupplierPicked}
-                lieferanten={lieferanten}
             />
         </div>
     )
