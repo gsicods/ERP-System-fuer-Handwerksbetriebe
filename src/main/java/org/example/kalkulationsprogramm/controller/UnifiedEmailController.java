@@ -1706,6 +1706,7 @@ public class UnifiedEmailController {
             dto.setParentEmailId(email.getParentEmail().getId());
         }
         dto.setReplyCount(countAncestors(email) + countAllReplies(email));
+        dto.setThreadLastActivityAt(emailThreadService.computeThreadLastActivityAt(email));
 
         // Attachments – metadata only, no CID rewriting
         dto.setHasAttachments(email.getAttachments() != null && !email.getAttachments().isEmpty());
@@ -1767,6 +1768,7 @@ public class UnifiedEmailController {
             dto.setParentEmailId(email.getParentEmail().getId());
         }
         dto.setReplyCount(countAncestors(email) + countAllReplies(email));
+        dto.setThreadLastActivityAt(emailThreadService.computeThreadLastActivityAt(email));
 
         // Attachments
         dto.setHasAttachments(email.getAttachments() != null && !email.getAttachments().isEmpty());
@@ -1843,6 +1845,7 @@ public class UnifiedEmailController {
         }
         return count;
     }
+
 
     /**
      * Loest die Absender-Adresse fuer einen ausgehenden E-Mail-Versand auf.

@@ -181,6 +181,63 @@ class EmailThreadServiceTest {
     }
 
     @Test
+    void computeThreadLastActivityAt_returnsLatestReply_evenWhenCalledOnRoot() {
+        // Regressions-Bug: Eingehende Antworten in einem Thread sollten den Thread im Ordner
+        // (z.B. Lieferanten/Gesendet) nach oben holen - dafuer muss die Wurzel den juengsten
+        // sentAt-Wert ueber ALLE Mitglieder als threadLastActivityAt zurueckliefern.
+        Email root = makeEmail(1L, "Anfrage", null);
+        Email reply = makeEmail(2L, "Re: Anfrage", root);
+        root.setSentAt(LocalDateTime.of(2026, 3, 10, 9, 0));
+        reply.setSentAt(LocalDateTime.of(2026, 3, 15, 14, 30));
+        root.getReplies().add(reply);
+
+        LocalDateTime result = service.computeThreadLastActivityAt(root);
+
+        assertThat(result).isEqualTo(LocalDateTime.of(2026, 3, 15, 14, 30));
+    }
+
+    @Test
+    void computeThreadLastActivityAt_walksUpToRoot_thenBackDownToFindLatest() {
+        // Wenn die Methode auf einem KIND aufgerufen wird (z.B. weil ein "Gesendet"-Ordner
+        // nur eine OUT-Reply liefert), muss sie trotzdem die juengste Aktivitaet im Thread liefern.
+        Email root = makeEmail(1L, "Anfrage", null);
+        Email midOut = makeEmail(2L, "Re: Anfrage", root);   // unsere OUT-Antwort
+        Email newIn = makeEmail(3L, "Re: Re: Anfrage", midOut); // neue eingehende Antwort
+        root.setSentAt(LocalDateTime.of(2026, 3, 10, 9, 0));
+        midOut.setSentAt(LocalDateTime.of(2026, 3, 11, 10, 0));
+        newIn.setSentAt(LocalDateTime.of(2026, 3, 20, 16, 45));
+        root.getReplies().add(midOut);
+        midOut.getReplies().add(newIn);
+
+        LocalDateTime result = service.computeThreadLastActivityAt(midOut);
+
+        assertThat(result).isEqualTo(LocalDateTime.of(2026, 3, 20, 16, 45));
+    }
+
+    @Test
+    void computeThreadLastActivityAt_standaloneEmail_returnsOwnSentAt() {
+        Email standalone = makeEmail(7L, "Allein", null);
+        standalone.setSentAt(LocalDateTime.of(2026, 5, 1, 12, 0));
+
+        assertThat(service.computeThreadLastActivityAt(standalone))
+                .isEqualTo(LocalDateTime.of(2026, 5, 1, 12, 0));
+    }
+
+    @Test
+    void computeThreadLastActivityAt_cycleSafe() {
+        Email a = makeEmail(30L, "A", null);
+        Email b = makeEmail(31L, "B", a);
+        a.getReplies().add(b);
+        b.getReplies().add(a); // kuenstlicher Cycle
+        a.setSentAt(LocalDateTime.of(2026, 1, 1, 0, 0));
+        b.setSentAt(LocalDateTime.of(2026, 2, 1, 0, 0));
+
+        LocalDateTime result = service.computeThreadLastActivityAt(a);
+
+        assertThat(result).isEqualTo(LocalDateTime.of(2026, 2, 1, 0, 0));
+    }
+
+    @Test
     void snippet_isTruncated_at120Characters() {
         Email email = makeEmail(1L, "Lang", null);
         email.setBody("A".repeat(200));

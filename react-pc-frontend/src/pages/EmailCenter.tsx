@@ -114,6 +114,8 @@ interface EmailItem {
     // Thread-Informationen
     parentEmailId?: number;   // null/undefined = Thread-Wurzel
     replyCount?: number;      // Anzahl direkter Antworten
+    /** Backend-berechnete jüngste Aktivität im gesamten Thread (für Sortierung). */
+    threadLastActivityAt?: string;
     isStarred?: boolean;
 }
 
@@ -1581,20 +1583,63 @@ export default function EmailCenter() {
     }, [isGlobalSearch, loadMoreEmails, loadMoreSearch, hasMore, searchHasMore, emails.length, globalSearchResults.length]);
 
     // Filter emails by search
-    // Bei Ordner-Ansicht nur Thread-Wurzeln anzeigen (parentEmailId == null),
-    // damit Antworten nicht doppelt in der Liste erscheinen.
-    // Bei globaler Suche werden alle Treffer gezeigt (Nutzer sucht gezielt nach
-    // einer bestimmten Nachricht).
+    // Bei Ordner-Ansicht eine Zeile pro Thread anzeigen (Wurzel). Die Wurzel ist
+    // entweder die E-Mail ohne parentEmailId ODER die alteste E-Mail im Thread,
+    // deren Parent nicht im geladenen Set ist (z.B. Lieferant-Ordner zeigt nur
+    // direction=IN; die OUT-Wurzel liegt ausserhalb).
+    // Sortierung und Ungelesen-Filter basieren auf Thread-Aggregaten, damit
+    // neue eingehende Antworten den Thread nach oben holen und in "Ungelesen" auftauchen.
     const filteredEmails = useMemo(() => {
+        const byId = new Map<number, EmailItem>();
+        for (const e of emails) byId.set(e.id, e);
+
+        // Wandert via parentEmailId nach oben, solange der Parent im geladenen Set ist.
+        const findVisibleRootId = (start: EmailItem): number => {
+            let cur = start;
+            const seen = new Set<number>();
+            while (cur.parentEmailId && !seen.has(cur.id)) {
+                seen.add(cur.id);
+                const parent = byId.get(cur.parentEmailId);
+                if (!parent) break;
+                cur = parent;
+            }
+            return cur.id;
+        };
+
+        // Aggregat pro sichtbarer Thread-Wurzel: jungste Aktivitaet + irgendeine ungelesene Mail.
+        // Bevorzugt das Backend-berechnete threadLastActivityAt (deckt Ordner ab, in denen
+        // nicht alle Thread-Mitglieder geladen sind, z.B. "Gesendet").
+        // rootIdByEmail cached findVisibleRootId-Ergebnisse, damit der Walk pro Mail nur einmal laeuft.
+        const rootIdByEmail = new Map<number, number>();
+        const threadAggregates = new Map<number, { latestSentAt: number; anyUnread: boolean }>();
+        const toMs = (iso?: string) => (iso ? new Date(iso).getTime() : 0);
+        for (const e of emails) {
+            const rootId = findVisibleRootId(e);
+            rootIdByEmail.set(e.id, rootId);
+            const ownTs = toMs(e.sentAt);
+            const backendThreadTs = toMs(e.threadLastActivityAt);
+            const ts = Math.max(ownTs, backendThreadTs);
+            const isUnread = !e.isRead;
+            const agg = threadAggregates.get(rootId);
+            if (!agg) {
+                threadAggregates.set(rootId, { latestSentAt: ts, anyUnread: isUnread });
+            } else {
+                if (ts > agg.latestSentAt) agg.latestSentAt = ts;
+                if (isUnread) agg.anyUnread = true;
+            }
+        }
+
+        const isVisibleRoot = (e: EmailItem) => rootIdByEmail.get(e.id) === e.id;
+
         let base: EmailItem[];
         if (isGlobalSearch) {
             base = globalSearchResults;
         } else if (!searchQuery.trim()) {
-            base = emails.filter(e => !e.parentEmailId);
+            base = emails.filter(isVisibleRoot);
         } else {
             const q = searchQuery.toLowerCase();
             base = emails.filter(e =>
-                !e.parentEmailId && (
+                isVisibleRoot(e) && (
                     e.subject?.toLowerCase().includes(q) ||
                     e.fromAddress?.toLowerCase().includes(q) ||
                     e.recipient?.toLowerCase().includes(q) ||
@@ -1603,15 +1648,21 @@ export default function EmailCenter() {
                 )
             );
         }
-        // Filter nach Lese-Status (Gesendet/Entwürfe haben kein sinnvolles Read-Konzept)
+        // Filter nach Lese-Status (Gesendet/Entwurfe haben kein sinnvolles Read-Konzept).
+        // Ein Thread gilt als ungelesen, sobald mindestens eine seiner E-Mails ungelesen ist.
         if (readFilter !== 'all' && activeFolder !== 'sent') {
-            base = base.filter(e => readFilter === 'unread' ? !e.isRead : !!e.isRead);
+            base = base.filter(e => {
+                const agg = threadAggregates.get(e.id);
+                const anyUnread = agg ? agg.anyUnread : !e.isRead;
+                return readFilter === 'unread' ? anyUnread : !anyUnread;
+            });
         }
-        // Sort by date
+        // Sortierung nach jungster Aktivitat im Thread (statt root.sentAt),
+        // damit neue Antworten den Thread nach oben holen.
         return [...base].sort((a, b) => {
-            const dateA = a.sentAt ? new Date(a.sentAt).getTime() : 0;
-            const dateB = b.sentAt ? new Date(b.sentAt).getTime() : 0;
-            return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+            const aTs = threadAggregates.get(a.id)?.latestSentAt ?? (a.sentAt ? new Date(a.sentAt).getTime() : 0);
+            const bTs = threadAggregates.get(b.id)?.latestSentAt ?? (b.sentAt ? new Date(b.sentAt).getTime() : 0);
+            return sortOrder === 'desc' ? bTs - aTs : aTs - bTs;
         });
     }, [emails, searchQuery, isGlobalSearch, globalSearchResults, sortOrder, readFilter, activeFolder]);
 

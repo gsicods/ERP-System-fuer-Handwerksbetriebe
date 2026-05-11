@@ -1,5 +1,6 @@
 package org.example.kalkulationsprogramm.service;
 
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -87,6 +88,61 @@ public class EmailThreadService {
 
         log.debug("Thread for emailId={}: root={}, size={}", emailId, root.getId(), entries.size());
         return dto;
+    }
+
+    /**
+     * Liefert den juengsten {@code sentAt}-Wert ueber den kompletten Thread,
+     * zu dem die gegebene E-Mail gehoert (Root + alle Nachfolger).
+     *
+     * <p>Faellt auf {@code email.getSentAt()} zurueck, wenn der Thread keine
+     * datierten Mitglieder hat (sollte nicht vorkommen).
+     *
+     * <p>Genutzt vom {@code UnifiedEmailController}, um pro DTO eine Thread-Sortier-Zeitmarke
+     * zu liefern - damit das Frontend Threads auch in Ordnern korrekt sortieren kann,
+     * in denen nicht alle Thread-Mitglieder geladen werden (z.B. "Gesendet" liefert nur OUT,
+     * eingehende Antworten sollen den Thread trotzdem nach oben holen).
+     */
+    public LocalDateTime computeThreadLastActivityAt(Email email) {
+        if (email == null) return null;
+        // Fast path: alleinstehende E-Mail ohne Thread-Bezug — kein Walk noetig.
+        // Spart den teuren Lazy-Load von parentEmail/replies fuer den haeufigen Fall,
+        // dass eine E-Mail weder Eltern noch Antworten hat (Listenansichten mit hunderten
+        // Mails wuerden sonst pro E-Mail mind. zwei zusaetzliche Queries triggern).
+        boolean noParent = email.getParentEmail() == null;
+        boolean noReplies = email.getReplies() == null || email.getReplies().isEmpty();
+        if (noParent && noReplies) {
+            return email.getSentAt();
+        }
+        Email root = findRoot(email);
+        LocalDateTime max = maxSentAtInSubtree(root);
+        if (email.getSentAt() != null && (max == null || email.getSentAt().isAfter(max))) {
+            max = email.getSentAt();
+        }
+        return max;
+    }
+
+    /**
+     * Liefert {@code max(sentAt)} ueber den Teilbaum, der bei {@code email} wurzelt (mit Cycle-Schutz).
+     * Nutzt Identitaets-Vergleich, damit auch nicht-persistierte E-Mails (id == null) korrekt behandelt werden.
+     */
+    private LocalDateTime maxSentAtInSubtree(Email email) {
+        LocalDateTime max = email.getSentAt();
+        Set<Email> visited = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        java.util.Deque<Email> stack = new java.util.ArrayDeque<>();
+        stack.push(email);
+        while (!stack.isEmpty()) {
+            Email current = stack.pop();
+            if (current == null || !visited.add(current)) continue;
+            LocalDateTime ts = current.getSentAt();
+            if (ts != null && (max == null || ts.isAfter(max))) {
+                max = ts;
+            }
+            List<Email> replies = current.getReplies();
+            if (replies != null) {
+                for (Email reply : replies) stack.push(reply);
+            }
+        }
+        return max;
     }
 
     // ═══════════════════════════════════════════════════════════════

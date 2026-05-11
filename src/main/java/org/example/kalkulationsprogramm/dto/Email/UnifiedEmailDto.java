@@ -62,6 +62,13 @@ public class UnifiedEmailDto {
     private Long parentEmailId;
     /** Anzahl direkter Antworten auf diese E-Mail. 0 = keine Antworten vorhanden. */
     private int replyCount;
+    /**
+     * Jüngster sentAt-Wert über alle E-Mails im gesamten Thread (Root + Kinder/Kindeskinder).
+     * Damit kann das Frontend Threads nach letzter Aktivität sortieren, auch wenn nur die
+     * Wurzel oder nur einzelne Mitglieder in der Liste geladen sind (z.B. Gesendet-Ordner,
+     * der nur OUT-Mails enthält, aber wo eingehende Antworten den Thread nach oben holen sollen).
+     */
+    private LocalDateTime threadLastActivityAt;
 
     // Anhänge
     private List<AttachmentDto> attachments;
