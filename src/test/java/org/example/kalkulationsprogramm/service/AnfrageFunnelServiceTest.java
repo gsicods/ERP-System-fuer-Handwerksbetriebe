@@ -206,7 +206,7 @@ class AnfrageFunnelServiceTest {
         verify(webPushService).notifyWebseitenAnfrage(
                 org.mockito.ArgumentMatchers.contains("Max Mustermann"),
                 org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.contains("/anfragen?anfrageId="));
+                org.mockito.ArgumentMatchers.contains("/zeiterfassung/anfragen?id="));
     }
 
     @Test

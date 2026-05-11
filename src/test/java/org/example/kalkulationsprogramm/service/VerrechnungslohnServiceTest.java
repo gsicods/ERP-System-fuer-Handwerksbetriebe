@@ -17,6 +17,7 @@ import org.example.kalkulationsprogramm.repository.AbteilungRepository;
 import org.example.kalkulationsprogramm.repository.AbwesenheitRepository;
 import org.example.kalkulationsprogramm.repository.ArbeitsgangRepository;
 import org.example.kalkulationsprogramm.repository.ArbeitsgangStundensatzRepository;
+import org.example.kalkulationsprogramm.repository.BelegRepository;
 import org.example.kalkulationsprogramm.repository.FeiertagRepository;
 import org.example.kalkulationsprogramm.repository.FirmeninformationRepository;
 import org.example.kalkulationsprogramm.repository.LieferantDokumentProjektAnteilRepository;
@@ -71,6 +72,7 @@ class VerrechnungslohnServiceTest {
     private AbteilungRepository abteilungRepository;
     private ArbeitsgangRepository arbeitsgangRepository;
     private ArbeitsgangStundensatzRepository stundensatzRepository;
+    private BelegRepository belegRepository;
 
     private VerrechnungslohnService service;
 
@@ -89,6 +91,9 @@ class VerrechnungslohnServiceTest {
         abteilungRepository = mock(AbteilungRepository.class);
         arbeitsgangRepository = mock(ArbeitsgangRepository.class);
         stundensatzRepository = mock(ArbeitsgangStundensatzRepository.class);
+        belegRepository = mock(BelegRepository.class);
+        when(belegRepository.findValidierteFixkostenBelegeImZeitraum(any(), any()))
+                .thenReturn(Collections.emptyList());
 
         service = new VerrechnungslohnService(
                 mitarbeiterRepository,
@@ -103,7 +108,8 @@ class VerrechnungslohnServiceTest {
                 anteilRepository,
                 abteilungRepository,
                 arbeitsgangRepository,
-                stundensatzRepository
+                stundensatzRepository,
+                belegRepository
         );
 
         // Defaults: keine Personen, keine Anteile, keine Feiertage, kein BG-Satz.
