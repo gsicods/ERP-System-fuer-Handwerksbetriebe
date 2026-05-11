@@ -82,4 +82,16 @@ public interface LieferantDokumentRepository extends JpaRepository<LieferantDoku
          */
         @Query("SELECT d FROM LieferantDokument d WHERE d.typ = org.example.kalkulationsprogramm.domain.LieferantDokumentTyp.LIEFERSCHEIN AND d.uploadDatum >= :since ORDER BY d.uploadDatum DESC")
         List<LieferantDokument> findRecentLieferscheine(@Param("since") java.time.LocalDateTime since);
+
+        /**
+         * Findet das LieferantDokument, das zu einem mobilen Beleg-Scan
+         * automatisch angelegt wurde (Beleg-Verknuepfung). Wird vom BelegService
+         * benutzt, um beim Anzeigen eines Belegs die zugehoerige Eingangsrechnungs-
+         * ID zurueckzuliefern und um doppelte Erzeugung beim Re-Run der KI zu
+         * verhindern.
+         */
+        @Query("SELECT d FROM LieferantDokument d " +
+                        "LEFT JOIN FETCH d.geschaeftsdaten " +
+                        "WHERE d.beleg.id = :belegId")
+        java.util.Optional<LieferantDokument> findByBelegId(@Param("belegId") Long belegId);
 }

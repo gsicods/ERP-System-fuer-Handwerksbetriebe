@@ -2,6 +2,8 @@ package org.example.kalkulationsprogramm.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -27,6 +29,17 @@ public class EmailTextTemplate {
 
     @Column(name = "dokument_typ", nullable = false, length = 40)
     private String dokumentTyp;
+
+    /**
+     * Fachliche Gruppierung (Dokument / Mahnwesen / Webseite / System). Nur
+     * für die UI relevant — die Versand-Logik bleibt unverändert über
+     * {@link #dokumentTyp} verdrahtet. Datenbankseitig nullable, damit alte
+     * Zeilen aus V218/V250 ohne weiteren Schritt bestehen — die Migration
+     * V306 backfillt anschließend alle bekannten Typen.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "kategorie", length = 20)
+    private EmailTextTemplateKategorie kategorie;
 
     @Column(name = "name", nullable = false, length = 150)
     private String name;

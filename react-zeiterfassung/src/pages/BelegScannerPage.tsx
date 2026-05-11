@@ -2,9 +2,15 @@ import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     ArrowLeft, ScanLine, Upload, Loader2, CheckCircle2, AlertCircle,
-    Receipt, RefreshCw, X
+    Receipt, RefreshCw, X, Building2, ChevronRight,
 } from 'lucide-react'
 import ScannerModal from '../components/ScannerModal'
+import { SupplierSelectionModal } from '../components/SupplierSelectionModal'
+
+interface LieferantOption {
+    id: number
+    firmenname: string
+}
 
 /**
  * Mobile-Beleg-Scanner für die Buchhaltung.
@@ -26,6 +32,10 @@ interface QueueItem {
     serverId?: number
     error?: string
     addedAt: number
+    // Optional vom User vor dem Scan ausgewaehlter Lieferant — wird beim Upload
+    // mitgegeben, damit die KI-Auto-Eingangsrechnung sofort verknuepft werden kann.
+    lieferantId?: number
+    lieferantName?: string
 }
 
 interface Permissions {
@@ -40,6 +50,11 @@ export default function BelegScannerPage() {
     const [showScanner, setShowScanner] = useState(false)
     const [queue, setQueue] = useState<QueueItem[]>([])
     const fileInputRef = useRef<HTMLInputElement>(null)
+    // Lieferanten-Picker laeuft VOR dem Scanner/File-Picker.
+    // pendingAction merkt sich, was nach der Auswahl getriggert werden soll.
+    const [supplierPickerOpen, setSupplierPickerOpen] = useState(false)
+    const [pendingAction, setPendingAction] = useState<'scan' | 'gallery' | null>(null)
+    const [chosenLieferant, setChosenLieferant] = useState<LieferantOption | null>(null)
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('zeiterfassung_token') : null
 
@@ -56,12 +71,14 @@ export default function BelegScannerPage() {
             .finally(() => setPermissionLoading(false))
     }, [token])
 
-    const enqueue = (file: File) => {
+    const enqueue = (file: File, lieferant: LieferantOption | null) => {
         const item: QueueItem = {
             localId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             file,
             status: 'pending',
             addedAt: Date.now(),
+            lieferantId: lieferant?.id,
+            lieferantName: lieferant?.firmenname,
         }
         setQueue(q => [item, ...q])
         // Fire-and-forget: kein await — Scanner ist sofort wieder bereit.
@@ -73,7 +90,10 @@ export default function BelegScannerPage() {
         try {
             const fd = new FormData()
             fd.append('datei', item.file)
-            const res = await fetch(`/api/buchhaltung/mobile/belege?token=${token}`, {
+            const url = new URL(`/api/buchhaltung/mobile/belege`, window.location.origin)
+            if (token) url.searchParams.set('token', token)
+            if (item.lieferantId != null) url.searchParams.set('lieferantId', String(item.lieferantId))
+            const res = await fetch(url.pathname + url.search, {
                 method: 'POST',
                 body: fd,
             })
@@ -104,17 +124,51 @@ export default function BelegScannerPage() {
 
     const handleScanComplete = async (file: File) => {
         setShowScanner(false)
-        enqueue(file)
+        enqueue(file, chosenLieferant)
+        // chosenLieferant wird NICHT zurueckgesetzt: ein Buchhalter scannt
+        // typischerweise mehrere Belege desselben Lieferanten direkt hintereinander.
+        // Der User aendert die Auswahl via "Lieferant aendern"-Chip oben.
     }
 
     const handleFileChoose = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files
         if (!files) return
         for (let i = 0; i < files.length; i++) {
-            enqueue(files[i])
+            enqueue(files[i], chosenLieferant)
         }
         if (fileInputRef.current) fileInputRef.current.value = ''
     }
+
+    // Picker -> dann eigentliche Aktion (Scan/Galerie). Nur ueberspringen, wenn
+    // der User in dieser Session schon einen Lieferanten gewaehlt hat (Chip).
+    const requestScan = () => {
+        if (chosenLieferant !== null || pendingAction === 'scan') {
+            setShowScanner(true)
+            return
+        }
+        setPendingAction('scan')
+        setSupplierPickerOpen(true)
+    }
+    const requestGallery = () => {
+        if (chosenLieferant !== null) {
+            fileInputRef.current?.click()
+            return
+        }
+        setPendingAction('gallery')
+        setSupplierPickerOpen(true)
+    }
+    const handleSupplierPicked = (l: { id: number; firmenname: string } | null) => {
+        setSupplierPickerOpen(false)
+        setChosenLieferant(l)
+        if (pendingAction === 'scan') {
+            setShowScanner(true)
+        } else if (pendingAction === 'gallery') {
+            // Im naechsten Tick triggern, damit der Modal-Close zuerst gerendert wird.
+            setTimeout(() => fileInputRef.current?.click(), 0)
+        }
+        setPendingAction(null)
+    }
+    const clearLieferant = () => setChosenLieferant(null)
 
     // --- Gating ---
 
@@ -167,8 +221,42 @@ export default function BelegScannerPage() {
 
             {/* Sticky Aktions-Bereich */}
             <div className="p-4 space-y-3 bg-white border-b border-slate-100 shadow-sm">
+                {/* Lieferant-Chip: zeigt aktuelle Auswahl + Wechsel/Entfernen.
+                    Ohne Auswahl bietet er einen direkten Weg zur Lieferanten-Wahl
+                    (bevor man scannt) — fuer Belege bei einem festen Lieferanten. */}
                 <button
-                    onClick={() => setShowScanner(true)}
+                    onClick={() => { setPendingAction(null); setSupplierPickerOpen(true) }}
+                    className={`w-full border rounded-xl px-4 py-3 flex items-center gap-3 text-left transition-colors ${
+                        chosenLieferant
+                            ? 'bg-rose-50 border-rose-200 text-rose-800'
+                            : 'bg-white border-slate-200 text-slate-600 hover:border-rose-200'
+                    }`}
+                >
+                    <Building2 className={`w-5 h-5 ${chosenLieferant ? 'text-rose-600' : 'text-slate-400'}`} />
+                    <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Lieferant</p>
+                        <p className="font-medium truncate">
+                            {chosenLieferant ? chosenLieferant.firmenname : 'Optional auswählen'}
+                        </p>
+                    </div>
+                    {chosenLieferant ? (
+                        <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => { e.stopPropagation(); clearLieferant() }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); clearLieferant() } }}
+                            aria-label="Lieferant entfernen"
+                            className="p-1.5 hover:bg-rose-100 rounded-full cursor-pointer"
+                        >
+                            <X className="w-4 h-4 text-rose-600" />
+                        </span>
+                    ) : (
+                        <ChevronRight className="w-5 h-5 text-slate-400" />
+                    )}
+                </button>
+
+                <button
+                    onClick={requestScan}
                     className="w-full bg-rose-600 hover:bg-rose-700 active:scale-[0.98] text-white font-bold rounded-2xl py-5 flex items-center justify-center gap-3 shadow-lg transition-all"
                 >
                     <ScanLine className="w-7 h-7" />
@@ -176,7 +264,7 @@ export default function BelegScannerPage() {
                 </button>
 
                 <button
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={requestGallery}
                     className="w-full bg-white border-2 border-slate-200 hover:border-rose-300 active:scale-[0.98] text-slate-700 font-semibold rounded-2xl py-4 flex items-center justify-center gap-2 transition-all"
                 >
                     <Upload className="w-5 h-5" />
@@ -218,6 +306,12 @@ export default function BelegScannerPage() {
                     onSave={handleScanComplete}
                 />
             )}
+
+            <SupplierSelectionModal
+                isOpen={supplierPickerOpen}
+                onClose={() => { setSupplierPickerOpen(false); setPendingAction(null) }}
+                onSelect={handleSupplierPicked}
+            />
         </div>
     )
 }

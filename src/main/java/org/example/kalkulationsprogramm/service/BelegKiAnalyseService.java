@@ -5,7 +5,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.kalkulationsprogramm.domain.Beleg;
 import org.example.kalkulationsprogramm.domain.BelegKiAnalyseStatus;
+import org.example.kalkulationsprogramm.domain.LieferantDokument;
+import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp;
+import org.example.kalkulationsprogramm.domain.LieferantGeschaeftsdokument;
+import org.example.kalkulationsprogramm.domain.Lieferanten;
+import org.example.kalkulationsprogramm.dto.LieferantDokumentDto;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
+import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository;
+import org.example.kalkulationsprogramm.repository.LieferantGeschaeftsdokumentRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
@@ -14,7 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Locale;
+import java.time.LocalDateTime;
 
 /**
  * Asynchrone Belegextraktion via GeminiDokumentAnalyseService.
@@ -31,6 +38,8 @@ public class BelegKiAnalyseService {
 
     private final BelegRepository belegRepository;
     private final LieferantenRepository lieferantenRepository;
+    private final LieferantDokumentRepository lieferantDokumentRepository;
+    private final LieferantGeschaeftsdokumentRepository lieferantGeschaeftsdokumentRepository;
     private final GeminiDokumentAnalyseService geminiService;
     private final ObjectMapper objectMapper;
 
@@ -66,21 +75,21 @@ public class BelegKiAnalyseService {
             beleg.setBetragBrutto(ergebnis.getBetragBrutto());
             beleg.setMwstSatz(ergebnis.getMwstSatz());
             beleg.setZahlungsart(ergebnis.getZahlungsart());
+            // KI-Klassifikation auf den Beleg uebernehmen — bestimmt, ob nachgelagert
+            // ein LieferantGeschaeftsdokument auto-erstellt wird (siehe unten).
+            beleg.setDokumentTyp(ergebnis.getDokumentTyp());
             if (ergebnis.getAiConfidence() != null) {
                 beleg.setKiConfidence(java.math.BigDecimal.valueOf(ergebnis.getAiConfidence())
                         .setScale(2, java.math.RoundingMode.HALF_UP));
             }
             beleg.setKiVorgeschlagenerLieferant(ergebnis.getLieferantName());
 
-            // Versuche Lieferant per Namen zu matchen (nur exakt / case-insensitive)
+            // Versuche Lieferant per Namen zu matchen (nur exakt / case-insensitive).
+            // Derived Query laedt direkt in der DB statt ueber alle Lieferanten zu streamen.
             if (ergebnis.getLieferantName() != null && !ergebnis.getLieferantName().isBlank()
                     && beleg.getLieferant() == null) {
-                String gesucht = ergebnis.getLieferantName().toLowerCase(Locale.ROOT);
-                lieferantenRepository.findAll().stream()
+                lieferantenRepository.findByLieferantennameIgnoreCase(ergebnis.getLieferantName().trim())
                         .filter(l -> !Boolean.FALSE.equals(l.getIstAktiv()))
-                        .filter(l -> l.getLieferantenname() != null
-                                && l.getLieferantenname().toLowerCase(Locale.ROOT).equals(gesucht))
-                        .findFirst()
                         .ifPresent(beleg::setLieferant);
             }
 
@@ -95,6 +104,22 @@ public class BelegKiAnalyseService {
             beleg.setKiFehlerText(null);
             belegRepository.save(beleg);
 
+            // Auto-Erstellung Eingangsrechnung:
+            // Wenn KI sagt "RECHNUNG"/"GUTSCHRIFT" und ein Lieferant vorhanden ist
+            // (per Mobile-Auswahl oder Namens-Match), legen wir parallel ein
+            // LieferantDokument + LieferantGeschaeftsdokument an, sodass der Beleg
+            // in der "Eingangsrechnungen"-Uebersicht erscheint. Datei + Vorschau
+            // werden weiterhin ueber den Beleg-Endpoint ausgeliefert; das LD haelt
+            // nur die Geschaeftsdaten + Lieferantenbezug.
+            try {
+                erstelleEingangsrechnungFallsRechnung(beleg, ergebnis);
+            } catch (Exception e) {
+                // Best effort — wenn das fehlschlaegt (z.B. Duplikat), aendern wir nichts
+                // am Beleg. Buchhalter kann manuell nacharbeiten.
+                log.warn("Auto-Erzeugung Eingangsrechnung fuer Beleg {} fehlgeschlagen: {}",
+                        belegId, e.getMessage());
+            }
+
         } catch (Exception e) {
             log.error("KI-Analyse fuer Beleg {} fehlgeschlagen: {}", belegId, e.getMessage(), e);
             beleg.setKiAnalyseStatus(BelegKiAnalyseStatus.FAILED);
@@ -105,5 +130,90 @@ public class BelegKiAnalyseService {
             beleg.setKiFehlerText(msg);
             belegRepository.save(beleg);
         }
+    }
+
+    /**
+     * Legt automatisch ein LieferantDokument + LieferantGeschaeftsdokument an,
+     * wenn die KI den Beleg als RECHNUNG oder GUTSCHRIFT klassifiziert hat und
+     * ein Lieferant zugeordnet werden konnte.
+     *
+     * Idempotenz:
+     *  - Wenn fuer den Beleg schon ein LD existiert (Re-Analyse-Lauf), nichts tun.
+     *  - Wenn fuer Lieferant + Rechnungsnummer schon ein LGD existiert (manueller
+     *    Import war schneller, oder E-Mail-Anhang), nichts tun und im Log vermerken.
+     */
+    private void erstelleEingangsrechnungFallsRechnung(Beleg beleg,
+                                                       LieferantDokumentDto.AnalyzeResponse ergebnis) {
+        LieferantDokumentTyp typ = beleg.getDokumentTyp();
+        Lieferanten lieferant = beleg.getLieferant();
+        if (typ == null || lieferant == null) {
+            return;
+        }
+        if (typ != LieferantDokumentTyp.RECHNUNG && typ != LieferantDokumentTyp.GUTSCHRIFT) {
+            return;
+        }
+
+        // Idempotenz 1: Re-Analyse-Lauf -> nicht doppelt anlegen
+        if (lieferantDokumentRepository.findByBelegId(beleg.getId()).isPresent()) {
+            log.debug("LieferantDokument fuer Beleg {} existiert bereits, kein erneutes Anlegen", beleg.getId());
+            return;
+        }
+        // Idempotenz 2: Rechnungsnummer schon beim Lieferanten erfasst
+        String dokNr = beleg.getBelegNummer();
+        if (dokNr != null && !dokNr.isBlank()
+                && lieferantGeschaeftsdokumentRepository
+                        .existsByLieferantIdAndDokumentNummer(lieferant.getId(), dokNr)) {
+            log.info("Rechnungs-Nr {} bei Lieferant {} schon vorhanden — Beleg {} bleibt eigenstaendig",
+                    dokNr, lieferant.getId(), beleg.getId());
+            return;
+        }
+
+        // Datei: kein erneutes Kopieren — wir verweisen relativ auf den Beleg-Pfad.
+        // resolveLieferantDokumentPath sucht u.a. uploads/{filename}; wenn wir hier
+        // "belege/<gespeicherterName>" speichern, klappt der Lookup als
+        // uploads/belege/<gespeicherterName>.
+        String gespeicherterFuerLD = beleg.getGespeicherterDateiname() != null
+                ? "belege/" + beleg.getGespeicherterDateiname()
+                : null;
+
+        LieferantDokument ld = new LieferantDokument();
+        ld.setLieferant(lieferant);
+        ld.setTyp(typ);
+        ld.setOriginalDateiname(beleg.getOriginalDateiname());
+        ld.setGespeicherterDateiname(gespeicherterFuerLD);
+        ld.setUploadDatum(LocalDateTime.now());
+        ld.setUploadedBy(beleg.getUploadedBy());
+        ld.setBeleg(beleg);
+        ld = lieferantDokumentRepository.save(ld);
+
+        LieferantGeschaeftsdokument lgd = new LieferantGeschaeftsdokument();
+        lgd.setDokument(ld);
+        lgd.setDokumentNummer(beleg.getBelegNummer());
+        lgd.setDokumentDatum(beleg.getBelegDatum());
+        lgd.setBetragNetto(beleg.getBetragNetto());
+        lgd.setBetragBrutto(beleg.getBetragBrutto());
+        lgd.setMwstSatz(beleg.getMwstSatz());
+        lgd.setZahlungsart(beleg.getZahlungsart());
+        lgd.setBereitsGezahlt(Boolean.TRUE.equals(ergebnis.getBereitsGezahlt()));
+        lgd.setSkontoTage(ergebnis.getSkontoTage());
+        lgd.setSkontoProzent(ergebnis.getSkontoProzent());
+        lgd.setNettoTage(ergebnis.getNettoTage());
+        lgd.setZahlungsziel(ergebnis.getZahlungsziel());
+        lgd.setLiefertermin(ergebnis.getLiefertermin());
+        lgd.setReferenzNummer(ergebnis.getReferenzNummer());
+        lgd.setBestellnummer(ergebnis.getBestellnummer());
+        if (ergebnis.getAiConfidence() != null) {
+            lgd.setAiConfidence(ergebnis.getAiConfidence());
+        }
+        lgd.setAnalysiertAm(LocalDateTime.now());
+        try {
+            lgd.setAiRawJson(objectMapper.writeValueAsString(ergebnis));
+        } catch (Exception ignored) {
+            // unkritisch
+        }
+        lieferantGeschaeftsdokumentRepository.save(lgd);
+
+        log.info("Auto-Eingangsrechnung erzeugt: Beleg {} -> LieferantDokument {}",
+                beleg.getId(), ld.getId());
     }
 }

@@ -32,6 +32,16 @@ public class Beleg {
     @Column(name = "beleg_kategorie", nullable = false, length = 40)
     private BelegKategorie belegKategorie = BelegKategorie.UNZUGEORDNET;
 
+    /**
+     * Vom KI-Analyse-Service erkannter Dokumenttyp. Null = noch nicht analysiert
+     * oder kein klassifizierbares Geschaeftsdokument. Wenn RECHNUNG/GUTSCHRIFT
+     * und Lieferant gesetzt ist, wird automatisch ein LieferantGeschaeftsdokument
+     * erzeugt, damit der Beleg auch in der Rechnungsuebersicht erscheint.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "dokument_typ", length = 30)
+    private LieferantDokumentTyp dokumentTyp;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private BelegStatus status = BelegStatus.NEU;
@@ -85,8 +95,20 @@ public class Beleg {
     @Column(name = "original_dateiname", length = 255)
     private String originalDateiname;
 
-    @Column(name = "gespeicherter_dateiname", nullable = false, length = 255)
+    /**
+     * Gespeicherter Dateiname (UUID-Prefix). Nullable, weil Umbuchungen
+     * (ist_umbuchung=true) auch ohne Beleg-Datei erfasst werden duerfen.
+     * Service erzwingt: NULL nur dann erlaubt wenn istUmbuchung=true.
+     */
+    @Column(name = "gespeicherter_dateiname", length = 255)
     private String gespeicherterDateiname;
+
+    /**
+     * Belegfreie Buchhaltungs-Bewegung (Privatentnahme, Kasse->Bank etc.).
+     * Wenn true, darf gespeicherterDateiname NULL bleiben.
+     */
+    @Column(name = "ist_umbuchung", nullable = false)
+    private Boolean istUmbuchung = false;
 
     @Column(name = "mime_type", length = 120)
     private String mimeType;

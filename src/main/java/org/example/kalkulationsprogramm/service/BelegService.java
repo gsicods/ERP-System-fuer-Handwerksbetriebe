@@ -13,6 +13,7 @@ import org.example.kalkulationsprogramm.domain.Sachkonto;
 import org.example.kalkulationsprogramm.dto.BelegDto;
 import org.example.kalkulationsprogramm.repository.AbteilungDokumentBerechtigungRepository;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
+import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
 import org.example.kalkulationsprogramm.repository.SachkontoRepository;
@@ -64,6 +65,7 @@ public class BelegService {
     private final AbteilungDokumentBerechtigungRepository berechtigungRepository;
     private final SachkontoRepository sachkontoRepository;
     private final BelegKiAnalyseService kiAnalyseService;
+    private final LieferantDokumentRepository lieferantDokumentRepository;
 
     @Value("${upload.path:uploads}")
     private String uploadPath;
@@ -118,6 +120,19 @@ public class BelegService {
      */
     @Transactional
     public Beleg uploadBeleg(MultipartFile datei, Mitarbeiter uploader) throws IOException {
+        return uploadBeleg(datei, null, uploader);
+    }
+
+    /**
+     * Wie {@link #uploadBeleg(MultipartFile, Mitarbeiter)}, aber mit optionaler
+     * Lieferanten-Vorauswahl vom Mobile-Scanner. Wenn der Scanner einen
+     * Lieferanten setzt, wird er sofort am Beleg gespeichert; die KI sieht das
+     * als "schon zugeordnet" und versucht nicht mehr per Namens-Match. Ist die
+     * KI-Klassifikation spaeter RECHNUNG/GUTSCHRIFT, wird automatisch ein
+     * LieferantGeschaeftsdokument angelegt (siehe BelegKiAnalyseService).
+     */
+    @Transactional
+    public Beleg uploadBeleg(MultipartFile datei, Long lieferantId, Mitarbeiter uploader) throws IOException {
         if (datei == null || datei.isEmpty()) {
             throw new IllegalArgumentException("Datei fehlt");
         }
@@ -165,6 +180,13 @@ public class BelegService {
         beleg.setMimeType(mimeType);
         beleg.setUploadDatum(LocalDateTime.now());
         beleg.setUploadedBy(uploader);
+
+        // Optional vom Mobile-Scanner vorausgewaehlten Lieferant zuordnen.
+        // findById gibt Optional<> — ungueltige ID wird ignoriert (kein Hard-Fail,
+        // damit ein veralteter Mobile-Client den Upload nicht zerstoert).
+        if (lieferantId != null) {
+            lieferantenRepository.findById(lieferantId).ifPresent(beleg::setLieferant);
+        }
 
         beleg = belegRepository.save(beleg);
 
@@ -289,6 +311,75 @@ public class BelegService {
         return true;
     }
 
+    // ===================== Umbuchung (ohne Beleg-Datei) =====================
+
+    /**
+     * Legt eine belegfreie Buchhaltungs-Bewegung an (Privatentnahme, Privat->Firma,
+     * Kasse->Bank etc.). Wird vom PC ueber POST /api/buchhaltung/umbuchungen
+     * erfasst; Mobile-Clients verwenden weiterhin nur den Datei-Upload.
+     *
+     * Der erzeugte Beleg ist sofort VALIDIERT (es gibt nichts mehr zu pruefen),
+     * mit ist_umbuchung=true markiert und ohne Datei. Der Service blockt
+     * unzulaessige Kategorien (UNZUGEORDNET, SONSTIGER_BELEG) — Umbuchungen
+     * gehoeren in eine Kassen-/Bankkategorie, sonst landen sie nicht im Kassenbuch.
+     */
+    @Transactional
+    public Beleg createUmbuchung(BelegDto.UmbuchungCreateRequest req, Mitarbeiter ersteller) {
+        if (req == null) {
+            throw new IllegalArgumentException("Anfrage fehlt");
+        }
+        if (req.getBelegKategorie() == null || req.getBelegKategorie().isBlank()) {
+            throw new IllegalArgumentException("Kategorie fehlt");
+        }
+        BelegKategorie kategorie;
+        try {
+            kategorie = BelegKategorie.valueOf(req.getBelegKategorie());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Ungueltige Kategorie");
+        }
+        // Umbuchungen nur fuer Kassen-/Bank-Kategorien. UNZUGEORDNET und
+        // SONSTIGER_BELEG waeren sonst Geisterbuchungen ohne Wirkung im
+        // Kassenbuch / der Auswertung.
+        if (kategorie == BelegKategorie.UNZUGEORDNET || kategorie == BelegKategorie.SONSTIGER_BELEG) {
+            throw new IllegalArgumentException(
+                    "Umbuchungen muessen einer Kassen-, Bank- oder Privat-Kategorie zugeordnet sein");
+        }
+        if (req.getBetragBrutto() == null || req.getBetragBrutto().signum() <= 0) {
+            throw new IllegalArgumentException("Betrag fehlt oder ist nicht positiv");
+        }
+        if (req.getBelegDatum() == null) {
+            throw new IllegalArgumentException("Datum fehlt");
+        }
+        // Sanity: 10.000-Zeichen-Limit auf Freitextfelder (TESTING_SECURITY 4)
+        if (req.getBeschreibung() != null && req.getBeschreibung().length() > 500) {
+            throw new IllegalArgumentException("Beschreibung zu lang (max. 500 Zeichen)");
+        }
+        if (req.getNotiz() != null && req.getNotiz().length() > 1000) {
+            throw new IllegalArgumentException("Notiz zu lang (max. 1000 Zeichen)");
+        }
+
+        Beleg beleg = new Beleg();
+        beleg.setStatus(BelegStatus.VALIDIERT);
+        beleg.setKiAnalyseStatus(BelegKiAnalyseStatus.DONE); // keine KI noetig — direkt erfasst
+        beleg.setBelegKategorie(kategorie);
+        beleg.setIstUmbuchung(true);
+        beleg.setBelegDatum(req.getBelegDatum());
+        beleg.setBetragBrutto(req.getBetragBrutto());
+        beleg.setBeschreibung(req.getBeschreibung());
+        beleg.setZahlungsart(req.getZahlungsart());
+        beleg.setNotiz(req.getNotiz());
+        beleg.setUploadDatum(LocalDateTime.now());
+        beleg.setUploadedBy(ersteller);
+        beleg.setValidiertAm(LocalDateTime.now());
+        beleg.setValidiertVon(ersteller);
+
+        if (req.getSachkontoId() != null) {
+            sachkontoRepository.findById(req.getSachkontoId()).ifPresent(beleg::setSachkonto);
+        }
+
+        return belegRepository.save(beleg);
+    }
+
     // ===================== Kassenbuch =====================
 
     @Transactional(readOnly = true)
@@ -297,7 +388,8 @@ public class BelegService {
                 BelegStatus.VALIDIERT,
                 List.of(BelegKategorie.KASSE_EINNAHME,
                         BelegKategorie.KASSE_AUSGABE,
-                        BelegKategorie.PRIVATENTNAHME));
+                        BelegKategorie.PRIVATENTNAHME,
+                        BelegKategorie.PRIVATEINLAGE));
 
         // Saldo-Start: Summe aller Bar-Bewegungen VOR dem Startdatum
         BigDecimal saldoStart = BigDecimal.ZERO;
@@ -327,6 +419,7 @@ public class BelegService {
         BigDecimal sumEin = BigDecimal.ZERO;
         BigDecimal sumAus = BigDecimal.ZERO;
         BigDecimal sumPriv = BigDecimal.ZERO;
+        BigDecimal sumPrivEinlage = BigDecimal.ZERO;
 
         List<BelegDto.KassenBewegung> bewegungen = new ArrayList<>(imZeitraum.size());
         for (Beleg b : imZeitraum) {
@@ -336,6 +429,7 @@ public class BelegService {
                 case KASSE_EINNAHME -> sumEin = sumEin.add(nullSafe(b.getBetragBrutto()));
                 case KASSE_AUSGABE -> sumAus = sumAus.add(nullSafe(b.getBetragBrutto()));
                 case PRIVATENTNAHME -> sumPriv = sumPriv.add(nullSafe(b.getBetragBrutto()));
+                case PRIVATEINLAGE -> sumPrivEinlage = sumPrivEinlage.add(nullSafe(b.getBetragBrutto()));
                 default -> {
                     // andere Kategorien sind hier nicht enthalten
                 }
@@ -357,6 +451,7 @@ public class BelegService {
                 .summeEinnahmen(sumEin.setScale(2, RoundingMode.HALF_UP))
                 .summeAusgaben(sumAus.setScale(2, RoundingMode.HALF_UP))
                 .summePrivatentnahmen(sumPriv.setScale(2, RoundingMode.HALF_UP))
+                .summePrivateinlagen(sumPrivEinlage.setScale(2, RoundingMode.HALF_UP))
                 .bewegungen(bewegungen)
                 .build();
     }
@@ -373,9 +468,23 @@ public class BelegService {
     // ===================== DTO-Mapping =====================
 
     public BelegDto.Response toDto(Beleg b) {
+        // Sub-Query auf lieferant_dokument(beleg_id) — wird nur fuer Belege benoetigt,
+        // die als RECHNUNG/GUTSCHRIFT klassifiziert wurden. Spart eine Spalte am Beleg,
+        // ist aber bei Listings ein N+1. Bei groesseren Datenmengen sollte das Repository
+        // alle eingangsrechnungIds in einer Query nachladen — vorerst akzeptabel, weil
+        // Belege seitenweise + chronologisch gefiltert werden (Eingang/Alle/Privat etc.).
+        Long eingangsrechnungId = null;
+        if (b.getDokumentTyp() == LieferantDokumentTyp.RECHNUNG
+                || b.getDokumentTyp() == LieferantDokumentTyp.GUTSCHRIFT) {
+            eingangsrechnungId = lieferantDokumentRepository.findByBelegId(b.getId())
+                    .map(d -> d.getGeschaeftsdaten() != null ? d.getGeschaeftsdaten().getId() : null)
+                    .orElse(null);
+        }
         return BelegDto.Response.builder()
                 .id(b.getId())
                 .belegKategorie(b.getBelegKategorie() != null ? b.getBelegKategorie().name() : null)
+                .dokumentTyp(b.getDokumentTyp() != null ? b.getDokumentTyp().name() : null)
+                .istUmbuchung(Boolean.TRUE.equals(b.getIstUmbuchung()))
                 .status(b.getStatus() != null ? b.getStatus().name() : null)
                 .kiAnalyseStatus(b.getKiAnalyseStatus() != null ? b.getKiAnalyseStatus().name() : null)
                 .belegDatum(b.getBelegDatum())
@@ -404,6 +513,7 @@ public class BelegService {
                 .validiertVonId(b.getValidiertVon() != null ? b.getValidiertVon().getId() : null)
                 .validiertVonName(mitarbeiterName(b.getValidiertVon()))
                 .notiz(b.getNotiz())
+                .eingangsrechnungId(eingangsrechnungId)
                 .build();
     }
 

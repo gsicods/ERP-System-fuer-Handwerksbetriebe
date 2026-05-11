@@ -408,8 +408,15 @@ public class RechnungsuebersichtController {
                 dto.lieferantName = gd.getDokument().getLieferant().getLieferantenname();
             }
 
-            // PDF-URL - use the correct endpoint without lieferant prefix
-            if (gd.getDokument().getAttachment() != null) {
+            // PDF-URL - use the correct endpoint without lieferant prefix.
+            // Reihenfolge:
+            //  1. Auto-erzeugt aus Mobile-Beleg-Scan (beleg-FK gesetzt) -> Beleg-Endpoint
+            //     bedient die Vorschau direkt und respektiert die Buchhaltungs-Permissions.
+            //  2. E-Mail-Anhang -> Mail-Attachment-Endpoint
+            //  3. Manuell hochgeladen -> Lieferanten-Dokument-Endpoint
+            if (gd.getDokument().getBeleg() != null) {
+                dto.pdfUrl = "/api/buchhaltung/belege/" + gd.getDokument().getBeleg().getId() + "/datei";
+            } else if (gd.getDokument().getAttachment() != null) {
                 var att = gd.getDokument().getAttachment();
                 if (att.getEmail() != null) {
                     dto.pdfUrl = "/api/emails/" + att.getEmail().getId() +

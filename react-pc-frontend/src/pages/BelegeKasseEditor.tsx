@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Receipt, Upload, Loader2, Search, Wallet, Banknote, CreditCard,
     Coins, FileQuestion, CheckCircle2, AlertCircle, Trash2, X, Truck,
-    Save, RefreshCw, FileText, BookOpen, BarChart3
+    Save, RefreshCw, FileText, BookOpen, BarChart3, ArrowRightLeft, FileInput,
 } from 'lucide-react';
 import { PageLayout } from '../components/layout/PageLayout';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
+import { Select } from '../components/ui/select-custom';
 import { LieferantSearchModal, type LieferantSuchErgebnis } from '../components/LieferantSearchModal';
 
 // ===================== Types =====================
@@ -20,6 +21,13 @@ interface Sachkonto {
     bezeichnung: string;
     kontoTyp: SachkontoTyp;
     beschreibung?: string | null;
+    aktiv: boolean;
+    sortierung: number;
+}
+
+interface Zahlungsart {
+    id: number;
+    bezeichnung: string;
     aktiv: boolean;
     sortierung: number;
 }
@@ -47,6 +55,7 @@ type BelegKategorie =
     | 'KASSE_EINNAHME'
     | 'KASSE_AUSGABE'
     | 'PRIVATENTNAHME'
+    | 'PRIVATEINLAGE'
     | 'BANK'
     | 'KREDITKARTE'
     | 'SONSTIGER_BELEG';
@@ -55,6 +64,8 @@ type KiStatus = 'PENDING' | 'LAEUFT' | 'DONE' | 'FAILED';
 interface Beleg {
     id: number;
     belegKategorie: BelegKategorie;
+    dokumentTyp?: string | null;
+    istUmbuchung?: boolean | null;
     status: BelegStatus;
     kiAnalyseStatus: KiStatus;
     belegDatum?: string | null;
@@ -80,6 +91,7 @@ interface Beleg {
     validiertAm?: string | null;
     validiertVonName?: string | null;
     notiz?: string | null;
+    eingangsrechnungId?: number | null;
 }
 
 interface KassenBewegung {
@@ -98,6 +110,7 @@ interface Kassenbuch {
     summeEinnahmen: number;
     summeAusgaben: number;
     summePrivatentnahmen: number;
+    summePrivateinlagen: number;
     bewegungen: KassenBewegung[];
 }
 
@@ -108,6 +121,7 @@ const KATEGORIE_LABELS: Record<BelegKategorie, string> = {
     KASSE_EINNAHME: 'Kasse – Einnahme',
     KASSE_AUSGABE: 'Kasse – Ausgabe',
     PRIVATENTNAHME: 'Privatentnahme',
+    PRIVATEINLAGE: 'Privateinlage',
     BANK: 'Bank',
     KREDITKARTE: 'Kreditkarte',
     SONSTIGER_BELEG: 'Sonstiger Beleg',
@@ -118,6 +132,7 @@ const KATEGORIE_FARBE: Record<BelegKategorie, string> = {
     KASSE_EINNAHME: 'bg-emerald-100 text-emerald-700',
     KASSE_AUSGABE: 'bg-amber-100 text-amber-700',
     PRIVATENTNAHME: 'bg-fuchsia-100 text-fuchsia-700',
+    PRIVATEINLAGE: 'bg-lime-100 text-lime-700',
     BANK: 'bg-sky-100 text-sky-700',
     KREDITKARTE: 'bg-violet-100 text-violet-700',
     SONSTIGER_BELEG: 'bg-slate-100 text-slate-700',
@@ -140,6 +155,50 @@ const formatDateTime = (iso?: string | null): string => {
     return Number.isNaN(d.getTime()) ? '–' : d.toLocaleString('de-DE');
 };
 
+const SACHKONTO_TYP_LABEL: Record<SachkontoTyp, string> = {
+    AUFWAND: 'Aufwand', ERTRAG: 'Ertrag', PRIVAT: 'Privat', NEUTRAL: 'Neutral',
+};
+
+// Flacht Sachkonten in Optionen ab und gruppiert sie ueber ein Praefix im Label,
+// damit die Pflicht-<Select>-Komponente (ohne optgroup-Support) verwendet werden
+// kann. Reihenfolge: Aufwand, Ertrag, Privat, Neutral – innerhalb sortiert nach
+// `sortierung`. Der fuehrende Leer-Eintrag erlaubt das aktive Abwaehlen eines
+// Kontos.
+function buildSachkontoOptions(sachkonten: Sachkonto[]): { value: string; label: string }[] {
+    const order: SachkontoTyp[] = ['AUFWAND', 'ERTRAG', 'PRIVAT', 'NEUTRAL'];
+    const grouped = order.flatMap(typ =>
+        sachkonten
+            .filter(s => s.kontoTyp === typ)
+            .sort((a, b) => a.sortierung - b.sortierung)
+            .map(s => ({
+                value: String(s.id),
+                label: `${SACHKONTO_TYP_LABEL[typ]} · ${s.nummer ? `${s.nummer} ` : ''}${s.bezeichnung}`,
+            }))
+    );
+    return [{ value: '', label: '– kein Konto –' }, ...grouped];
+}
+
+// Baut die Optionen fuer den Zahlungsart-<Select> aus den Stammdaten. Der
+// fuehrende Leer-Eintrag erlaubt das aktive Loeschen der Zahlungsart bei
+// bestehenden Belegen. `bestehenderWert` wird zusaetzlich aufgenommen, falls
+// ein Altbeleg eine Bezeichnung enthaelt, die (noch) nicht in den Stammdaten
+// steht — sonst waere der Select-Wert "verschwunden".
+function buildZahlungsartOptions(
+    zahlungsarten: Zahlungsart[],
+    bestehenderWert?: string | null,
+): { value: string; label: string }[] {
+    const sorted = [...zahlungsarten]
+        .sort((a, b) => a.sortierung - b.sortierung || a.bezeichnung.localeCompare(b.bezeichnung));
+    const opts: { value: string; label: string }[] = [
+        { value: '', label: '– keine Angabe –' },
+        ...sorted.map(z => ({ value: z.bezeichnung, label: z.bezeichnung })),
+    ];
+    if (bestehenderWert && !opts.some(o => o.value === bestehenderWert)) {
+        opts.push({ value: bestehenderWert, label: `${bestehenderWert} (nicht im Stamm)` });
+    }
+    return opts;
+}
+
 const KI_LABEL: Record<KiStatus, { label: string; cls: string }> = {
     PENDING: { label: 'KI wartet…', cls: 'bg-slate-100 text-slate-500' },
     LAEUFT: { label: 'KI analysiert…', cls: 'bg-sky-100 text-sky-700' },
@@ -149,7 +208,7 @@ const KI_LABEL: Record<KiStatus, { label: string; cls: string }> = {
 
 // ===================== Component =====================
 
-type Tab = 'eingang' | 'alle' | 'privatentnahmen' | 'kasse' | 'auswertung';
+type Tab = 'eingang' | 'alle' | 'privat' | 'kasse' | 'auswertung';
 
 export default function BelegeKasseEditor() {
     const [activeTab, setActiveTab] = useState<Tab>('eingang');
@@ -161,6 +220,7 @@ export default function BelegeKasseEditor() {
     const [kassenbuch, setKassenbuch] = useState<Kassenbuch | null>(null);
     const [kassenLoading, setKassenLoading] = useState(false);
     const [sachkonten, setSachkonten] = useState<Sachkonto[]>([]);
+    const [zahlungsarten, setZahlungsarten] = useState<Zahlungsart[]>([]);
     const [auswertung, setAuswertung] = useState<Auswertung | null>(null);
     const [auswertungLoading, setAuswertungLoading] = useState(false);
     const heuteIso = new Date().toISOString().slice(0, 10);
@@ -168,6 +228,7 @@ export default function BelegeKasseEditor() {
     const [auswVon, setAuswVon] = useState<string>(jahresanfangIso);
     const [auswBis, setAuswBis] = useState<string>(heuteIso);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [umbuchungOpen, setUmbuchungOpen] = useState(false);
 
     const loadBelege = useCallback(async () => {
         setLoading(true);
@@ -192,6 +253,15 @@ export default function BelegeKasseEditor() {
             if (res.ok) setSachkonten(await res.json());
         } catch (e) {
             console.error('Sachkonten laden fehlgeschlagen', e);
+        }
+    }, []);
+
+    const loadZahlungsarten = useCallback(async () => {
+        try {
+            const res = await fetch('/api/buchhaltung/zahlungsarten?nurAktive=true');
+            if (res.ok) setZahlungsarten(await res.json());
+        } catch (e) {
+            console.error('Zahlungsarten laden fehlgeschlagen', e);
         }
     }, []);
 
@@ -227,7 +297,8 @@ export default function BelegeKasseEditor() {
     useEffect(() => {
         loadBelege();
         loadSachkonten();
-    }, [loadBelege, loadSachkonten]);
+        loadZahlungsarten();
+    }, [loadBelege, loadSachkonten, loadZahlungsarten]);
 
     useEffect(() => {
         if (activeTab === 'kasse') loadKassenbuch();
@@ -284,8 +355,10 @@ export default function BelegeKasseEditor() {
                 return belege.filter(b => b.status === 'NEU' && match(b));
             case 'alle':
                 return belege.filter(b => b.status !== 'VERWORFEN' && match(b));
-            case 'privatentnahmen':
-                return belege.filter(b => b.belegKategorie === 'PRIVATENTNAHME' && b.status !== 'VERWORFEN' && match(b));
+            case 'privat':
+                return belege.filter(b =>
+                    (b.belegKategorie === 'PRIVATENTNAHME' || b.belegKategorie === 'PRIVATEINLAGE')
+                    && b.status !== 'VERWORFEN' && match(b));
             case 'kasse':
                 return belege.filter(b =>
                     (b.belegKategorie === 'KASSE_EINNAHME' || b.belegKategorie === 'KASSE_AUSGABE')
@@ -311,6 +384,10 @@ export default function BelegeKasseEditor() {
                         <RefreshCw className={loading ? 'w-4 h-4 mr-2 animate-spin' : 'w-4 h-4 mr-2'} />
                         Aktualisieren
                     </Button>
+                    <Button variant="outline" onClick={() => setUmbuchungOpen(true)}>
+                        <ArrowRightLeft className="w-4 h-4 mr-2" />
+                        Umbuchung anlegen
+                    </Button>
                     <input
                         ref={fileInputRef}
                         type="file"
@@ -332,8 +409,8 @@ export default function BelegeKasseEditor() {
                     label="Eingang (Validierung)" badge={eingangsCount > 0 ? eingangsCount : undefined} />
                 <TabButton active={activeTab === 'alle'} onClick={() => setActiveTab('alle')}
                     icon={<Receipt className="w-4 h-4" />} label="Alle Belege" />
-                <TabButton active={activeTab === 'privatentnahmen'} onClick={() => setActiveTab('privatentnahmen')}
-                    icon={<Wallet className="w-4 h-4" />} label="Privatentnahmen" />
+                <TabButton active={activeTab === 'privat'} onClick={() => setActiveTab('privat')}
+                    icon={<Wallet className="w-4 h-4" />} label="Privat (Entnahme / Einlage)" />
                 <TabButton active={activeTab === 'kasse'} onClick={() => setActiveTab('kasse')}
                     icon={<Coins className="w-4 h-4" />} label="Kassenbuch" />
                 <TabButton active={activeTab === 'auswertung'} onClick={() => setActiveTab('auswertung')}
@@ -379,7 +456,7 @@ export default function BelegeKasseEditor() {
                     <Receipt className="w-12 h-12 mx-auto mb-3 opacity-30" />
                     <p className="font-medium">
                         {activeTab === 'eingang' ? 'Keine offenen Belege zur Validierung'
-                            : activeTab === 'privatentnahmen' ? 'Keine Privatentnahmen erfasst'
+                            : activeTab === 'privat' ? 'Keine Privatentnahmen oder -einlagen erfasst'
                             : 'Keine Belege gefunden'}
                     </p>
                     <p className="text-sm mt-1">Belege werden über die Handy-App gescannt oder hier hochgeladen.</p>
@@ -396,6 +473,7 @@ export default function BelegeKasseEditor() {
                 <BelegDetailModal
                     beleg={editing}
                     sachkonten={sachkonten}
+                    zahlungsarten={zahlungsarten}
                     onClose={() => setEditing(null)}
                     onSaved={updated => {
                         setBelege(list => list.map(b => b.id === updated.id ? updated : b));
@@ -407,7 +485,187 @@ export default function BelegeKasseEditor() {
                     }}
                 />
             )}
+
+            {umbuchungOpen && (
+                <UmbuchungModal
+                    sachkonten={sachkonten}
+                    zahlungsarten={zahlungsarten}
+                    onClose={() => setUmbuchungOpen(false)}
+                    onCreated={(b) => {
+                        setBelege(list => [b, ...list]);
+                        setUmbuchungOpen(false);
+                    }}
+                />
+            )}
         </PageLayout>
+    );
+}
+
+// ===================== Umbuchungs-Modal (ohne Beleg-Datei) =====================
+
+/**
+ * Belegfreie Buchung: Privatentnahme, Privat->Firma, Kasse->Bank.
+ * Sendet an POST /api/buchhaltung/umbuchungen. Erzeugter Beleg ist sofort
+ * validiert und mit istUmbuchung=true markiert.
+ */
+function UmbuchungModal({ sachkonten, zahlungsarten, onClose, onCreated }: {
+    sachkonten: Sachkonto[];
+    zahlungsarten: Zahlungsart[];
+    onClose: () => void;
+    onCreated: (b: Beleg) => void;
+}) {
+    const heute = new Date().toISOString().slice(0, 10);
+    const [form, setForm] = useState({
+        belegKategorie: 'PRIVATENTNAHME' as BelegKategorie,
+        belegDatum: heute,
+        betragBrutto: '' as string,
+        beschreibung: '',
+        zahlungsart: '',
+        sachkontoId: null as number | null,
+        notiz: '',
+    });
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const update = <K extends keyof typeof form>(k: K, v: typeof form[K]) =>
+        setForm(f => ({ ...f, [k]: v }));
+
+    const submit = async () => {
+        setError(null);
+        const betrag = Number(form.betragBrutto);
+        if (!Number.isFinite(betrag) || betrag <= 0) {
+            setError('Bitte einen positiven Betrag eingeben.');
+            return;
+        }
+        if (!form.belegDatum) {
+            setError('Bitte ein Datum wählen.');
+            return;
+        }
+        setSaving(true);
+        try {
+            const res = await fetch('/api/buchhaltung/umbuchungen', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    belegKategorie: form.belegKategorie,
+                    belegDatum: form.belegDatum,
+                    betragBrutto: betrag,
+                    beschreibung: form.beschreibung || null,
+                    zahlungsart: form.zahlungsart || null,
+                    sachkontoId: form.sachkontoId,
+                    notiz: form.notiz || null,
+                }),
+            });
+            if (!res.ok) {
+                const txt = await res.text().catch(() => '');
+                setError('Anlegen fehlgeschlagen: ' + (txt || res.statusText));
+                return;
+            }
+            const b: Beleg = await res.json();
+            onCreated(b);
+        } catch (e) {
+            setError('Netzwerkfehler');
+            console.error(e);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    // Nur Bewegungskategorien erlauben — Umbuchungen ohne Wirkung im Kassenbuch
+    // (UNZUGEORDNET, SONSTIGER_BELEG) sind serverseitig blockiert.
+    const KATEGORIEN_UMBUCHUNG: BelegKategorie[] = [
+        'PRIVATENTNAHME', 'PRIVATEINLAGE', 'KASSE_EINNAHME', 'KASSE_AUSGABE', 'BANK', 'KREDITKARTE',
+    ];
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl flex flex-col">
+                <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <FileInput className="w-5 h-5 text-rose-600" />
+                        <div>
+                            <h2 className="font-bold text-slate-900">Umbuchung ohne Beleg</h2>
+                            <p className="text-xs text-slate-500">Privatentnahme, Kasse → Bank, Privat → Firma …</p>
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-5 h-5 text-slate-500" /></button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                    {error && (
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                            {error}
+                        </div>
+                    )}
+
+                    <Field label="Art der Buchung">
+                        <Select
+                            value={form.belegKategorie}
+                            onChange={v => update('belegKategorie', v as BelegKategorie)}
+                            options={KATEGORIEN_UMBUCHUNG.map(k => ({ value: k, label: KATEGORIE_LABELS[k] }))}
+                        />
+                    </Field>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <Field label="Datum">
+                            <input type="date" value={form.belegDatum}
+                                onChange={e => update('belegDatum', e.target.value)}
+                                className={inputCls} />
+                        </Field>
+                        <Field label="Betrag (€)">
+                            <input type="number" step="0.01" min="0" value={form.betragBrutto}
+                                onChange={e => update('betragBrutto', e.target.value)}
+                                placeholder="z.B. 100,00"
+                                className={inputCls} />
+                        </Field>
+                    </div>
+
+                    <Field label="Beschreibung">
+                        <input type="text" value={form.beschreibung}
+                            onChange={e => update('beschreibung', e.target.value)}
+                            maxLength={500}
+                            placeholder="z.B. Privatentnahme Bar, Bareinzahlung auf Bankkonto"
+                            className={inputCls} />
+                    </Field>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <Field label="Zahlungsart">
+                            <Select
+                                value={form.zahlungsart}
+                                onChange={v => update('zahlungsart', v)}
+                                placeholder="– bitte wählen –"
+                                options={buildZahlungsartOptions(zahlungsarten, form.zahlungsart)}
+                            />
+                        </Field>
+                        <Field label="Konto (optional)">
+                            <Select
+                                value={form.sachkontoId != null ? String(form.sachkontoId) : ''}
+                                onChange={v => update('sachkontoId', v ? Number(v) : null)}
+                                placeholder="– kein Konto –"
+                                options={buildSachkontoOptions(sachkonten)}
+                            />
+                        </Field>
+                    </div>
+
+                    <Field label="Notiz">
+                        <textarea rows={2} value={form.notiz}
+                            onChange={e => update('notiz', e.target.value)}
+                            maxLength={1000}
+                            className={inputCls} />
+                    </Field>
+                </div>
+
+                <div className="border-t border-slate-200 p-4 flex items-center justify-end gap-2 bg-slate-50">
+                    <Button variant="outline" onClick={onClose} disabled={saving}>
+                        Abbrechen
+                    </Button>
+                    <Button onClick={submit} disabled={saving}>
+                        {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                        Umbuchung anlegen
+                    </Button>
+                </div>
+            </div>
+        </div>
     );
 }
 
@@ -463,7 +721,20 @@ function BelegRow({ beleg, onClick }: { beleg: Beleg; onClick: () => void }) {
                             <CheckCircle2 className="w-3 h-3" /> Validiert
                         </span>
                     )}
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${ki.cls}`}>{ki.label}</span>
+                    {beleg.istUmbuchung && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 inline-flex items-center gap-1">
+                            <ArrowRightLeft className="w-3 h-3" /> Umbuchung
+                        </span>
+                    )}
+                    {beleg.eingangsrechnungId != null && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 inline-flex items-center gap-1"
+                              title="Auch unter Eingangsrechnungen sichtbar">
+                            <FileText className="w-3 h-3" /> Eingangsrechnung
+                        </span>
+                    )}
+                    {!beleg.istUmbuchung && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${ki.cls}`}>{ki.label}</span>
+                    )}
                 </div>
                 <div className="text-sm text-slate-500 flex items-center gap-4 flex-wrap">
                     <span>{formatDate(beleg.belegDatum)}</span>
@@ -496,11 +767,12 @@ function KassenbuchView({ kassenbuch, loading, onSelectBeleg }: {
     }
     return (
         <div className="space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <KpiTile label="Saldo aktuell" value={`${formatEuro(kassenbuch.saldoEnde)} €`} icon={<Wallet className="w-5 h-5" />} highlight />
                 <KpiTile label="Einnahmen" value={`${formatEuro(kassenbuch.summeEinnahmen)} €`} icon={<Banknote className="w-5 h-5 text-emerald-600" />} />
                 <KpiTile label="Ausgaben" value={`${formatEuro(kassenbuch.summeAusgaben)} €`} icon={<CreditCard className="w-5 h-5 text-amber-600" />} />
                 <KpiTile label="Privatentnahmen" value={`${formatEuro(kassenbuch.summePrivatentnahmen)} €`} icon={<Wallet className="w-5 h-5 text-fuchsia-600" />} />
+                <KpiTile label="Privateinlagen" value={`${formatEuro(kassenbuch.summePrivateinlagen)} €`} icon={<Wallet className="w-5 h-5 text-lime-600" />} />
             </div>
 
             <Card className="overflow-hidden">
@@ -560,9 +832,10 @@ function KpiTile({ label, value, icon, highlight }: { label: string; value: stri
 
 // ===================== Detail / Validierungs-Modal =====================
 
-function BelegDetailModal({ beleg, sachkonten, onClose, onSaved, onDeleted }: {
+function BelegDetailModal({ beleg, sachkonten, zahlungsarten, onClose, onSaved, onDeleted }: {
     beleg: Beleg;
     sachkonten: Sachkonto[];
+    zahlungsarten: Zahlungsart[];
     onClose: () => void;
     onSaved: (b: Beleg) => void;
     onDeleted: (id: number) => void;
@@ -675,43 +948,23 @@ function BelegDetailModal({ beleg, sachkonten, onClose, onSaved, onDeleted }: {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                                 <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Wo gezahlt</label>
-                                <select
+                                <Select
                                     value={form.belegKategorie}
-                                    onChange={e => update('belegKategorie', e.target.value as BelegKategorie)}
-                                    className="w-full p-2.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-rose-500 outline-none"
-                                >
-                                    {Object.entries(KATEGORIE_LABELS).map(([k, v]) => (
-                                        <option key={k} value={k}>{v}</option>
-                                    ))}
-                                </select>
+                                    onChange={v => update('belegKategorie', v as BelegKategorie)}
+                                    options={(Object.entries(KATEGORIE_LABELS) as [BelegKategorie, string][])
+                                        .map(([k, label]) => ({ value: k, label }))}
+                                />
                             </div>
                             <div>
                                 <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1 inline-flex items-center gap-1">
                                     <BookOpen className="w-3 h-3" /> Konto / Wofür?
                                 </label>
-                                <select
-                                    value={form.sachkontoId ?? ''}
-                                    onChange={e => update('sachkontoId', e.target.value ? Number(e.target.value) : null)}
-                                    className="w-full p-2.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-rose-500 outline-none"
-                                >
-                                    <option value="">– kein Konto zugewiesen –</option>
-                                    {(['AUFWAND', 'ERTRAG', 'PRIVAT', 'NEUTRAL'] as SachkontoTyp[]).map(typ => {
-                                        const items = sachkonten.filter(s => s.kontoTyp === typ);
-                                        if (items.length === 0) return null;
-                                        const labels: Record<SachkontoTyp, string> = {
-                                            AUFWAND: 'Aufwand', ERTRAG: 'Ertrag', PRIVAT: 'Privat', NEUTRAL: 'Neutral',
-                                        };
-                                        return (
-                                            <optgroup key={typ} label={labels[typ]}>
-                                                {items.map(s => (
-                                                    <option key={s.id} value={s.id}>
-                                                        {s.nummer ? `${s.nummer} ` : ''}{s.bezeichnung}
-                                                    </option>
-                                                ))}
-                                            </optgroup>
-                                        );
-                                    })}
-                                </select>
+                                <Select
+                                    value={form.sachkontoId != null ? String(form.sachkontoId) : ''}
+                                    onChange={v => update('sachkontoId', v ? Number(v) : null)}
+                                    placeholder="– kein Konto zugewiesen –"
+                                    options={buildSachkontoOptions(sachkonten)}
+                                />
                             </div>
                         </div>
 
@@ -742,10 +995,12 @@ function BelegDetailModal({ beleg, sachkonten, onClose, onSaved, onDeleted }: {
                                     className={inputCls} />
                             </Field>
                             <Field label="Zahlungsart">
-                                <input type="text" value={form.zahlungsart}
-                                    onChange={e => update('zahlungsart', e.target.value)}
-                                    placeholder="z.B. Bar, EC, Überweisung"
-                                    className={inputCls} />
+                                <Select
+                                    value={form.zahlungsart}
+                                    onChange={v => update('zahlungsart', v)}
+                                    placeholder="– bitte wählen –"
+                                    options={buildZahlungsartOptions(zahlungsarten, form.zahlungsart)}
+                                />
                             </Field>
                         </div>
 
