@@ -3,6 +3,7 @@ import {
     Receipt, Upload, Loader2, Search, Wallet, Banknote, CreditCard,
     Coins, FileQuestion, CheckCircle2, AlertCircle, Trash2, X, Truck,
     Save, RefreshCw, FileText, BookOpen, BarChart3, ArrowRightLeft, FileInput,
+    FileDown, Calendar,
 } from 'lucide-react';
 import { PageLayout } from '../components/layout/PageLayout';
 import { Card } from '../components/ui/card';
@@ -214,6 +215,7 @@ export default function BelegeKasseEditor() {
     const [activeTab, setActiveTab] = useState<Tab>('eingang');
     const [belege, setBelege] = useState<Beleg[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<'forbidden' | 'network' | null>(null);
     const [uploading, setUploading] = useState(false);
     const [search, setSearch] = useState('');
     const [editing, setEditing] = useState<Beleg | null>(null);
@@ -229,6 +231,7 @@ export default function BelegeKasseEditor() {
     const [auswBis, setAuswBis] = useState<string>(heuteIso);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [umbuchungOpen, setUmbuchungOpen] = useState(false);
+    const [monatsExportOpen, setMonatsExportOpen] = useState(false);
 
     const loadBelege = useCallback(async () => {
         setLoading(true);
@@ -237,11 +240,17 @@ export default function BelegeKasseEditor() {
             if (res.ok) {
                 const data: Beleg[] = await res.json();
                 setBelege(data);
+                setLoadError(null);
             } else if (res.status === 403) {
                 setBelege([]);
+                setLoadError('forbidden');
+            } else {
+                setBelege([]);
+                setLoadError('network');
             }
         } catch (e) {
             console.error('Belege laden fehlgeschlagen', e);
+            setLoadError('network');
         } finally {
             setLoading(false);
         }
@@ -388,6 +397,11 @@ export default function BelegeKasseEditor() {
                         <ArrowRightLeft className="w-4 h-4 mr-2" />
                         Umbuchung anlegen
                     </Button>
+                    <Button variant="outline" onClick={() => setMonatsExportOpen(true)}
+                            title="Monatsexport für den Steuerberater als PDF">
+                        <FileDown className="w-4 h-4 mr-2" />
+                        Monats-Export (Steuerberater)
+                    </Button>
                     <input
                         ref={fileInputRef}
                         type="file"
@@ -451,6 +465,25 @@ export default function BelegeKasseEditor() {
                 <div className="flex justify-center py-16">
                     <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
                 </div>
+            ) : loadError === 'forbidden' ? (
+                <Card className="p-12 text-center border-amber-200 bg-amber-50">
+                    <AlertCircle className="w-12 h-12 mx-auto mb-3 text-amber-500" />
+                    <p className="font-medium text-amber-900">Keine Berechtigung für Belege</p>
+                    <p className="text-sm mt-2 text-amber-800 max-w-md mx-auto">
+                        Dein Account hat keine Sicht-Berechtigung für Belege (Typ <code className="font-mono">BELEG</code>).
+                        Lass dich unter <strong>Administration → Lieferanten-Dokumentenrechte</strong> für die Abteilung
+                        Buchhaltung freischalten — oder prüfe, ob dein Frontend-Login mit einem Mitarbeiter-Datensatz
+                        (gleiche E-Mail) verknüpft ist.
+                    </p>
+                </Card>
+            ) : loadError === 'network' ? (
+                <Card className="p-12 text-center border-red-200 bg-red-50">
+                    <AlertCircle className="w-12 h-12 mx-auto mb-3 text-red-500" />
+                    <p className="font-medium text-red-900">Belege konnten nicht geladen werden</p>
+                    <p className="text-sm mt-2 text-red-800">
+                        Netzwerk- oder Serverfehler. Prüfe die Browser-Konsole (F12) für Details.
+                    </p>
+                </Card>
             ) : gefiltert.length === 0 ? (
                 <Card className="p-12 text-center text-slate-500">
                     <Receipt className="w-12 h-12 mx-auto mb-3 opacity-30" />
@@ -497,7 +530,100 @@ export default function BelegeKasseEditor() {
                     }}
                 />
             )}
+
+            {monatsExportOpen && (
+                <MonatsExportModal onClose={() => setMonatsExportOpen(false)} />
+            )}
         </PageLayout>
+    );
+}
+
+// ===================== Monats-Export Modal =====================
+
+/**
+ * Auswahl-Dialog für den PDF-Monatsexport. Ein PDF pro Kalendermonat —
+ * gedacht für die Übergabe an den Steuerberater zusammen mit dem Ordner
+ * der hochgeladenen Belegfotos.
+ */
+function MonatsExportModal({ onClose }: { onClose: () => void }) {
+    const heute = new Date();
+    // Default: Vormonat — der Steuerberater bekommt typischerweise den abgeschlossenen Monat.
+    const defaultMonat = heute.getMonth() === 0 ? 12 : heute.getMonth();
+    const defaultJahr  = heute.getMonth() === 0 ? heute.getFullYear() - 1 : heute.getFullYear();
+
+    const [jahr,  setJahr]  = useState<number>(defaultJahr);
+    const [monat, setMonat] = useState<number>(defaultMonat);
+
+    const monatsLabels = [
+        'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
+        'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember',
+    ];
+    const jahre: number[] = [];
+    for (let j = heute.getFullYear() + 1; j >= heute.getFullYear() - 5; j--) jahre.push(j);
+
+    const handleExport = () => {
+        const url = `/api/buchhaltung/auswertung/monat/pdf?jahr=${jahr}&monat=${monat}`;
+        window.open(url, '_blank');
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+                <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <FileDown className="w-5 h-5 text-rose-600" />
+                        <div>
+                            <h2 className="font-bold text-slate-900">Monats-Export (Steuerberater)</h2>
+                            <p className="text-xs text-slate-500">
+                                Ein PDF mit allen validierten Belegen des Monats
+                            </p>
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full">
+                        <X className="w-5 h-5 text-slate-500" />
+                    </button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                    <div className="bg-rose-50/60 border border-rose-100 rounded-lg p-3 text-xs text-slate-600 flex items-start gap-2">
+                        <Calendar className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                        <span>
+                            Das PDF enthält die Sachkonto-Auswertung und alle validierten Belege.
+                            Übergib es zusammen mit dem Ordner der Belegfotos an den Steuerberater.
+                        </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <Field label="Monat">
+                            <Select
+                                value={String(monat)}
+                                onChange={v => setMonat(Number(v))}
+                                options={monatsLabels.map((label, i) => ({
+                                    value: String(i + 1),
+                                    label,
+                                }))}
+                            />
+                        </Field>
+                        <Field label="Jahr">
+                            <Select
+                                value={String(jahr)}
+                                onChange={v => setJahr(Number(v))}
+                                options={jahre.map(j => ({ value: String(j), label: String(j) }))}
+                            />
+                        </Field>
+                    </div>
+                </div>
+
+                <div className="border-t border-slate-200 p-4 flex items-center justify-end gap-2 bg-slate-50">
+                    <Button variant="outline" onClick={onClose}>Abbrechen</Button>
+                    <Button onClick={handleExport} className="bg-rose-600 hover:bg-rose-700 text-white">
+                        <FileText className="w-4 h-4 mr-2" />
+                        PDF erstellen
+                    </Button>
+                </div>
+            </div>
+        </div>
     );
 }
 

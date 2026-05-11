@@ -12,8 +12,12 @@ import org.example.kalkulationsprogramm.repository.BelegRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
 import org.example.kalkulationsprogramm.repository.SachkontoRepository;
 import org.example.kalkulationsprogramm.service.BelegService;
+import org.example.kalkulationsprogramm.service.BelegeKasseExportPdfService;
 import org.example.kalkulationsprogramm.config.FrontendUserPrincipal;
+import org.springframework.core.io.UrlResource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,6 +47,7 @@ public class SachkontoController {
     private final BelegRepository belegRepository;
     private final BelegService belegService;
     private final MitarbeiterRepository mitarbeiterRepository;
+    private final BelegeKasseExportPdfService belegeKasseExportPdfService;
 
     private Mitarbeiter resolveCaller(String token, Authentication auth) {
         if (token != null && !token.isBlank()) {
@@ -189,6 +194,38 @@ public class SachkontoController {
                 .summeOhneKonto(ohneKonto.setScale(2, RoundingMode.HALF_UP))
                 .zeilen(zeilen)
                 .build());
+    }
+
+    /**
+     * Monatsexport für den Steuerberater: ein PDF mit allen validierten Belegen
+     * eines Kalendermonats inklusive Sachkonto-Auswertung. Wird zusammen mit dem
+     * Ordner der hochgeladenen Belegfotos übergeben.
+     */
+    @GetMapping("/auswertung/monat/pdf")
+    public ResponseEntity<?> auswertungMonatPdf(
+            @RequestParam("jahr") int jahr,
+            @RequestParam("monat") int monat,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+        Mitarbeiter caller = resolveCaller(token, auth);
+        if (caller == null || !belegService.darfSehen(caller)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        if (monat < 1 || monat > 12 || jahr < 2000 || jahr > 2999) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Ungültiger Monat oder Jahr"));
+        }
+        try {
+            java.nio.file.Path pdfPath = belegeKasseExportPdfService.generatePdf(jahr, monat);
+            UrlResource resource = new UrlResource(pdfPath.toUri());
+            String filename = String.format("Belege-Kasse-%04d-%02d.pdf", jahr, monat);
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filename + "\"")
+                    .contentType(MediaType.APPLICATION_PDF)
+                    .body(resource);
+        } catch (Exception e) {
+            log.error("Belege-Monatsexport fehlgeschlagen", e);
+            return ResponseEntity.internalServerError().body(Map.of("message", "PDF-Erzeugung fehlgeschlagen"));
+        }
     }
 
     // ===================== Helpers =====================
