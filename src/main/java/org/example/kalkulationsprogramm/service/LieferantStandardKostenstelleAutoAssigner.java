@@ -55,14 +55,17 @@ public class LieferantStandardKostenstelleAutoAssigner {
         }
 
         LieferantGeschaeftsdokument gd = dokument.getGeschaeftsdaten();
+        BigDecimal betragNetto = gd != null ? gd.getBetragNetto() : null;
         BigDecimal betragBrutto = gd != null ? gd.getBetragBrutto() : null;
 
         LieferantDokumentProjektAnteil anteil = new LieferantDokumentProjektAnteil();
         anteil.setDokument(dokument);
         anteil.setKostenstelle(standard);
         anteil.setProzent(100);
-        if (betragBrutto != null) {
-            anteil.berechneAnteil(betragBrutto);
+        // Kostenstellen-Anteil: netto verrechnen (Vorsteuer geht nicht in Gemeinkosten).
+        // berechneAnteil(netto, brutto) erkennt das anhand der gesetzten Kostenstelle.
+        if (betragNetto != null || betragBrutto != null) {
+            anteil.berechneAnteil(betragNetto, betragBrutto);
         }
         anteilRepository.save(anteil);
 

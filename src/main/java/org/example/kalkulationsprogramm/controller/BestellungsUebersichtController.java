@@ -310,9 +310,12 @@ public class BestellungsUebersichtController {
             projektAnteil.setProzent(anteil.prozentanteil != null ? anteil.prozentanteil.intValue() : 100);
             projektAnteil.setBeschreibung(anteil.beschreibung);
             
-            // Betrag berechnen
-            if (gd.getBetragBrutto() != null) {
-                projektAnteil.berechneAnteil(gd.getBetragBrutto());
+            // Betrag berechnen: Kostenstellen-Anteile werden netto verrechnet
+            // (Vorsteuerabzug landet beim Finanzamt, nicht im Gemeinkostentopf).
+            // berechneAnteil(netto, brutto) entscheidet anhand der gesetzten
+            // Zuordnung — Projekt-Anteile bleiben brutto.
+            if (gd.getBetragNetto() != null || gd.getBetragBrutto() != null) {
+                projektAnteil.berechneAnteil(gd.getBetragNetto(), gd.getBetragBrutto());
             } else if (anteil.betrag != null) {
                 projektAnteil.setBerechneterBetrag(anteil.betrag);
             }

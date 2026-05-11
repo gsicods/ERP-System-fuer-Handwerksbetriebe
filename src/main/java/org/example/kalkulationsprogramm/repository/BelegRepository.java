@@ -37,4 +37,32 @@ public interface BelegRepository extends JpaRepository<Beleg, Long> {
                                       @Param("bis") LocalDate bis);
 
     long countByKiAnalyseStatus(org.example.kalkulationsprogramm.domain.BelegKiAnalyseStatus status);
+
+    /**
+     * Liefert alle validierten Belege im angegebenen Datumsbereich, die einer
+     * Fixkosten-Kostenstelle zugeordnet sind. Wird vom Verrechnungslohn-Rechner
+     * verwendet, um Belege wie Telefonrechnungen, Strom oder Bueromaterial in
+     * den Gemeinkosten-Topf einzurechnen. Kostenstelle wird per JOIN FETCH
+     * mitgeladen, damit der Service ohne LazyInitializationException auf
+     * istFixkosten/bezeichnung zugreifen kann.
+     */
+    @Query("SELECT b FROM Beleg b JOIN FETCH b.kostenstelle ks " +
+           "WHERE b.status = org.example.kalkulationsprogramm.domain.BelegStatus.VALIDIERT " +
+           "  AND ks.istFixkosten = true " +
+           "  AND b.belegDatum BETWEEN :von AND :bis " +
+           "  AND b.betragBrutto IS NOT NULL")
+    List<Beleg> findValidierteFixkostenBelegeImZeitraum(@Param("von") LocalDate von,
+                                                       @Param("bis") LocalDate bis);
+
+    /**
+     * Liefert die letzten Belege desselben Lieferanten, die schon eine
+     * Kostenstellen-Zuordnung haben — vom KI-Agent als "aehnliche_belege"-Tool
+     * verwendet, um aus historischen Zuordnungen zu lernen.
+     */
+    @Query("SELECT b FROM Beleg b LEFT JOIN FETCH b.kostenstelle LEFT JOIN FETCH b.sachkonto " +
+           "WHERE b.lieferant.id = :lieferantId " +
+           "  AND b.kostenstelle IS NOT NULL " +
+           "ORDER BY b.belegDatum DESC, b.id DESC")
+    List<Beleg> findAehnlicheBelegeByLieferant(@Param("lieferantId") Long lieferantId,
+                                               org.springframework.data.domain.Pageable pageable);
 }

@@ -3,9 +3,12 @@ package org.example.kalkulationsprogramm.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.kalkulationsprogramm.domain.Beleg;
+import org.example.kalkulationsprogramm.domain.BelegAufteilungsModus;
 import org.example.kalkulationsprogramm.domain.BelegKategorie;
 import org.example.kalkulationsprogramm.domain.BelegKiAnalyseStatus;
+import org.example.kalkulationsprogramm.domain.BelegPosition;
 import org.example.kalkulationsprogramm.domain.BelegStatus;
+import org.example.kalkulationsprogramm.domain.Kostenstelle;
 import org.example.kalkulationsprogramm.domain.Lieferanten;
 import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp;
 import org.example.kalkulationsprogramm.domain.Mitarbeiter;
@@ -15,6 +18,7 @@ import org.example.kalkulationsprogramm.config.FrontendUserPrincipal;
 import org.example.kalkulationsprogramm.repository.AbteilungDokumentBerechtigungRepository;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
 import org.example.kalkulationsprogramm.repository.FrontendUserProfileRepository;
+import org.example.kalkulationsprogramm.repository.KostenstelleRepository;
 import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
@@ -67,9 +71,12 @@ public class BelegService {
     private final MitarbeiterRepository mitarbeiterRepository;
     private final AbteilungDokumentBerechtigungRepository berechtigungRepository;
     private final SachkontoRepository sachkontoRepository;
+    private final KostenstelleRepository kostenstelleRepository;
     private final BelegKiAnalyseService kiAnalyseService;
     private final LieferantDokumentRepository lieferantDokumentRepository;
     private final FrontendUserProfileRepository frontendUserProfileRepository;
+    private final BelegSplitService belegSplitService;
+    private final org.example.kalkulationsprogramm.repository.BelegPositionRepository belegPositionRepository;
 
     @Value("${upload.path:uploads}")
     private String uploadPath;
@@ -124,7 +131,13 @@ public class BelegService {
      */
     @Transactional
     public Beleg uploadBeleg(MultipartFile datei, Mitarbeiter uploader) throws IOException {
-        return uploadBeleg(datei, null, uploader);
+        return uploadBeleg(datei, null, BelegAufteilungsModus.VOLLSTAENDIG, uploader);
+    }
+
+    /** Backwards-Compat-Overload: ohne expliziten Modus -> VOLLSTAENDIG. */
+    @Transactional
+    public Beleg uploadBeleg(MultipartFile datei, Long lieferantId, Mitarbeiter uploader) throws IOException {
+        return uploadBeleg(datei, lieferantId, BelegAufteilungsModus.VOLLSTAENDIG, uploader);
     }
 
     /**
@@ -136,7 +149,9 @@ public class BelegService {
      * LieferantGeschaeftsdokument angelegt (siehe BelegKiAnalyseService).
      */
     @Transactional
-    public Beleg uploadBeleg(MultipartFile datei, Long lieferantId, Mitarbeiter uploader) throws IOException {
+    public Beleg uploadBeleg(MultipartFile datei, Long lieferantId,
+                             BelegAufteilungsModus aufteilungsModus,
+                             Mitarbeiter uploader) throws IOException {
         if (datei == null || datei.isEmpty()) {
             throw new IllegalArgumentException("Datei fehlt");
         }
@@ -179,6 +194,8 @@ public class BelegService {
         beleg.setStatus(BelegStatus.NEU);
         beleg.setKiAnalyseStatus(BelegKiAnalyseStatus.PENDING);
         beleg.setBelegKategorie(BelegKategorie.UNZUGEORDNET);
+        beleg.setAufteilungsModus(aufteilungsModus != null
+                ? aufteilungsModus : BelegAufteilungsModus.VOLLSTAENDIG);
         beleg.setOriginalDateiname(originalFilename);
         beleg.setGespeicherterDateiname(storedFilename);
         beleg.setMimeType(mimeType);
@@ -268,6 +285,20 @@ public class BelegService {
                 // ungueltige Kategorie -> Feld unveraendert lassen
             }
         }
+        if (req.getAufteilungsModus() != null) {
+            try {
+                BelegAufteilungsModus neu = BelegAufteilungsModus.valueOf(req.getAufteilungsModus());
+                BelegAufteilungsModus alt = beleg.getAufteilungsModus();
+                beleg.setAufteilungsModus(neu);
+                // Bei Wechsel werden Firma-Summen via SplitService neu berechnet
+                // (bei VOLLSTAENDIG -> Felder werden geleert).
+                if (alt != neu) {
+                    belegSplitService.recomputeFirmaSummen(beleg);
+                }
+            } catch (IllegalArgumentException ignored) {
+                // ungueltiger Modus -> unveraendert lassen
+            }
+        }
         if (req.getStatus() != null) {
             try {
                 BelegStatus neuerStatus = BelegStatus.valueOf(req.getStatus());
@@ -298,8 +329,32 @@ public class BelegService {
             Sachkonto sk = sachkontoRepository.findById(req.getSachkontoId()).orElse(null);
             beleg.setSachkonto(sk);
         }
+        // Kostenstelle: 0 oder negativ wird als "abwaehlen" interpretiert,
+        // ungueltige ID setzt zurueck — sonst Standard-Lookup.
+        if (req.getKostenstelleId() != null) {
+            if (req.getKostenstelleId() <= 0L) {
+                beleg.setKostenstelle(null);
+            } else {
+                Kostenstelle ks = kostenstelleRepository.findById(req.getKostenstelleId()).orElse(null);
+                beleg.setKostenstelle(ks);
+            }
+        }
 
         belegRepository.save(beleg);
+        return toDto(beleg);
+    }
+
+    /**
+     * Wrapper fuer den Mobile-Endpoint: nimmt die Checkbox-Auswahl entgegen
+     * und gibt direkt das aktualisierte Beleg-DTO inklusive frisch berechneter
+     * Firma-Summen zurueck.
+     */
+    @Transactional
+    public BelegDto.Response setzePositionsAuswahl(Long belegId, List<Long> firmaPositionIds) {
+        java.util.Set<Long> ids = firmaPositionIds == null
+                ? java.util.Set.of()
+                : java.util.Set.copyOf(firmaPositionIds);
+        Beleg beleg = belegSplitService.aktualisiereAuswahl(belegId, ids);
         return toDto(beleg);
     }
 
@@ -505,8 +560,28 @@ public class BelegService {
                 .sachkontoNummer(b.getSachkonto() != null ? b.getSachkonto().getNummer() : null)
                 .sachkontoTyp(b.getSachkonto() != null && b.getSachkonto().getKontoTyp() != null
                         ? b.getSachkonto().getKontoTyp().name() : null)
+                .kostenstelleId(b.getKostenstelle() != null ? b.getKostenstelle().getId() : null)
+                .kostenstelleBezeichnung(b.getKostenstelle() != null ? b.getKostenstelle().getBezeichnung() : null)
+                .kostenstelleTyp(b.getKostenstelle() != null && b.getKostenstelle().getTyp() != null
+                        ? b.getKostenstelle().getTyp().name() : null)
+                .kostenstelleIstFixkosten(b.getKostenstelle() != null
+                        ? b.getKostenstelle().isIstFixkosten() : null)
                 .kiVorgeschlagenerLieferant(b.getKiVorgeschlagenerLieferant())
                 .kiConfidence(b.getKiConfidence())
+                .kiVorgeschlagenerKostenstelleId(b.getKiVorgeschlagenerKostenstelleId())
+                .kiVorgeschlagenerKostenstelleBezeichnung(
+                        b.getKiVorgeschlagenerKostenstelleId() != null
+                                ? kostenstelleRepository.findById(b.getKiVorgeschlagenerKostenstelleId())
+                                        .map(Kostenstelle::getBezeichnung).orElse(null)
+                                : null)
+                .kiVorgeschlagenerSachkontoId(b.getKiVorgeschlagenerSachkontoId())
+                .kiVorgeschlagenerSachkontoBezeichnung(
+                        b.getKiVorgeschlagenerSachkontoId() != null
+                                ? sachkontoRepository.findById(b.getKiVorgeschlagenerSachkontoId())
+                                        .map(Sachkonto::getBezeichnung).orElse(null)
+                                : null)
+                .kiKostenkontoConfidence(b.getKiKostenkontoConfidence())
+                .kiKostenkontoBegruendung(b.getKiKostenkontoBegruendung())
                 .kiFehlerText(b.getKiFehlerText())
                 .originalDateiname(b.getOriginalDateiname())
                 .mimeType(b.getMimeType())
@@ -518,7 +593,31 @@ public class BelegService {
                 .validiertVonName(mitarbeiterName(b.getValidiertVon()))
                 .notiz(b.getNotiz())
                 .eingangsrechnungId(eingangsrechnungId)
+                .aufteilungsModus(b.getAufteilungsModus() != null ? b.getAufteilungsModus().name() : null)
+                .betragFirmaNetto(b.getBetragFirmaNetto())
+                .betragFirmaBrutto(b.getBetragFirmaBrutto())
+                .betragFirmaMwst(b.getBetragFirmaMwst())
+                .positionen(b.getAufteilungsModus() == BelegAufteilungsModus.TEILWEISE
+                        ? toPositionResponse(belegPositionRepository.findByBelegIdOrderBySortierungAsc(b.getId()))
+                        : java.util.Collections.emptyList())
                 .build();
+    }
+
+    private List<BelegDto.PositionResponse> toPositionResponse(List<BelegPosition> positionen) {
+        return positionen.stream()
+                .map(p -> BelegDto.PositionResponse.builder()
+                        .id(p.getId())
+                        .sortierung(p.getSortierung())
+                        .beschreibung(p.getBeschreibung())
+                        .menge(p.getMenge())
+                        .einheit(p.getEinheit())
+                        .einzelpreis(p.getEinzelpreis())
+                        .betragNetto(p.getBetragNetto())
+                        .betragBrutto(p.getBetragBrutto())
+                        .mwstSatz(p.getMwstSatz())
+                        .istFuerFirma(p.isIstFuerFirma())
+                        .build())
+                .toList();
     }
 
     private String mitarbeiterName(Mitarbeiter m) {

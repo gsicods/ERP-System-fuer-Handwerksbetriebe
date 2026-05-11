@@ -1,10 +1,13 @@
 package org.example.kalkulationsprogramm.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.kalkulationsprogramm.domain.Beleg;
+import org.example.kalkulationsprogramm.domain.BelegAufteilungsModus;
 import org.example.kalkulationsprogramm.domain.BelegKiAnalyseStatus;
+import org.example.kalkulationsprogramm.domain.BelegPosition;
 import org.example.kalkulationsprogramm.domain.LieferantDokument;
 import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp;
 import org.example.kalkulationsprogramm.domain.LieferantGeschaeftsdokument;
@@ -19,9 +22,13 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Asynchrone Belegextraktion via GeminiDokumentAnalyseService.
@@ -41,7 +48,43 @@ public class BelegKiAnalyseService {
     private final LieferantDokumentRepository lieferantDokumentRepository;
     private final LieferantGeschaeftsdokumentRepository lieferantGeschaeftsdokumentRepository;
     private final GeminiDokumentAnalyseService geminiService;
+    private final BelegKiKostenkontoService kostenkontoService;
+    private final BelegSplitService belegSplitService;
     private final ObjectMapper objectMapper;
+
+    /**
+     * Prompt fuer die Positions-Extraktion bei aufgeteilten Belegen.
+     * Wird nur ausgefuehrt, wenn der Nutzer am Handy "Teilweise" gewaehlt hat.
+     * Bewusst kurz gehalten — wir brauchen pro Position nur das Wichtigste,
+     * damit der Mitarbeiter im Checkbox-UI eine klare Liste sieht.
+     */
+    private static final String POSITIONS_PROMPT = """
+            Extrahiere ALLE einzelnen Posten/Zeilen dieses Belegs als JSON.
+            Antworte AUSSCHLIESSLICH mit gueltigem JSON (keine Erklaerungen, kein Markdown).
+
+            Format:
+            {
+              "positionen": [
+                {
+                  "beschreibung": "Artikelname wie auf dem Bon",
+                  "menge": 1.0,
+                  "einheit": "St" | "kg" | "l" | null,
+                  "einzelpreis": 4.99,
+                  "betragBrutto": 4.99,
+                  "mwstSatz": 19.00
+                }
+              ]
+            }
+
+            Regeln:
+            - JEDE Zeile, die einen Preis hat, ist eine Position (auch Pfand, Rabatt).
+            - Rabatte als negativen Betrag.
+            - mwstSatz aus dem Bon ablesen (oft als A=19%, B=7% gekennzeichnet).
+              Wenn nicht erkennbar: Lebensmittel/Grundnahrung -> 7, sonst -> 19.
+            - betragBrutto = was tatsaechlich fuer diese Zeile gezahlt wird.
+            - Wenn der Bon nur eine Gesamtsumme ohne Einzelposten hat: leeres Array.
+            - Beschreibung kurz halten (max 80 Zeichen), Original-Schreibweise behalten.
+            """;
 
     @Value("${upload.path:uploads}")
     private String uploadPath;
@@ -102,6 +145,33 @@ public class BelegKiAnalyseService {
 
             beleg.setKiAnalyseStatus(BelegKiAnalyseStatus.DONE);
             beleg.setKiFehlerText(null);
+
+            // Wenn der Beleg auf TEILWEISE steht (Mischbon mit privatem + geschaeftlichem
+            // Einkauf), extrahieren wir zusaetzlich die Einzelposten und persistieren sie
+            // ueber den BelegSplitService — damit hat der Mitarbeiter im Handy die
+            // Checkbox-Liste, mit der er die geschaeftlichen Positionen anhakt.
+            if (beleg.getAufteilungsModus() == BelegAufteilungsModus.TEILWEISE) {
+                try {
+                    extrahiereUndSpeicherePositionen(beleg, datei);
+                } catch (Exception e) {
+                    log.warn("Positions-Extraktion fuer Beleg {} fehlgeschlagen: {}",
+                            belegId, e.getMessage());
+                }
+            }
+
+            // KI-Agent fuer Kostenstelle + Sachkonto: liest die im System
+            // angelegten Optionen aus der Datenbank und schlaegt die passende
+            // Zuordnung vor. High-Confidence-Treffer (>=0.80) werden direkt
+            // gesetzt, damit der Beleg sofort im Verrechnungslohn-Gemeinkosten-
+            // Bucket landet; bei niedriger Confidence bleibt es ein Vorschlag.
+            // Best-effort: ein KI-Fehler hier darf die Beleg-Extraktion nicht
+            // zurueckdrehen, deshalb nur loggen.
+            try {
+                kostenkontoService.klassifiziereBeleg(beleg);
+            } catch (Exception e) {
+                log.warn("Kostenkonto-Klassifizierung fuer Beleg {} fehlgeschlagen: {}",
+                        belegId, e.getMessage());
+            }
             belegRepository.save(beleg);
 
             // Auto-Erstellung Eingangsrechnung:
@@ -129,6 +199,72 @@ public class BelegKiAnalyseService {
             }
             beleg.setKiFehlerText(msg);
             belegRepository.save(beleg);
+        }
+    }
+
+    /**
+     * Ruft die KI nochmal mit dem dedizierten Positions-Prompt auf und legt die
+     * extrahierten Posten als {@link BelegPosition} am Beleg an. Alle Positionen
+     * starten mit {@code istFuerFirma=false} — der Nutzer haakt im Handy-UI an,
+     * was zur Firma gehoert.
+     *
+     * Fehlerfall: Wenn der KI-Call scheitert oder kein gueltiges JSON liefert,
+     * legen wir keine Positionen an — der Mitarbeiter kann den Beleg dann
+     * trotzdem manuell als VOLLSTAENDIG validieren oder die Positionen am PC
+     * eintippen.
+     */
+    private void extrahiereUndSpeicherePositionen(Beleg beleg, Path datei) throws Exception {
+        byte[] bytes = Files.readAllBytes(datei);
+        String mimeType = beleg.getMimeType() != null ? beleg.getMimeType() : "application/pdf";
+        String json = geminiService.rufGeminiApiMitPrompt(bytes, mimeType, POSITIONS_PROMPT);
+        if (json == null || json.isBlank()) {
+            log.info("Positions-Extraktion fuer Beleg {} lieferte kein JSON", beleg.getId());
+            return;
+        }
+        JsonNode root = objectMapper.readTree(json);
+        JsonNode positionen = root.path("positionen");
+        if (!positionen.isArray() || positionen.isEmpty()) {
+            log.info("Beleg {} hat keine extrahierten Positionen (Bon ohne Einzelposten)", beleg.getId());
+            return;
+        }
+
+        List<BelegPosition> ergebnis = new ArrayList<>();
+        int sortIdx = 0;
+        for (JsonNode n : positionen) {
+            BelegPosition p = new BelegPosition();
+            p.setSortierung(sortIdx++);
+            p.setBeschreibung(textOrFallback(n.path("beschreibung"), "Position " + sortIdx));
+            p.setMenge(numericOrNull(n.path("menge")));
+            p.setEinheit(textOrNull(n.path("einheit")));
+            p.setEinzelpreis(numericOrNull(n.path("einzelpreis")));
+            p.setBetragBrutto(numericOrNull(n.path("betragBrutto")));
+            p.setMwstSatz(numericOrNull(n.path("mwstSatz")));
+            p.setIstFuerFirma(false);
+            ergebnis.add(p);
+        }
+        belegSplitService.speicherePositionen(beleg, ergebnis);
+        log.info("Beleg {}: {} Positionen aus KI-Extraktion gespeichert", beleg.getId(), ergebnis.size());
+    }
+
+    private static String textOrNull(JsonNode n) {
+        if (n == null || n.isNull() || n.isMissingNode()) return null;
+        String v = n.asText(null);
+        return (v == null || v.isBlank()) ? null : v.trim();
+    }
+
+    private static String textOrFallback(JsonNode n, String fallback) {
+        String v = textOrNull(n);
+        return v != null ? (v.length() > 500 ? v.substring(0, 500) : v) : fallback;
+    }
+
+    private static BigDecimal numericOrNull(JsonNode n) {
+        if (n == null || n.isNull() || n.isMissingNode()) return null;
+        try {
+            String raw = n.asText("").trim().replace(',', '.');
+            if (raw.isEmpty()) return null;
+            return new BigDecimal(raw);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 

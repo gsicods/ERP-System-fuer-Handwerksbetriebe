@@ -5,6 +5,7 @@ import org.example.kalkulationsprogramm.domain.Abteilung;
 import org.example.kalkulationsprogramm.domain.AbwesenheitsTyp;
 import org.example.kalkulationsprogramm.domain.Arbeitsgang;
 import org.example.kalkulationsprogramm.domain.ArbeitsgangStundensatz;
+import org.example.kalkulationsprogramm.domain.Beleg;
 import org.example.kalkulationsprogramm.domain.Beschaeftigungsart;
 import org.example.kalkulationsprogramm.domain.Feiertag;
 import org.example.kalkulationsprogramm.domain.Firmeninformation;
@@ -29,6 +30,7 @@ import org.example.kalkulationsprogramm.repository.AbteilungRepository;
 import org.example.kalkulationsprogramm.repository.AbwesenheitRepository;
 import org.example.kalkulationsprogramm.repository.ArbeitsgangRepository;
 import org.example.kalkulationsprogramm.repository.ArbeitsgangStundensatzRepository;
+import org.example.kalkulationsprogramm.repository.BelegRepository;
 import org.example.kalkulationsprogramm.repository.FeiertagRepository;
 import org.example.kalkulationsprogramm.repository.FirmeninformationRepository;
 import org.example.kalkulationsprogramm.repository.LieferantDokumentProjektAnteilRepository;
@@ -88,6 +90,7 @@ public class VerrechnungslohnService {
     private final AbteilungRepository abteilungRepository;
     private final ArbeitsgangRepository arbeitsgangRepository;
     private final ArbeitsgangStundensatzRepository stundensatzRepository;
+    private final BelegRepository belegRepository;
 
     @Transactional(readOnly = true)
     public VerrechnungslohnErgebnisDto berechne(int jahr) {
@@ -469,6 +472,8 @@ public class VerrechnungslohnService {
     private BigDecimal berechneGemeinkosten(List<KostenstelleAnteil> bucket, int jahr) {
         Map<Long, KostenstelleAnteil> proKs = new HashMap<>();
         BigDecimal summe = BigDecimal.ZERO;
+
+        // 1) Lieferantenrechnungen ueber LieferantDokumentProjektAnteil (Bestandslogik).
         for (LieferantDokumentProjektAnteil anteil : anteilRepository.findAll()) {
             if (anteil.getKostenstelle() == null) continue;
             if (!anteil.getKostenstelle().isIstFixkosten()) continue;
@@ -490,6 +495,34 @@ public class VerrechnungslohnService {
                 bucketEintrag.setGestreckt(true);
             }
         }
+
+        // 2) Belege mit Fixkosten-Kostenstelle aus dem Belegscan: Tankquittungen,
+        //    Telefonrechnungen, Bueromaterial vom Kassenbon, etc. Wenn die KI
+        //    den Beleg einer Fixkosten-Kostenstelle zugeordnet hat (oder der
+        //    Buchhalter manuell), fliesst der NETTO-Betrag in dem Jahr in den
+        //    Gemeinkostentopf — Vorsteuer geht an das Finanzamt, nicht in die
+        //    Stundenlohn-Kalkulation. Fallback Brutto nur, wenn Netto nicht
+        //    extrahiert werden konnte (Kassenbons ohne MwSt-Ausweis).
+        LocalDate jahresStart = LocalDate.of(jahr, 1, 1);
+        LocalDate jahresEnde = LocalDate.of(jahr, 12, 31);
+        for (Beleg beleg : belegRepository.findValidierteFixkostenBelegeImZeitraum(jahresStart, jahresEnde)) {
+            BigDecimal netto = beleg.getBetragNetto();
+            BigDecimal basis = netto != null ? netto : nz(beleg.getBetragBrutto());
+            if (basis.signum() <= 0) continue;
+            summe = summe.add(basis);
+            final Long ksId = beleg.getKostenstelle().getId();
+            final String bezeichnung = beleg.getKostenstelle().getBezeichnung();
+            KostenstelleAnteil bucketEintrag = proKs.computeIfAbsent(ksId, id -> {
+                KostenstelleAnteil ka = new KostenstelleAnteil();
+                ka.setKostenstelleId(ksId);
+                ka.setBezeichnung(bezeichnung);
+                ka.setJahresbetrag(BigDecimal.ZERO);
+                ka.setGestreckt(false);
+                return ka;
+            });
+            bucketEintrag.setJahresbetrag(bucketEintrag.getJahresbetrag().add(basis));
+        }
+
         for (KostenstelleAnteil k : proKs.values()) {
             k.setJahresbetrag(k.getJahresbetrag().setScale(2, RoundingMode.HALF_UP));
             bucket.add(k);

@@ -42,8 +42,20 @@ public class BelegDto {
         private String sachkontoBezeichnung;
         private String sachkontoNummer;
         private String sachkontoTyp;
+        // Echte Zuordnung Kostenstelle ("wofuer war die Ausgabe")
+        private Long kostenstelleId;
+        private String kostenstelleBezeichnung;
+        private String kostenstelleTyp;
+        private Boolean kostenstelleIstFixkosten;
         private String kiVorgeschlagenerLieferant;
         private BigDecimal kiConfidence;
+        // KI-Agent-Vorschlag fuer Kostenstelle + Sachkonto (aus DB-Liste gewaehlt)
+        private Long kiVorgeschlagenerKostenstelleId;
+        private String kiVorgeschlagenerKostenstelleBezeichnung;
+        private Long kiVorgeschlagenerSachkontoId;
+        private String kiVorgeschlagenerSachkontoBezeichnung;
+        private BigDecimal kiKostenkontoConfidence;
+        private String kiKostenkontoBegruendung;
         private String kiFehlerText;
         private String originalDateiname;
         private String mimeType;
@@ -57,6 +69,70 @@ public class BelegDto {
         // Falls aus dem Beleg automatisch ein Eingangsrechnungs-Datensatz erzeugt wurde,
         // verweist dieses Feld auf die Eingangsrechnungs-ID (LieferantGeschaeftsdokument.id).
         private Long eingangsrechnungId;
+        // Beleg-Aufteilung (VOLLSTAENDIG / TEILWEISE) und die per Checkbox-Auswahl
+        // berechneten Firma-Summen. Bei VOLLSTAENDIG sind die betragFirma*-Felder null
+        // und der Buchhalter liest die Standard-Betraege.
+        private String aufteilungsModus;
+        private BigDecimal betragFirmaNetto;
+        private BigDecimal betragFirmaBrutto;
+        private BigDecimal betragFirmaMwst;
+        private List<PositionResponse> positionen;
+    }
+
+    /**
+     * Eine einzelne KI-extrahierte Beleg-Position fuer das Checkbox-UI am Handy.
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PositionResponse {
+        private Long id;
+        private int sortierung;
+        private String beschreibung;
+        private BigDecimal menge;
+        private String einheit;
+        private BigDecimal einzelpreis;
+        private BigDecimal betragNetto;
+        private BigDecimal betragBrutto;
+        private BigDecimal mwstSatz;
+        private boolean istFuerFirma;
+    }
+
+    /**
+     * Request des Mobile-Clients zum Speichern der Checkbox-Auswahl.
+     * {@code firmaPositionIds} ist die vollstaendige Ist-Liste — alle nicht
+     * enthaltenen Positionen werden auf {@code istFuerFirma=false} gesetzt.
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PositionAuswahlRequest {
+        private List<Long> firmaPositionIds;
+    }
+
+    /**
+     * Request fuer den MwSt-Rechner ({@code POST /api/buchhaltung/mwst-rechner}).
+     * Genau eines der drei Felder darf null sein — der Service rechnet es aus.
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MwstRechnerRequest {
+        private BigDecimal netto;
+        private BigDecimal brutto;
+        private BigDecimal satzProzent;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MwstRechnerResponse {
+        private BigDecimal netto;
+        private BigDecimal brutto;
+        private BigDecimal satzProzent;
+        private BigDecimal mwstBetrag;
     }
 
     /**
@@ -78,7 +154,12 @@ public class BelegDto {
         private String zahlungsart;
         private Long lieferantId;
         private Long sachkontoId;
+        private Long kostenstelleId;
         private String notiz;
+        // Wechsel zwischen VOLLSTAENDIG <-> TEILWEISE am PC moeglich, falls der
+        // Buchhalter nachtraeglich umschwenkt (z.B. urspruenglich VOLLSTAENDIG
+        // gescannt, jetzt doch nur Teile fuer Firma).
+        private String aufteilungsModus;
     }
 
     /**

@@ -57,6 +57,7 @@ class BelegKiAnalyseServiceTest {
     @Mock private LieferantDokumentRepository lieferantDokumentRepository;
     @Mock private LieferantGeschaeftsdokumentRepository lieferantGeschaeftsdokumentRepository;
     @Mock private GeminiDokumentAnalyseService geminiService;
+    @Mock private BelegKiKostenkontoService kostenkontoService;
 
     // ObjectMapper kein @Mock — echte Serialisierung
     private final ObjectMapper objectMapper = new ObjectMapper();

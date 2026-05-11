@@ -107,17 +107,51 @@ public class LieferantDokumentProjektAnteil {
     private Integer streckungStartJahr;
 
     /**
-     * Berechnet den Betrag basierend auf dem Brutto-Betrag des Dokuments.
-     * Verwendet prozent wenn absoluterBetrag null ist.
+     * Berechnet den Anteil basierend auf der Zuordnungs-Art.
+     * <p>
+     * REGEL: Kostenstellen werden IMMER netto verrechnet — der Vorsteuerabzug
+     * landet beim Finanzamt, nicht beim Gemeinkostentopf. Nur Projekt-Anteile
+     * werden brutto angesetzt, weil dort die Weiterverrechnung an den Kunden
+     * inklusive MwSt erfolgt.
+     * <p>
+     * Wenn netto null ist (z.B. weil die KI den Nettobetrag nicht extrahieren
+     * konnte), fallen wir auf brutto zurueck — besser ein leichter Overhead in
+     * den Gemeinkosten als ein Anteil von 0,00 EUR.
+     *
+     * @param nettoBetrag  Nettobetrag des Dokuments (fuer Kostenstellen-Zuordnung)
+     * @param bruttoBetrag Bruttobetrag des Dokuments (fuer Projekt-Zuordnung)
      */
-    public void berechneAnteil(BigDecimal gesamtBetrag) {
+    public void berechneAnteil(BigDecimal nettoBetrag, BigDecimal bruttoBetrag) {
         if (absoluterBetrag != null) {
             this.berechneterBetrag = absoluterBetrag;
-        } else if (gesamtBetrag != null && prozent != null) {
-            this.berechneterBetrag = gesamtBetrag
-                    .multiply(BigDecimal.valueOf(prozent))
-                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+            return;
         }
+        if (prozent == null) {
+            return;
+        }
+        BigDecimal basis = isKostenstellenZuordnung()
+                ? (nettoBetrag != null ? nettoBetrag : bruttoBetrag)
+                : bruttoBetrag;
+        if (basis == null) {
+            return;
+        }
+        this.berechneterBetrag = basis
+                .multiply(BigDecimal.valueOf(prozent))
+                .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Rueckwaerts-kompatible Variante fuer Aufrufer, die nur einen Betrag haben.
+     * Verwendet diesen Wert sowohl als Netto wie als Brutto — was bei reinen
+     * Projekt-Zuordnungen das alte Verhalten exakt erhaelt, bei Kostenstellen-
+     * Zuordnungen aber leicht zu hoch ist. Neue Aufrufer sollten die
+     * (netto, brutto)-Variante verwenden.
+     *
+     * @deprecated Use {@link #berechneAnteil(BigDecimal, BigDecimal)} instead.
+     */
+    @Deprecated
+    public void berechneAnteil(BigDecimal gesamtBetrag) {
+        berechneAnteil(gesamtBetrag, gesamtBetrag);
     }
 
     /**
