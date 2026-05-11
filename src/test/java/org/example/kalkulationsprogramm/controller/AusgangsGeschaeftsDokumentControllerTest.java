@@ -37,6 +37,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -188,6 +190,78 @@ class AusgangsGeschaeftsDokumentControllerTest {
                             .content(objectMapper.writeValueAsString(dto)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.dokumentNummer").value("RE-2026-001"));
+        }
+
+        @Test
+        @DisplayName("Vergibt Soft-Lock automatisch fuer authentifizierten Ersteller")
+        void vergibtLockFuerErsteller() throws Exception {
+            AusgangsGeschaeftsDokument entity = new AusgangsGeschaeftsDokument();
+            entity.setId(7L);
+            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class), any())).willReturn(entity);
+            given(service.findById(7L)).willReturn(buildResponseDto(7L, "RE-2026-007"));
+            given(dokumentLockService.acquire(anyString(), anyLong(), anyLong(), anyString()))
+                    .willReturn(new org.example.kalkulationsprogramm.dto.DokumentLockDto(
+                            org.example.kalkulationsprogramm.dto.DokumentLockDto.ACQUIRED,
+                            42L, "Max Mustermann", null, null));
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.RECHNUNG);
+            dto.setBetragNetto(new BigDecimal("500.00"));
+
+            mockMvc.perform(post("/api/ausgangs-dokumente")
+                            .principal(testAuth())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(dto)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.dokumentNummer").value("RE-2026-007"));
+
+            verify(dokumentLockService).acquire(
+                    eq(DokumentLockService.TYP_AUSGANG),
+                    eq(7L),
+                    eq(42L),
+                    eq("Max Mustermann"));
+        }
+
+        @Test
+        @DisplayName("Ohne Authentication wird kein Lock vergeben")
+        void ohneAuthKeinLock() throws Exception {
+            AusgangsGeschaeftsDokument entity = new AusgangsGeschaeftsDokument();
+            entity.setId(8L);
+            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class), any())).willReturn(entity);
+            given(service.findById(8L)).willReturn(buildResponseDto(8L, "RE-2026-008"));
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.RECHNUNG);
+            dto.setBetragNetto(new BigDecimal("500.00"));
+
+            mockMvc.perform(post("/api/ausgangs-dokumente")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(dto)))
+                    .andExpect(status().isOk());
+
+            verify(dokumentLockService, never()).acquire(anyString(), anyLong(), anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("Lock-Service-Fehler nach Create bleibt 200, Dokument ist erzeugt")
+        void lockServiceWirftAusnahme() throws Exception {
+            AusgangsGeschaeftsDokument entity = new AusgangsGeschaeftsDokument();
+            entity.setId(9L);
+            given(service.erstellen(any(AusgangsGeschaeftsDokumentErstellenDto.class), any())).willReturn(entity);
+            given(service.findById(9L)).willReturn(buildResponseDto(9L, "RE-2026-009"));
+            given(dokumentLockService.acquire(anyString(), anyLong(), anyLong(), anyString()))
+                    .willThrow(new RuntimeException("Lock-DB nicht erreichbar"));
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.RECHNUNG);
+            dto.setBetragNetto(new BigDecimal("500.00"));
+
+            mockMvc.perform(post("/api/ausgangs-dokumente")
+                            .principal(testAuth())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(dto)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.dokumentNummer").value("RE-2026-009"));
         }
 
         @Test

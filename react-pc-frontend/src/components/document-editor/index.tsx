@@ -819,6 +819,20 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         }
     }, []);
 
+    // Verlaengert das Soft-Lock fire-and-forget nach jedem Save. Wichtig, weil
+    // der Page-Level useDocumentLock-Hook die per replaceState gesetzte ID
+    // nicht mitbekommt und ohne Heartbeat das Backend-Lock nach 90s ablaeuft —
+    // das naechste PUT wuerde sonst mit 409 scheitern.
+    // Hinweis: hartkodiert auf TYP_AUSGANG, weil diese Editor-Komponente nur
+    // fuer Ausgangsdokumente genutzt wird (Eingangs-Editor hat einen eigenen).
+    const pingDocumentLock = useCallback((savedDocumentId?: number) => {
+        if (!savedDocumentId) return;
+        void fetch(`/api/dokument-locks/AUSGANG/${savedDocumentId}/heartbeat`, {
+            method: 'POST',
+            credentials: 'same-origin',
+        }).catch(() => { /* best effort */ });
+    }, []);
+
     // --- Save ---
     const handleSave = useCallback(async (): Promise<AusgangsGeschaeftsDokument | null> => {
         if (isLocked) return null;
@@ -857,6 +871,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     setDokument(updated);
                     setDokumentNummer(updated.dokumentNummer);
                     syncDocumentIdInUrl(updated.id);
+                    pingDocumentLock(updated.id);
                     const currentState = JSON.stringify({ blocks, datum, betreff, dokumentTyp });
                     lastSavedStateRef.current = currentState;
                     setHasUnsavedChanges(false);
@@ -890,6 +905,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     setDokument(created);
                     setDokumentNummer(created.dokumentNummer);
                     syncDocumentIdInUrl(created.id);
+                    pingDocumentLock(created.id);
                     const currentState = JSON.stringify({ blocks, datum, betreff, dokumentTyp });
                     lastSavedStateRef.current = currentState;
                     setHasUnsavedChanges(false);
@@ -906,7 +922,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         }
         return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [dokument, dokumentTyp, datum, betreff, blocks, projektId, anfrageId, isLocked, syncDocumentIdInUrl, bereitsAbgerechnetDurchAndere, globalRabatt]);
+    }, [dokument, dokumentTyp, datum, betreff, blocks, projektId, anfrageId, isLocked, syncDocumentIdInUrl, pingDocumentLock, bereitsAbgerechnetDurchAndere, globalRabatt]);
 
     // --- Change Detection ---
     useEffect(() => {

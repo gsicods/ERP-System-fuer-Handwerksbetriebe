@@ -137,17 +137,43 @@ public class AusgangsGeschaeftsDokumentController {
 
     /**
      * Neues Dokument erstellen.
+     *
+     * Vergibt zusaetzlich direkt das Soft-Lock fuer den erstellenden User —
+     * sonst scheitert das unmittelbar folgende PUT mit 409, weil der
+     * Page-Level-Lock-Hook die neu generierte ID erst nach einem Reload sieht.
      */
     @PostMapping
     public ResponseEntity<?> create(
             @RequestBody AusgangsGeschaeftsDokumentErstellenDto dto,
+            Authentication authentication,
             jakarta.servlet.http.HttpServletRequest request) {
+        AusgangsGeschaeftsDokument created;
         try {
-            AusgangsGeschaeftsDokument created = service.erstellen(dto, clientIp(request));
-            return ResponseEntity.ok(service.findById(created.getId()));
+            created = service.erstellen(dto, clientIp(request));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
+        // Lock-Vergabe in eigenem try/catch: wenn das schiefgeht, bleibt das
+        // bereits persistierte Dokument trotzdem als 200 sichtbar — das naechste
+        // PUT scheitert dann sauber mit 409 statt einem irrefuehrenden 400.
+        FrontendUserPrincipal principal = principal(authentication);
+        if (principal != null) {
+            try {
+                var lockResult = dokumentLockService.acquire(
+                        DokumentLockService.TYP_AUSGANG,
+                        created.getId(),
+                        principal.getId(),
+                        principal.getDisplayName());
+                if (!org.example.kalkulationsprogramm.dto.DokumentLockDto.ACQUIRED.equals(lockResult.status())) {
+                    log.warn("Lock-Vergabe nach Create fuer Dokument {} unerwartet: {}",
+                            created.getId(), lockResult.status());
+                }
+            } catch (RuntimeException lockEx) {
+                log.warn("Lock-Vergabe nach Create fuer Dokument {} fehlgeschlagen: {}",
+                        created.getId(), lockEx.getMessage());
+            }
+        }
+        return ResponseEntity.ok(service.findById(created.getId()));
     }
 
     /**
