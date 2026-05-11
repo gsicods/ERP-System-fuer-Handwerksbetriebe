@@ -342,7 +342,7 @@ public class BelegService {
         // Kassenbuch / der Auswertung.
         if (kategorie == BelegKategorie.UNZUGEORDNET || kategorie == BelegKategorie.SONSTIGER_BELEG) {
             throw new IllegalArgumentException(
-                    "Umbuchungen muessen einer Kassen-, Bank- oder Privatentnahme-Kategorie zugeordnet sein");
+                    "Umbuchungen muessen einer Kassen-, Bank- oder Privat-Kategorie zugeordnet sein");
         }
         if (req.getBetragBrutto() == null || req.getBetragBrutto().signum() <= 0) {
             throw new IllegalArgumentException("Betrag fehlt oder ist nicht positiv");
@@ -388,7 +388,8 @@ public class BelegService {
                 BelegStatus.VALIDIERT,
                 List.of(BelegKategorie.KASSE_EINNAHME,
                         BelegKategorie.KASSE_AUSGABE,
-                        BelegKategorie.PRIVATENTNAHME));
+                        BelegKategorie.PRIVATENTNAHME,
+                        BelegKategorie.PRIVATEINLAGE));
 
         // Saldo-Start: Summe aller Bar-Bewegungen VOR dem Startdatum
         BigDecimal saldoStart = BigDecimal.ZERO;
@@ -418,6 +419,7 @@ public class BelegService {
         BigDecimal sumEin = BigDecimal.ZERO;
         BigDecimal sumAus = BigDecimal.ZERO;
         BigDecimal sumPriv = BigDecimal.ZERO;
+        BigDecimal sumPrivEinlage = BigDecimal.ZERO;
 
         List<BelegDto.KassenBewegung> bewegungen = new ArrayList<>(imZeitraum.size());
         for (Beleg b : imZeitraum) {
@@ -427,6 +429,7 @@ public class BelegService {
                 case KASSE_EINNAHME -> sumEin = sumEin.add(nullSafe(b.getBetragBrutto()));
                 case KASSE_AUSGABE -> sumAus = sumAus.add(nullSafe(b.getBetragBrutto()));
                 case PRIVATENTNAHME -> sumPriv = sumPriv.add(nullSafe(b.getBetragBrutto()));
+                case PRIVATEINLAGE -> sumPrivEinlage = sumPrivEinlage.add(nullSafe(b.getBetragBrutto()));
                 default -> {
                     // andere Kategorien sind hier nicht enthalten
                 }
@@ -448,6 +451,7 @@ public class BelegService {
                 .summeEinnahmen(sumEin.setScale(2, RoundingMode.HALF_UP))
                 .summeAusgaben(sumAus.setScale(2, RoundingMode.HALF_UP))
                 .summePrivatentnahmen(sumPriv.setScale(2, RoundingMode.HALF_UP))
+                .summePrivateinlagen(sumPrivEinlage.setScale(2, RoundingMode.HALF_UP))
                 .bewegungen(bewegungen)
                 .build();
     }

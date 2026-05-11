@@ -122,6 +122,7 @@ public class BelegDto {
         private BigDecimal summeEinnahmen;
         private BigDecimal summeAusgaben;
         private BigDecimal summePrivatentnahmen;
+        private BigDecimal summePrivateinlagen;
         private List<KassenBewegung> bewegungen;
     }
 
@@ -136,7 +137,7 @@ public class BelegDto {
      *
      * Pflichtfelder: belegKategorie + betragBrutto + belegDatum.
      * Die Kategorie muss eine Kassen-Bewegungskategorie sein
-     * (KASSE_EINNAHME|KASSE_AUSGABE|PRIVATENTNAHME|BANK|KREDITKARTE) — eine
+     * (KASSE_EINNAHME|KASSE_AUSGABE|PRIVATENTNAHME|PRIVATEINLAGE|BANK|KREDITKARTE) — eine
      * Eingangsrechnung kann nicht als Umbuchung erfasst werden, weil das
      * weder GoBD- noch DSGVO-konform waere (es waere dann eine Buchung ohne
      * Originalbeleg, die als Rechnung in die Buchhaltung einfliesst).
