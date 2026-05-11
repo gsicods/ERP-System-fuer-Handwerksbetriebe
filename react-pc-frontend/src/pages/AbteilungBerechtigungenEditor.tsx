@@ -17,6 +17,7 @@ interface AbteilungBerechtigung {
     darfRechnungenGenehmigen: boolean;
     darfRechnungenSehen: boolean;
     darfFreigabeAnnahmePushen: boolean;
+    darfWebseitenAnfragenPushen: boolean;
 }
 
 const DOKUMENT_TYP_LABELS: Record<string, string> = {
@@ -79,7 +80,7 @@ export default function AbteilungBerechtigungenEditor() {
         }));
     };
 
-    const handleTogglePushFlag = (abteilungId: number, field: 'darfFreigabeAnnahmePushen') => {
+    const handleTogglePushFlag = (abteilungId: number, field: 'darfFreigabeAnnahmePushen' | 'darfWebseitenAnfragenPushen') => {
         setBerechtigungen(prev => prev.map(abt => {
             if (abt.abteilungId !== abteilungId) return abt;
             return { ...abt, [field]: !abt[field] };
@@ -96,7 +97,8 @@ export default function AbteilungBerechtigungenEditor() {
                     berechtigungen: abteilung.berechtigungen,
                     darfRechnungenGenehmigen: abteilung.darfRechnungenGenehmigen,
                     darfRechnungenSehen: abteilung.darfRechnungenSehen,
-                    darfFreigabeAnnahmePushen: abteilung.darfFreigabeAnnahmePushen
+                    darfFreigabeAnnahmePushen: abteilung.darfFreigabeAnnahmePushen,
+                    darfWebseitenAnfragenPushen: abteilung.darfWebseitenAnfragenPushen
                 })
             });
             if (res.ok) {
@@ -295,6 +297,24 @@ export default function AbteilungBerechtigungenEditor() {
                                         <span className="text-sm font-medium text-slate-900">Kunde hat angenommen</span>
                                         <p className="text-xs text-slate-500">
                                             Push aufs Handy, sobald ein Kunde ein Angebot oder eine Auftragsbestätigung digital annimmt.
+                                        </p>
+                                    </div>
+                                </label>
+                                <label className="flex items-center gap-3 cursor-pointer">
+                                    <button
+                                        onClick={() => handleTogglePushFlag(abt.abteilungId, 'darfWebseitenAnfragenPushen')}
+                                        className={`w-6 h-6 rounded-md border-2 transition-colors flex-shrink-0 ${
+                                            abt.darfWebseitenAnfragenPushen
+                                                ? 'bg-green-500 border-green-500'
+                                                : 'bg-white border-slate-300 hover:border-slate-400'
+                                        }`}
+                                    >
+                                        {abt.darfWebseitenAnfragenPushen && <Check className="w-full h-full text-white p-0.5" />}
+                                    </button>
+                                    <div>
+                                        <span className="text-sm font-medium text-slate-900">Neue Anfrage über Webseite</span>
+                                        <p className="text-xs text-slate-500">
+                                            Push aufs Handy-Sperrbildschirm, sobald über das Webseiten-Formular eine neue Anfrage eingeht.
                                         </p>
                                     </div>
                                 </label>

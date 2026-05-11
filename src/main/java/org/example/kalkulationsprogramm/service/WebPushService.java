@@ -165,6 +165,32 @@ public class WebPushService {
     }
 
     /**
+     * Push-Benachrichtigung für neue Anfragen aus dem öffentlichen Webseiten-Funnel.
+     * Versendet nur an Subscriptions, deren Mitarbeiter mindestens einer Abteilung
+     * mit darfWebseitenAnfragenPushen=true angehört. Empfänger steuert der Admin
+     * pro Abteilung im Berechtigungs-Editor.
+     */
+    public void notifyWebseitenAnfrage(String title, String body, String url) {
+        if (!isEnabled()) {
+            log.debug("WebPush nicht aktiv – notifyWebseitenAnfrage wird ignoriert");
+            return;
+        }
+        try {
+            List<PushSubscription> alle = pushSubscriptionRepository.findAll();
+            for (PushSubscription sub : alle) {
+                Mitarbeiter ma = sub.getMitarbeiter();
+                if (ma == null) continue;
+                boolean erlaubt = ma.getAbteilungen() != null && ma.getAbteilungen().stream()
+                        .anyMatch(abt -> Boolean.TRUE.equals(abt.getDarfWebseitenAnfragenPushen()));
+                if (!erlaubt) continue;
+                sendPush(sub, title, body, url, null, "anfrage");
+            }
+        } catch (Exception e) {
+            log.warn("notifyWebseitenAnfrage fehlgeschlagen: {}", e.getMessage());
+        }
+    }
+
+    /**
      * Subscribe a device for push notifications.
      */
     @Transactional

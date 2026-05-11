@@ -34,6 +34,7 @@ class AnfrageFunnelServiceTest {
     private DateiSpeicherService dateiSpeicherService;
     private AnfrageFunnelSpamFilterService spamFilterService;
     private AnfrageBestaetigungVersandService bestaetigungVersandService;
+    private WebPushService webPushService;
 
     private AnfrageFunnelService service;
 
@@ -50,11 +51,12 @@ class AnfrageFunnelServiceTest {
         spamFilterService = mock(AnfrageFunnelSpamFilterService.class);
         given(spamFilterService.pruefe(any())).willReturn(AnfrageFunnelSpamFilterService.Result.ok());
         bestaetigungVersandService = mock(AnfrageBestaetigungVersandService.class);
+        webPushService = mock(WebPushService.class);
 
         service = new AnfrageFunnelService(
                 kundeRepository, anfrageRepository, anfrageNotizRepository,
                 mitarbeiterRepository, kundennummerService, dateiSpeicherService,
-                spamFilterService, bestaetigungVersandService
+                spamFilterService, bestaetigungVersandService, webPushService
         );
 
         systemMitarbeiter = new Mitarbeiter();
@@ -192,6 +194,32 @@ class AnfrageFunnelServiceTest {
                 org.mockito.ArgumentMatchers.eq("Mustermann"),
                 org.mockito.ArgumentMatchers.eq("asfdds"));
         assertThat(anfrageCaptor.getValue().getId()).isEqualTo(1L);
+    }
+
+    @Test
+    void triggertWebPushFuerNeueAnfrage() {
+        given(kundeRepository.findByKundenEmailIgnoreCase(any())).willReturn(List.of());
+        given(kundennummerService.reserviereNaechsteKundennummer()).willReturn("1042");
+
+        service.verarbeiteFunnelAnfrage(baseDto(), List.of());
+
+        verify(webPushService).notifyWebseitenAnfrage(
+                org.mockito.ArgumentMatchers.contains("Max Mustermann"),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.contains("/anfragen?anfrageId="));
+    }
+
+    @Test
+    void pushFehlerBlockiertFunnelNicht() {
+        given(kundeRepository.findByKundenEmailIgnoreCase(any())).willReturn(List.of());
+        given(kundennummerService.reserviereNaechsteKundennummer()).willReturn("1042");
+        org.mockito.Mockito.doThrow(new RuntimeException("Push down"))
+                .when(webPushService).notifyWebseitenAnfrage(any(), any(), any());
+
+        Anfrage anfrage = service.verarbeiteFunnelAnfrage(baseDto(), List.of());
+
+        assertThat(anfrage.getId()).isEqualTo(1L);
+        verify(bestaetigungVersandService).versendeBestaetigung(any(), any(), any(), any());
     }
 
     @Test

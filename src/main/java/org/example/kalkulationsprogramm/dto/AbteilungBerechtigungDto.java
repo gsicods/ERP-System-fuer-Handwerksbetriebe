@@ -21,6 +21,7 @@ public class AbteilungBerechtigungDto {
         private Boolean darfRechnungenGenehmigen;
         private Boolean darfRechnungenSehen;
         private Boolean darfFreigabeAnnahmePushen;
+        private Boolean darfWebseitenAnfragenPushen;
     }
 
     @Data
@@ -41,5 +42,6 @@ public class AbteilungBerechtigungDto {
         private Boolean darfRechnungenGenehmigen;
         private Boolean darfRechnungenSehen;
         private Boolean darfFreigabeAnnahmePushen;
+        private Boolean darfWebseitenAnfragenPushen;
     }
 }

@@ -56,6 +56,7 @@ public class AnfrageFunnelService {
     private final DateiSpeicherService dateiSpeicherService;
     private final AnfrageFunnelSpamFilterService spamFilterService;
     private final AnfrageBestaetigungVersandService anfrageBestaetigungVersandService;
+    private final WebPushService webPushService;
 
     @Transactional
     public Anfrage verarbeiteFunnelAnfrage(AnfrageFunnelRequestDto dto, List<MultipartFile> bilder) {
@@ -89,6 +90,31 @@ public class AnfrageFunnelService {
         // editierbar.
         anfrageBestaetigungVersandService.versendeBestaetigung(
                 anfrage, dto.getVorname(), dto.getNachname(), dto.getNachricht());
+
+        // Sperrbildschirm-Push aufs Handy fuer alle Mitarbeiter, deren Abteilung
+        // darfWebseitenAnfragenPushen=true hat. Fire & forget: Push-Probleme
+        // duerfen die Funnel-Persistenz nie blockieren. Klick auf den Push
+        // oeffnet die Mobile-PWA-Anfragenseite (react-zeiterfassung/AnfragenPage).
+        try {
+            String kundenName = (dto.getVorname() == null ? "" : dto.getVorname().trim())
+                    + " " + (dto.getNachname() == null ? "" : dto.getNachname().trim());
+            kundenName = kundenName.trim();
+            if (kundenName.isEmpty()) kundenName = "Unbekannt";
+            String body = anfrage.getBauvorhaben() == null || anfrage.getBauvorhaben().isBlank()
+                    ? "Neue Anfrage über die Webseite"
+                    : anfrage.getBauvorhaben();
+            // Query-Param "id" passt zu AnfragenPage.tsx, die per searchParams.get('id')
+            // die Anfrage in der Liste auto-selektiert.
+            webPushService.notifyWebseitenAnfrage(
+                    "Neue Anfrage: " + kundenName,
+                    body,
+                    "/zeiterfassung/anfragen?id=" + anfrage.getId());
+        } catch (Exception e) {
+            // Push darf den Funnel nie blockieren — aber wir wollen wissen, wenn
+            // er kaputt geht (z.B. Lazy-Init, RuntimeException aus Mitarbeiter-Lookup).
+            log.warn("Sperrbildschirm-Push fuer anfrageId={} fehlgeschlagen: {}",
+                    anfrage.getId(), e.getMessage());
+        }
 
         return anfrage;
     }

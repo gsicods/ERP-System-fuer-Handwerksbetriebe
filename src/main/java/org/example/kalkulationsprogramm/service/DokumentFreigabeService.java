@@ -413,7 +413,9 @@ public class DokumentFreigabeService
                     ? (saved.getKundeEmail() == null ? "Ein Kunde" : saved.getKundeEmail())
                     : saved.getKundeName();
             String body = kunde + " hat " + art + " " + saved.getDokumentNummer() + " digital angenommen.";
-            webPushService.notifyFreigabeAnnahme(art + " angenommen", body, "/anfragen?freigabe=" + saved.getUuid());
+            // Klick auf den Push oeffnet die Mobile-PWA-Projekteseite, weil mit der
+            // Annahme die Anfrage zum Projekt wird (siehe erzeugeAutoAuftragsbestaetigungWennAngebot).
+            webPushService.notifyFreigabeAnnahme(art + " angenommen", body, "/zeiterfassung/projekte");
         } catch (Exception ignored) {
             // Push-Probleme dürfen die Annahme nie blockieren
         }

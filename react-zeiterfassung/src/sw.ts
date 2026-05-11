@@ -281,34 +281,62 @@ self.addEventListener('push', (event) => {
         title: string
         body: string
         url: string
-        appointmentId: number
+        appointmentId?: number | null
         type: string
         timestamp: number
       }
 
-      const icon = payload.type === '1h'
-        ? '⏰'
-        : '📅'
+      // Icon und Tag je nach Push-Typ. Tag steuert, ob Notifications stacken
+      // oder eine die andere ersetzt (gleicher Tag = ersetzt).
+      let icon: string
+      let tag: string
+      let fallbackUrl: string
+      switch (payload.type) {
+        case '1h':
+          icon = '⏰'
+          tag = `apt-1h-${payload.appointmentId ?? 'x'}`
+          fallbackUrl = '/zeiterfassung/kalender'
+          break
+        case '24h':
+          icon = '📅'
+          tag = `apt-24h-${payload.appointmentId ?? 'x'}`
+          fallbackUrl = '/zeiterfassung/kalender'
+          break
+        case 'anfrage':
+          icon = '📨'
+          tag = `anfrage-${payload.timestamp}`
+          fallbackUrl = '/zeiterfassung/anfragen'
+          break
+        case 'freigabe':
+          icon = '✅'
+          tag = `freigabe-${payload.timestamp}`
+          fallbackUrl = '/zeiterfassung/projekte'
+          break
+        default:
+          icon = '🔔'
+          tag = `push-${payload.timestamp}`
+          fallbackUrl = '/zeiterfassung/'
+      }
 
       await self.registration.showNotification(`${icon} ${payload.title}`, {
         body: payload.body,
         icon: '/zeiterfassung/pwa-192x192.png',
         badge: '/zeiterfassung/pwa-192x192.png',
-        tag: `apt-${payload.type}-${payload.appointmentId}`,
+        tag,
         requireInteraction: true,
-        data: { url: payload.url || '/zeiterfassung/kalender' }
+        data: { url: payload.url || fallbackUrl }
       })
 
       console.log(`[SW] Push notification shown: ${payload.title}`)
     } catch (err) {
       console.error('[SW] Error handling push event:', err)
       // Show a generic notification if payload parsing fails
-      await self.registration.showNotification('Neuer Termin-Hinweis', {
+      await self.registration.showNotification('Neue Benachrichtigung', {
         body: 'Öffne die App für Details',
         icon: '/zeiterfassung/pwa-192x192.png',
         badge: '/zeiterfassung/pwa-192x192.png',
-        tag: 'apt-generic',
-        data: { url: '/zeiterfassung/kalender' }
+        tag: 'push-generic',
+        data: { url: '/zeiterfassung/' }
       })
     }
   })())

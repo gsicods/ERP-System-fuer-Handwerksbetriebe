@@ -42,4 +42,12 @@ public class Abteilung {
      */
     @Column(nullable = false)
     private Boolean darfFreigabeAnnahmePushen = true;
+
+    /**
+     * Steuert, ob Mitarbeiter dieser Abteilung eine Push-Benachrichtigung
+     * auf dem Handy-Sperrbildschirm bekommen, sobald über das öffentliche
+     * Webseiten-Funnel-Formular eine neue Anfrage eingegangen ist.
+     */
+    @Column(nullable = false)
+    private Boolean darfWebseitenAnfragenPushen = true;
 }
