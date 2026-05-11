@@ -3,73 +3,12 @@ import Webcam from 'react-webcam'
 import { X, Loader2, Check, ArrowRight, Plus, Trash2, Layers, Wand2, ScanLine } from 'lucide-react'
 import { jsPDF } from "jspdf"
 import { detectDocumentCorners, detectDocumentCornersOnCanvasSync, preloadEdgeDetector } from '../services/DocumentEdgeDetector'
+import type { Point } from '../services/scannerOverlay'
+import { quadsAreClose, clearOverlay, drawOverlayQuad } from '../services/scannerOverlay'
 
 interface ScannerModalProps {
     onClose: () => void
     onSave: (file: File) => Promise<void>
-}
-
-// Coordinate type
-interface Point { x: number; y: number }
-
-// --- Live-Overlay-Helfer (außerhalb der Komponente, weil zustandslos) ---
-
-function quadsAreClose(a: Point[], b: Point[], tolerancePx: number): boolean {
-    for (let i = 0; i < 4; i++) {
-        if (Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y) > tolerancePx) return false
-    }
-    return true
-}
-
-function clearOverlay(canvas: HTMLCanvasElement | null) {
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-}
-
-function drawOverlayQuad(
-    canvas: HTMLCanvasElement | null,
-    videoW: number,
-    videoH: number,
-    quad: Point[],
-    locking: boolean,
-) {
-    if (!canvas) return
-    // Interne Canvas-Auflösung an Video anpassen (object-cover zeigt das
-    // dann identisch zum Video-Stream).
-    if (canvas.width !== videoW || canvas.height !== videoH) {
-        canvas.width = videoW
-        canvas.height = videoH
-    }
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.clearRect(0, 0, videoW, videoH)
-
-    // Farbschema gemäß FRONTEND_UI.md: nur rose + slate. Locking = rose-600
-    // (Primärfarbe, Aktion bestätigt), Tracking = neutrales Hellgrau, damit
-    // der „Halte still"-Zustand klar vom Auslöser unterscheidbar bleibt.
-    const stroke = locking ? '#dc2626' : '#e2e8f0'
-    const fill = locking ? 'rgba(220,38,38,0.20)' : 'rgba(226,232,240,0.14)'
-
-    ctx.beginPath()
-    ctx.moveTo(quad[0].x, quad[0].y)
-    for (let i = 1; i < 4; i++) ctx.lineTo(quad[i].x, quad[i].y)
-    ctx.closePath()
-    ctx.fillStyle = fill
-    ctx.fill()
-    ctx.strokeStyle = stroke
-    ctx.lineWidth = Math.max(6, videoW / 240)
-    ctx.stroke()
-
-    // Eck-Marker
-    ctx.fillStyle = stroke
-    const r = Math.max(10, videoW / 150)
-    for (const p of quad) {
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
-        ctx.fill()
-    }
 }
 
 // --- HELPER: Matrix Solver for Homography ---
@@ -171,8 +110,8 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
     // Live-Erkennung im Kamerabild
     // 'loading'  = OpenCV wird gerade geladen
     // 'searching'= bereit, aber gerade kein Dokument erkannt
-    // 'tracking' = Dokument erkannt (gelbes Overlay)
-    // 'locking'  = stabile Erkennung, Auto-Capture in Kürze (grünes Overlay + Countdown)
+    // 'tracking' = Dokument erkannt (slate-Overlay, neutraler "Halte still"-Zustand)
+    // 'locking'  = stabile Erkennung, Auto-Capture in Kürze (rose-Overlay + Countdown)
     type LiveStatus = 'loading' | 'searching' | 'tracking' | 'locking'
     const [liveStatus, setLiveStatus] = useState<LiveStatus>('loading')
     const [autoCaptureCountdown, setAutoCaptureCountdown] = useState<number | null>(null)
@@ -747,9 +686,11 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
                             </div>
                         )}
 
-                        {/* Live-Status-Pille oben. aria-live=polite für Suche/Tracking,
-                            assertive für Auto-Aufnahme – Screenreader sollen den
-                            Auslöser nicht überhören. */}
+                        {/* Live-Status-Pille oben. aria-live="polite" für alle Übergänge:
+                            "assertive" wäre semantisch passender für die Locking-Phase,
+                            würde aber als dynamischer Ausdruck gegen die jsx-a11y/
+                            aria-proptypes-Regel verstoßen. Die Locking-Phase ist mit
+                            ~200 ms ohnehin so kurz, dass "polite" ausreicht. */}
                         <div
                             className="absolute top-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
                             role="status"
