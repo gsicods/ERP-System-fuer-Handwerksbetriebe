@@ -100,8 +100,9 @@ public class BelegController {
     @PostMapping(value = "/mobile/belege", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> uploadBelegMobile(
             @RequestPart("datei") MultipartFile datei,
+            @RequestParam(value = "lieferantId", required = false) Long lieferantId,
             @RequestParam(value = "token", required = false) String token) {
-        return uploadBeleg(datei, token, null);
+        return uploadBeleg(datei, lieferantId, token, null);
     }
 
     // ===================== Upload (Mobile + PC) =====================
@@ -109,6 +110,7 @@ public class BelegController {
     @PostMapping(value = "/belege", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> uploadBeleg(
             @RequestPart("datei") MultipartFile datei,
+            @RequestParam(value = "lieferantId", required = false) Long lieferantId,
             @RequestParam(value = "token", required = false) String token,
             Authentication auth) {
         Mitarbeiter caller = resolveCaller(token, auth);
@@ -119,13 +121,40 @@ public class BelegController {
             return forbidden("Keine Berechtigung zum Scannen von Belegen");
         }
         try {
-            Beleg b = belegService.uploadBeleg(datei, caller);
+            Beleg b = belegService.uploadBeleg(datei, lieferantId, caller);
             return ResponseEntity.ok(belegService.toDto(b));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             log.error("Beleg-Upload fehlgeschlagen", e);
             return ResponseEntity.internalServerError().body(Map.of("message", "Upload fehlgeschlagen"));
+        }
+    }
+
+    // ===================== Umbuchung (ohne Beleg-Datei, nur PC) =====================
+
+    /**
+     * Erfasst eine belegfreie Buchung (Privatentnahme, Privat->Firma, Kasse->Bank).
+     * Bewusst KEIN Mobile-Spiegel — Umbuchungen werden am PC erfasst, der
+     * Buchhalter hat dort das Formular + alle Sachkonten zur Hand.
+     */
+    @PostMapping("/umbuchungen")
+    public ResponseEntity<?> createUmbuchung(
+            @RequestBody BelegDto.UmbuchungCreateRequest req,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+        Mitarbeiter caller = resolveCaller(token, auth);
+        if (caller == null || !belegService.darfScannen(caller)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        try {
+            Beleg b = belegService.createUmbuchung(req, caller);
+            return ResponseEntity.ok(belegService.toDto(b));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Umbuchung anlegen fehlgeschlagen", e);
+            return ResponseEntity.internalServerError().body(Map.of("message", "Anlegen fehlgeschlagen"));
         }
     }
 

@@ -8,6 +8,7 @@ import org.example.kalkulationsprogramm.domain.Mitarbeiter;
 import org.example.kalkulationsprogramm.dto.BelegDto;
 import org.example.kalkulationsprogramm.repository.AbteilungDokumentBerechtigungRepository;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
+import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
 import org.example.kalkulationsprogramm.repository.SachkontoRepository;
@@ -47,6 +48,7 @@ class BelegServiceTest {
     @Mock private AbteilungDokumentBerechtigungRepository berechtigungRepository;
     @Mock private SachkontoRepository sachkontoRepository;
     @Mock private BelegKiAnalyseService kiAnalyseService;
+    @Mock private LieferantDokumentRepository lieferantDokumentRepository;
 
     @InjectMocks
     private BelegService service;
@@ -245,6 +247,90 @@ class BelegServiceTest {
 
         assertThat(r.getSaldoEnde()).isEqualByComparingTo("0.00");
         assertThat(r.getBewegungen()).isEmpty();
+    }
+
+    // ===================== Umbuchung (ohne Datei) =====================
+
+    @Test
+    @DisplayName("createUmbuchung: Happy-Path -> sofort validiert + ist_umbuchung=true")
+    void createUmbuchung_happyPath() {
+        BelegDto.UmbuchungCreateRequest req = new BelegDto.UmbuchungCreateRequest();
+        req.setBelegKategorie("PRIVATENTNAHME");
+        req.setBelegDatum(LocalDate.of(2026, 5, 11));
+        req.setBetragBrutto(new BigDecimal("250.00"));
+        req.setBeschreibung("Privatentnahme Bar");
+        Mitarbeiter m = mitarbeiter(7L, Set.of());
+
+        given(belegRepository.save(any(Beleg.class)))
+                .willAnswer(inv -> {
+                    Beleg b = inv.getArgument(0);
+                    b.setId(99L);
+                    return b;
+                });
+
+        Beleg result = service.createUmbuchung(req, m);
+
+        assertThat(result.getId()).isEqualTo(99L);
+        assertThat(result.getStatus()).isEqualTo(BelegStatus.VALIDIERT);
+        assertThat(result.getIstUmbuchung()).isTrue();
+        assertThat(result.getBelegKategorie()).isEqualTo(BelegKategorie.PRIVATENTNAHME);
+        assertThat(result.getBetragBrutto()).isEqualByComparingTo("250.00");
+        assertThat(result.getGespeicherterDateiname()).isNull(); // keine Datei -> NULL erlaubt
+        assertThat(result.getUploadedBy()).isEqualTo(m);
+        assertThat(result.getValidiertVon()).isEqualTo(m);
+    }
+
+    @Test
+    @DisplayName("createUmbuchung: UNZUGEORDNET ist nicht erlaubt (sonst Geisterbuchung)")
+    void createUmbuchung_unzugeordnet_400() {
+        BelegDto.UmbuchungCreateRequest req = new BelegDto.UmbuchungCreateRequest();
+        req.setBelegKategorie("UNZUGEORDNET");
+        req.setBelegDatum(LocalDate.of(2026, 5, 11));
+        req.setBetragBrutto(new BigDecimal("10.00"));
+
+        assertThatThrownBy(() -> service.createUmbuchung(req, mitarbeiter(7L, Set.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Kategorie");
+    }
+
+    @Test
+    @DisplayName("createUmbuchung: negativer Betrag wird abgelehnt")
+    void createUmbuchung_negativerBetrag_400() {
+        BelegDto.UmbuchungCreateRequest req = new BelegDto.UmbuchungCreateRequest();
+        req.setBelegKategorie("KASSE_EINNAHME");
+        req.setBelegDatum(LocalDate.of(2026, 5, 11));
+        req.setBetragBrutto(new BigDecimal("-1.00"));
+
+        assertThatThrownBy(() -> service.createUmbuchung(req, mitarbeiter(7L, Set.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Betrag");
+    }
+
+    @Test
+    @DisplayName("createUmbuchung: fehlendes Datum wird abgelehnt")
+    void createUmbuchung_ohneDatum_400() {
+        BelegDto.UmbuchungCreateRequest req = new BelegDto.UmbuchungCreateRequest();
+        req.setBelegKategorie("BANK");
+        req.setBelegDatum(null);
+        req.setBetragBrutto(new BigDecimal("100.00"));
+
+        assertThatThrownBy(() -> service.createUmbuchung(req, mitarbeiter(7L, Set.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Datum");
+    }
+
+    @Test
+    @DisplayName("createUmbuchung: ueberlange Beschreibung wird abgelehnt (Limit-Check)")
+    void createUmbuchung_beschreibungZuLang_400() {
+        BelegDto.UmbuchungCreateRequest req = new BelegDto.UmbuchungCreateRequest();
+        req.setBelegKategorie("PRIVATENTNAHME");
+        req.setBelegDatum(LocalDate.of(2026, 5, 11));
+        req.setBetragBrutto(new BigDecimal("1.00"));
+        req.setBeschreibung("X".repeat(501));
+
+        assertThatThrownBy(() -> service.createUmbuchung(req, mitarbeiter(7L, Set.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Beschreibung");
     }
 
     // ===================== Test-Helfer =====================

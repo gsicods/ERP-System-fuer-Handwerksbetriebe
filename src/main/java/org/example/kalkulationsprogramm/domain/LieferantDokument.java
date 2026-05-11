@@ -58,6 +58,15 @@ public class LieferantDokument {
     @BatchSize(size = 50)
     private Mitarbeiter uploadedBy;
 
+    // Verknuepfung zum Mobile-Scan: Wenn der Beleg im mobilen Scanner als
+    // RECHNUNG/GUTSCHRIFT mit Lieferant klassifiziert wurde, zeigt dieses
+    // Dokument auf den zugrunde liegenden Beleg-Datensatz. Datei + Vorschau
+    // werden weiterhin ueber den Beleg-Endpoint ausgeliefert.
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "beleg_id")
+    @BatchSize(size = 50)
+    private Beleg beleg;
+
     // Geschäftsmetadaten (1:1 optional) - durch KI extrahiert
     @OneToOne(mappedBy = "dokument", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @BatchSize(size = 50)

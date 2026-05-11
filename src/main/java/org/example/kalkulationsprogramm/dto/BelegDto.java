@@ -25,6 +25,8 @@ public class BelegDto {
     public static class Response {
         private Long id;
         private String belegKategorie;
+        private String dokumentTyp;          // KI-Klassifikation: RECHNUNG, GUTSCHRIFT, ...
+        private Boolean istUmbuchung;        // belegfreie Buchung (Privatentnahme, Kasse->Bank etc.)
         private String status;
         private String kiAnalyseStatus;
         private LocalDate belegDatum;
@@ -52,6 +54,9 @@ public class BelegDto {
         private Long validiertVonId;
         private String validiertVonName;
         private String notiz;
+        // Falls aus dem Beleg automatisch ein Eingangsrechnungs-Datensatz erzeugt wurde,
+        // verweist dieses Feld auf die Eingangsrechnungs-ID (LieferantGeschaeftsdokument.id).
+        private Long eingangsrechnungId;
     }
 
     /**
@@ -118,5 +123,34 @@ public class BelegDto {
         private BigDecimal summeAusgaben;
         private BigDecimal summePrivatentnahmen;
         private List<KassenBewegung> bewegungen;
+    }
+
+    /**
+     * Request zur Erfassung einer Umbuchung OHNE Beleg-Datei.
+     *
+     * Use-Cases:
+     *  - Privatentnahme (Bargeld aus Kasse, kein Beleg vorhanden)
+     *  - Umbuchung Kasse -> Bank
+     *  - Privat -> Firma
+     *  - Geldeingang auf Konto (ohne Bankauszug-Scan)
+     *
+     * Pflichtfelder: belegKategorie + betragBrutto + belegDatum.
+     * Die Kategorie muss eine Kassen-Bewegungskategorie sein
+     * (KASSE_EINNAHME|KASSE_AUSGABE|PRIVATENTNAHME|BANK|KREDITKARTE) — eine
+     * Eingangsrechnung kann nicht als Umbuchung erfasst werden, weil das
+     * weder GoBD- noch DSGVO-konform waere (es waere dann eine Buchung ohne
+     * Originalbeleg, die als Rechnung in die Buchhaltung einfliesst).
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class UmbuchungCreateRequest {
+        private String belegKategorie;
+        private LocalDate belegDatum;
+        private BigDecimal betragBrutto;
+        private String beschreibung;
+        private String zahlungsart;
+        private Long sachkontoId;
+        private String notiz;
     }
 }
