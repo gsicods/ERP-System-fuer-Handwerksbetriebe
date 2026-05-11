@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Play, FolderOpen, Users, Clock, Loader2, ChevronRight, ArrowRightLeft, LogOut, Plane, AlertTriangle, Calendar, Hammer } from 'lucide-react'
+import { Play, FolderOpen, Users, Clock, Loader2, ChevronRight, ArrowRightLeft, LogOut, Plane, AlertTriangle, Calendar, Hammer, Receipt } from 'lucide-react'
 import { buildBookingRequestPayload, createOperationId, OfflineService } from '../services/OfflineService'
 import NetworkStatusBadge from '../components/NetworkStatusBadge'
 import { shouldIncludeOfflineCompletedMinutes } from './DashboardPage.logic'
@@ -87,6 +87,18 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
         dringend: boolean
     }
     const [urlaubsWarnung, setUrlaubsWarnung] = useState<UrlaubsVerfallWarnung | null>(null)
+
+    // Belegerfassung: Kachel nur sichtbar, wenn Mitarbeiter zur Abteilung Buchhaltung gehört
+    // (Permission läuft über bestehendes System AbteilungDokumentBerechtigung 'BELEG').
+    const [darfBelegeScannen, setDarfBelegeScannen] = useState(false)
+    useEffect(() => {
+        const token = localStorage.getItem('zeiterfassung_token')
+        if (!token) return
+        fetch(`/api/buchhaltung/mobile/me/permissions?token=${token}`)
+            .then(res => res.ok ? res.json() : null)
+            .then(data => { if (data?.darfScannen) setDarfBelegeScannen(true) })
+            .catch(() => { /* offline -> Kachel bleibt versteckt, kein Drama */ })
+    }, [])
 
 
 
@@ -947,6 +959,22 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
 
                 {/* Full-width actions */}
                 <div className="space-y-3">
+
+                    {darfBelegeScannen && (
+                        <button
+                            onClick={() => navigate('/belege')}
+                            className="w-full bg-white border border-slate-200 rounded-xl p-4 hover:border-rose-200 hover:shadow-md transition-all text-left flex items-center gap-4 active:scale-[0.99]"
+                        >
+                            <div className="w-10 h-10 bg-rose-50 rounded-lg flex items-center justify-center">
+                                <Receipt className="w-5 h-5 text-rose-600" />
+                            </div>
+                            <div className="flex-1">
+                                <p className="font-semibold text-slate-900">Belege scannen</p>
+                                <p className="text-sm text-slate-500">Schnellscan – Buchhaltung validiert am PC</p>
+                            </div>
+                            <ChevronRight className="w-5 h-5 text-slate-300" />
+                        </button>
+                    )}
 
                     <button
                         onClick={() => navigate('/kalender')}

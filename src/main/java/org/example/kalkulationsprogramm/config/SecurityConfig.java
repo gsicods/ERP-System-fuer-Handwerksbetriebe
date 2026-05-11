@@ -77,7 +77,11 @@ public class SecurityConfig {
                         "/api/dokumente/**", "/api/images/**",
                         "/api/projekte/**", "/api/anfragen/**", "/api/kunden/**",
                         "/api/lieferanten/**", "/api/produktkategorien/**", "/api/arbeitsgaenge/**",
-                        "/api/abwesenheit/**")
+                        "/api/abwesenheit/**",
+                        // Buchhaltungs-Belegerfassung: NUR der Mobile-Subpath ist Token-only.
+                        // PC-Endpoints wie /api/buchhaltung/belege bleiben in der apiFilterChain
+                        // (Session-Auth + CSRF). Auth-Pruefung im Controller via Mitarbeiter-Token.
+                        "/api/buchhaltung/mobile/**")
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
         return http.build();

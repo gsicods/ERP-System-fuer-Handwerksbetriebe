@@ -5,6 +5,8 @@ package org.example.kalkulationsprogramm.domain;
  * Bilden die Dokumentenkette: Anfrage → Auftragsbestätigung → Lieferschein →
  * Rechnung
  * SONSTIG für nicht-geschäftliche Dokumente (Kataloge, Infoblätter etc.)
+ * BELEG steuert die Berechtigung für das Buchhaltungs-Beleg-Modul
+ * (mobile Scanner + PC-Validierung) über das gleiche Abteilungs-Permission-System.
  */
 public enum LieferantDokumentTyp {
     ANGEBOT,
@@ -12,5 +14,6 @@ public enum LieferantDokumentTyp {
     LIEFERSCHEIN,
     RECHNUNG,
     GUTSCHRIFT, // Gutschriften vom Lieferanten
-    SONSTIG // Nicht-Geschäftsdokumente (Katalog, Info etc.)
+    SONSTIG, // Nicht-Geschäftsdokumente (Katalog, Info etc.)
+    BELEG // Buchhaltungs-Belege (Kasse, Privatentnahme, Bank, Einmalbelege)
 }

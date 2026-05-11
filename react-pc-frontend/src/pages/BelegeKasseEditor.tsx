@@ -1,0 +1,949 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    Receipt, Upload, Loader2, Search, Wallet, Banknote, CreditCard,
+    Coins, FileQuestion, CheckCircle2, AlertCircle, Trash2, X, Truck,
+    Save, RefreshCw, FileText, BookOpen, BarChart3
+} from 'lucide-react';
+import { PageLayout } from '../components/layout/PageLayout';
+import { Card } from '../components/ui/card';
+import { Button } from '../components/ui/button';
+import { LieferantSearchModal, type LieferantSuchErgebnis } from '../components/LieferantSearchModal';
+
+// ===================== Types =====================
+
+type BelegStatus = 'NEU' | 'VALIDIERT' | 'VERWORFEN';
+type SachkontoTyp = 'AUFWAND' | 'ERTRAG' | 'PRIVAT' | 'NEUTRAL';
+
+interface Sachkonto {
+    id: number;
+    nummer?: string | null;
+    bezeichnung: string;
+    kontoTyp: SachkontoTyp;
+    beschreibung?: string | null;
+    aktiv: boolean;
+    sortierung: number;
+}
+
+interface AuswertungZeile {
+    sachkontoId: number | null;
+    nummer?: string | null;
+    bezeichnung: string;
+    kontoTyp: SachkontoTyp | null;
+    summe: number;
+    anzahlBelege: number;
+}
+
+interface Auswertung {
+    von: string | null;
+    bis: string | null;
+    summeAufwand: number;
+    summeErtrag: number;
+    summePrivat: number;
+    summeOhneKonto: number;
+    zeilen: AuswertungZeile[];
+}
+type BelegKategorie =
+    | 'UNZUGEORDNET'
+    | 'KASSE_EINNAHME'
+    | 'KASSE_AUSGABE'
+    | 'PRIVATENTNAHME'
+    | 'BANK'
+    | 'KREDITKARTE'
+    | 'SONSTIGER_BELEG';
+type KiStatus = 'PENDING' | 'LAEUFT' | 'DONE' | 'FAILED';
+
+interface Beleg {
+    id: number;
+    belegKategorie: BelegKategorie;
+    status: BelegStatus;
+    kiAnalyseStatus: KiStatus;
+    belegDatum?: string | null;
+    belegNummer?: string | null;
+    beschreibung?: string | null;
+    betragNetto?: number | null;
+    betragBrutto?: number | null;
+    mwstSatz?: number | null;
+    zahlungsart?: string | null;
+    lieferantId?: number | null;
+    lieferantName?: string | null;
+    sachkontoId?: number | null;
+    sachkontoBezeichnung?: string | null;
+    sachkontoNummer?: string | null;
+    sachkontoTyp?: SachkontoTyp | null;
+    kiVorgeschlagenerLieferant?: string | null;
+    kiConfidence?: number | null;
+    kiFehlerText?: string | null;
+    originalDateiname?: string | null;
+    mimeType?: string | null;
+    uploadDatum: string;
+    uploadedByName?: string | null;
+    validiertAm?: string | null;
+    validiertVonName?: string | null;
+    notiz?: string | null;
+}
+
+interface KassenBewegung {
+    belegId: number;
+    datum: string;
+    kategorie: BelegKategorie;
+    beschreibung?: string | null;
+    lieferantName?: string | null;
+    betrag: number;
+    saldoNachher: number;
+}
+
+interface Kassenbuch {
+    saldoStart: number;
+    saldoEnde: number;
+    summeEinnahmen: number;
+    summeAusgaben: number;
+    summePrivatentnahmen: number;
+    bewegungen: KassenBewegung[];
+}
+
+// ===================== Helpers =====================
+
+const KATEGORIE_LABELS: Record<BelegKategorie, string> = {
+    UNZUGEORDNET: 'Noch nicht zugeordnet',
+    KASSE_EINNAHME: 'Kasse – Einnahme',
+    KASSE_AUSGABE: 'Kasse – Ausgabe',
+    PRIVATENTNAHME: 'Privatentnahme',
+    BANK: 'Bank',
+    KREDITKARTE: 'Kreditkarte',
+    SONSTIGER_BELEG: 'Sonstiger Beleg',
+};
+
+const KATEGORIE_FARBE: Record<BelegKategorie, string> = {
+    UNZUGEORDNET: 'bg-slate-100 text-slate-600',
+    KASSE_EINNAHME: 'bg-emerald-100 text-emerald-700',
+    KASSE_AUSGABE: 'bg-amber-100 text-amber-700',
+    PRIVATENTNAHME: 'bg-fuchsia-100 text-fuchsia-700',
+    BANK: 'bg-sky-100 text-sky-700',
+    KREDITKARTE: 'bg-violet-100 text-violet-700',
+    SONSTIGER_BELEG: 'bg-slate-100 text-slate-700',
+};
+
+const formatEuro = (v: number | null | undefined): string =>
+    v == null || !Number.isFinite(v)
+        ? '–'
+        : new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
+
+const formatDate = (iso?: string | null): string => {
+    if (!iso) return '–';
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? '–' : d.toLocaleDateString('de-DE');
+};
+
+const formatDateTime = (iso?: string | null): string => {
+    if (!iso) return '–';
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? '–' : d.toLocaleString('de-DE');
+};
+
+const KI_LABEL: Record<KiStatus, { label: string; cls: string }> = {
+    PENDING: { label: 'KI wartet…', cls: 'bg-slate-100 text-slate-500' },
+    LAEUFT: { label: 'KI analysiert…', cls: 'bg-sky-100 text-sky-700' },
+    DONE: { label: 'KI fertig', cls: 'bg-emerald-100 text-emerald-700' },
+    FAILED: { label: 'KI-Fehler', cls: 'bg-red-100 text-red-700' },
+};
+
+// ===================== Component =====================
+
+type Tab = 'eingang' | 'alle' | 'privatentnahmen' | 'kasse' | 'auswertung';
+
+export default function BelegeKasseEditor() {
+    const [activeTab, setActiveTab] = useState<Tab>('eingang');
+    const [belege, setBelege] = useState<Beleg[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [uploading, setUploading] = useState(false);
+    const [search, setSearch] = useState('');
+    const [editing, setEditing] = useState<Beleg | null>(null);
+    const [kassenbuch, setKassenbuch] = useState<Kassenbuch | null>(null);
+    const [kassenLoading, setKassenLoading] = useState(false);
+    const [sachkonten, setSachkonten] = useState<Sachkonto[]>([]);
+    const [auswertung, setAuswertung] = useState<Auswertung | null>(null);
+    const [auswertungLoading, setAuswertungLoading] = useState(false);
+    const heuteIso = new Date().toISOString().slice(0, 10);
+    const jahresanfangIso = new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10);
+    const [auswVon, setAuswVon] = useState<string>(jahresanfangIso);
+    const [auswBis, setAuswBis] = useState<string>(heuteIso);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const loadBelege = useCallback(async () => {
+        setLoading(true);
+        try {
+            const res = await fetch('/api/buchhaltung/belege');
+            if (res.ok) {
+                const data: Beleg[] = await res.json();
+                setBelege(data);
+            } else if (res.status === 403) {
+                setBelege([]);
+            }
+        } catch (e) {
+            console.error('Belege laden fehlgeschlagen', e);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    const loadSachkonten = useCallback(async () => {
+        try {
+            const res = await fetch('/api/buchhaltung/sachkonten?nurAktive=true');
+            if (res.ok) setSachkonten(await res.json());
+        } catch (e) {
+            console.error('Sachkonten laden fehlgeschlagen', e);
+        }
+    }, []);
+
+    const loadAuswertung = useCallback(async () => {
+        setAuswertungLoading(true);
+        try {
+            const params = new URLSearchParams();
+            if (auswVon) params.set('von', auswVon);
+            if (auswBis) params.set('bis', auswBis);
+            const res = await fetch(`/api/buchhaltung/auswertung?${params}`);
+            if (res.ok) setAuswertung(await res.json());
+        } catch (e) {
+            console.error('Auswertung laden fehlgeschlagen', e);
+        } finally {
+            setAuswertungLoading(false);
+        }
+    }, [auswVon, auswBis]);
+
+    const loadKassenbuch = useCallback(async () => {
+        setKassenLoading(true);
+        try {
+            const res = await fetch('/api/buchhaltung/kassenbuch');
+            if (res.ok) {
+                setKassenbuch(await res.json());
+            }
+        } catch (e) {
+            console.error('Kassenbuch laden fehlgeschlagen', e);
+        } finally {
+            setKassenLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadBelege();
+        loadSachkonten();
+    }, [loadBelege, loadSachkonten]);
+
+    useEffect(() => {
+        if (activeTab === 'kasse') loadKassenbuch();
+        if (activeTab === 'auswertung') loadAuswertung();
+    }, [activeTab, loadKassenbuch, loadAuswertung]);
+
+    // Auto-Refresh, solange noch KI-Analysen offen sind
+    useEffect(() => {
+        const hatOffene = belege.some(b => b.kiAnalyseStatus === 'PENDING' || b.kiAnalyseStatus === 'LAEUFT');
+        if (!hatOffene || editing) return;
+        const id = setTimeout(() => loadBelege(), 4000);
+        return () => clearTimeout(id);
+    }, [belege, editing, loadBelege]);
+
+    const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploading(true);
+        try {
+            const fd = new FormData();
+            fd.append('datei', file);
+            const res = await fetch('/api/buchhaltung/belege', { method: 'POST', body: fd });
+            if (!res.ok) {
+                const msg = await res.text().catch(() => '');
+                alert('Upload fehlgeschlagen: ' + msg);
+            } else {
+                await loadBelege();
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Netzwerkfehler beim Upload');
+        } finally {
+            setUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    // ===================== Tab-Filter =====================
+
+    const gefiltert = useMemo(() => {
+        const term = search.trim().toLowerCase();
+        const match = (b: Beleg) => {
+            if (!term) return true;
+            return (
+                b.belegNummer?.toLowerCase().includes(term) ||
+                b.beschreibung?.toLowerCase().includes(term) ||
+                b.lieferantName?.toLowerCase().includes(term) ||
+                b.kiVorgeschlagenerLieferant?.toLowerCase().includes(term) ||
+                b.originalDateiname?.toLowerCase().includes(term)
+            );
+        };
+        switch (activeTab) {
+            case 'eingang':
+                return belege.filter(b => b.status === 'NEU' && match(b));
+            case 'alle':
+                return belege.filter(b => b.status !== 'VERWORFEN' && match(b));
+            case 'privatentnahmen':
+                return belege.filter(b => b.belegKategorie === 'PRIVATENTNAHME' && b.status !== 'VERWORFEN' && match(b));
+            case 'kasse':
+                return belege.filter(b =>
+                    (b.belegKategorie === 'KASSE_EINNAHME' || b.belegKategorie === 'KASSE_AUSGABE')
+                    && b.status !== 'VERWORFEN' && match(b)
+                );
+            default:
+                return [];
+        }
+    }, [belege, search, activeTab]);
+
+    const eingangsCount = belege.filter(b => b.status === 'NEU').length;
+
+    // ===================== Render =====================
+
+    return (
+        <PageLayout
+            ribbonCategory="Buchhaltung"
+            title="Belege & Kasse"
+            subtitle="Mobile-Scans validieren, Kassenbuch und Privatentnahmen führen"
+            actions={
+                <div className="flex items-center gap-2">
+                    <Button variant="outline" onClick={loadBelege} disabled={loading}>
+                        <RefreshCw className={loading ? 'w-4 h-4 mr-2 animate-spin' : 'w-4 h-4 mr-2'} />
+                        Aktualisieren
+                    </Button>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*,application/pdf"
+                        onChange={handleUpload}
+                        className="hidden"
+                    />
+                    <Button onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                        {uploading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                        Beleg hochladen
+                    </Button>
+                </div>
+            }
+        >
+            {/* KPI / Tabs */}
+            <div className="flex items-center gap-2 border-b border-slate-200">
+                <TabButton active={activeTab === 'eingang'} onClick={() => setActiveTab('eingang')}
+                    icon={<FileQuestion className="w-4 h-4" />}
+                    label="Eingang (Validierung)" badge={eingangsCount > 0 ? eingangsCount : undefined} />
+                <TabButton active={activeTab === 'alle'} onClick={() => setActiveTab('alle')}
+                    icon={<Receipt className="w-4 h-4" />} label="Alle Belege" />
+                <TabButton active={activeTab === 'privatentnahmen'} onClick={() => setActiveTab('privatentnahmen')}
+                    icon={<Wallet className="w-4 h-4" />} label="Privatentnahmen" />
+                <TabButton active={activeTab === 'kasse'} onClick={() => setActiveTab('kasse')}
+                    icon={<Coins className="w-4 h-4" />} label="Kassenbuch" />
+                <TabButton active={activeTab === 'auswertung'} onClick={() => setActiveTab('auswertung')}
+                    icon={<BarChart3 className="w-4 h-4" />} label="Auswertung" />
+            </div>
+
+            {/* Search bar */}
+            {activeTab !== 'kasse' && activeTab !== 'auswertung' && (
+                <div className="relative max-w-md">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                        type="text"
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        placeholder="Suche: Nummer, Beschreibung, Lieferant…"
+                        className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+                    />
+                </div>
+            )}
+
+            {/* Content */}
+            {activeTab === 'kasse' ? (
+                <KassenbuchView kassenbuch={kassenbuch} loading={kassenLoading} onSelectBeleg={id => {
+                    const b = belege.find(x => x.id === id);
+                    if (b) setEditing(b);
+                }} />
+            ) : activeTab === 'auswertung' ? (
+                <AuswertungView
+                    auswertung={auswertung}
+                    loading={auswertungLoading}
+                    von={auswVon}
+                    bis={auswBis}
+                    onVonChange={setAuswVon}
+                    onBisChange={setAuswBis}
+                    onReload={loadAuswertung}
+                />
+            ) : loading ? (
+                <div className="flex justify-center py-16">
+                    <Loader2 className="w-8 h-8 animate-spin text-rose-500" />
+                </div>
+            ) : gefiltert.length === 0 ? (
+                <Card className="p-12 text-center text-slate-500">
+                    <Receipt className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                    <p className="font-medium">
+                        {activeTab === 'eingang' ? 'Keine offenen Belege zur Validierung'
+                            : activeTab === 'privatentnahmen' ? 'Keine Privatentnahmen erfasst'
+                            : 'Keine Belege gefunden'}
+                    </p>
+                    <p className="text-sm mt-1">Belege werden über die Handy-App gescannt oder hier hochgeladen.</p>
+                </Card>
+            ) : (
+                <div className="space-y-2">
+                    {gefiltert.map(b => (
+                        <BelegRow key={b.id} beleg={b} onClick={() => setEditing(b)} />
+                    ))}
+                </div>
+            )}
+
+            {editing && (
+                <BelegDetailModal
+                    beleg={editing}
+                    sachkonten={sachkonten}
+                    onClose={() => setEditing(null)}
+                    onSaved={updated => {
+                        setBelege(list => list.map(b => b.id === updated.id ? updated : b));
+                        setEditing(null);
+                    }}
+                    onDeleted={id => {
+                        setBelege(list => list.filter(b => b.id !== id));
+                        setEditing(null);
+                    }}
+                />
+            )}
+        </PageLayout>
+    );
+}
+
+// ===================== Sub-Components =====================
+
+function TabButton({ active, onClick, icon, label, badge }: {
+    active: boolean; onClick: () => void; icon: React.ReactNode; label: string; badge?: number;
+}) {
+    return (
+        <button
+            onClick={onClick}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px
+                ${active
+                    ? 'border-rose-600 text-rose-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-200'}`}
+        >
+            {icon}
+            {label}
+            {badge != null && (
+                <span className="ml-1 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-xs font-semibold rounded-full bg-rose-600 text-white">
+                    {badge}
+                </span>
+            )}
+        </button>
+    );
+}
+
+function BelegRow({ beleg, onClick }: { beleg: Beleg; onClick: () => void }) {
+    const ki = KI_LABEL[beleg.kiAnalyseStatus];
+    return (
+        <button
+            onClick={onClick}
+            className="w-full text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-rose-200 hover:shadow-sm transition-all flex items-center gap-4"
+        >
+            <div className="w-12 h-12 rounded-lg bg-rose-50 flex items-center justify-center flex-shrink-0">
+                <Receipt className="w-6 h-6 text-rose-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span className="font-semibold text-slate-900 truncate">
+                        {beleg.belegNummer || beleg.kiVorgeschlagenerLieferant || beleg.originalDateiname || `Beleg #${beleg.id}`}
+                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${KATEGORIE_FARBE[beleg.belegKategorie]}`}>
+                        {KATEGORIE_LABELS[beleg.belegKategorie]}
+                    </span>
+                    {beleg.status === 'NEU' && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 inline-flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3" /> Zu prüfen
+                        </span>
+                    )}
+                    {beleg.status === 'VALIDIERT' && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 inline-flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" /> Validiert
+                        </span>
+                    )}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${ki.cls}`}>{ki.label}</span>
+                </div>
+                <div className="text-sm text-slate-500 flex items-center gap-4 flex-wrap">
+                    <span>{formatDate(beleg.belegDatum)}</span>
+                    {beleg.lieferantName && <span className="inline-flex items-center gap-1"><Truck className="w-3 h-3" />{beleg.lieferantName}</span>}
+                    {beleg.sachkontoBezeichnung && (
+                        <span className="inline-flex items-center gap-1 text-slate-600">
+                            <BookOpen className="w-3 h-3" />
+                            {beleg.sachkontoNummer ? `${beleg.sachkontoNummer} ` : ''}{beleg.sachkontoBezeichnung}
+                        </span>
+                    )}
+                    {beleg.uploadedByName && <span>Hochgeladen von {beleg.uploadedByName}</span>}
+                </div>
+            </div>
+            <div className="text-right flex-shrink-0">
+                <div className="font-semibold text-slate-900">{formatEuro(beleg.betragBrutto)} €</div>
+                {beleg.mwstSatz != null && <div className="text-xs text-slate-400">MwSt {beleg.mwstSatz}%</div>}
+            </div>
+        </button>
+    );
+}
+
+function KassenbuchView({ kassenbuch, loading, onSelectBeleg }: {
+    kassenbuch: Kassenbuch | null; loading: boolean; onSelectBeleg: (id: number) => void;
+}) {
+    if (loading) {
+        return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-rose-500" /></div>;
+    }
+    if (!kassenbuch) {
+        return <Card className="p-12 text-center text-slate-500"><Coins className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>Kassenbuch konnte nicht geladen werden.</p></Card>;
+    }
+    return (
+        <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <KpiTile label="Saldo aktuell" value={`${formatEuro(kassenbuch.saldoEnde)} €`} icon={<Wallet className="w-5 h-5" />} highlight />
+                <KpiTile label="Einnahmen" value={`${formatEuro(kassenbuch.summeEinnahmen)} €`} icon={<Banknote className="w-5 h-5 text-emerald-600" />} />
+                <KpiTile label="Ausgaben" value={`${formatEuro(kassenbuch.summeAusgaben)} €`} icon={<CreditCard className="w-5 h-5 text-amber-600" />} />
+                <KpiTile label="Privatentnahmen" value={`${formatEuro(kassenbuch.summePrivatentnahmen)} €`} icon={<Wallet className="w-5 h-5 text-fuchsia-600" />} />
+            </div>
+
+            <Card className="overflow-hidden">
+                <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-slate-600">
+                        <tr>
+                            <th className="text-left px-4 py-2 font-medium">Datum</th>
+                            <th className="text-left px-4 py-2 font-medium">Kategorie</th>
+                            <th className="text-left px-4 py-2 font-medium">Beschreibung</th>
+                            <th className="text-right px-4 py-2 font-medium">Betrag</th>
+                            <th className="text-right px-4 py-2 font-medium">Saldo</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                        {kassenbuch.bewegungen.length === 0 ? (
+                            <tr><td colSpan={5} className="text-center py-8 text-slate-400">Keine Bar-Bewegungen erfasst.</td></tr>
+                        ) : kassenbuch.bewegungen.map(bew => (
+                            <tr key={bew.belegId}
+                                onClick={() => onSelectBeleg(bew.belegId)}
+                                className="hover:bg-slate-50 cursor-pointer">
+                                <td className="px-4 py-2">{formatDate(bew.datum)}</td>
+                                <td className="px-4 py-2">
+                                    <span className={`text-xs px-2 py-0.5 rounded-full ${KATEGORIE_FARBE[bew.kategorie]}`}>
+                                        {KATEGORIE_LABELS[bew.kategorie]}
+                                    </span>
+                                </td>
+                                <td className="px-4 py-2 text-slate-700">
+                                    {bew.beschreibung || '–'}
+                                    {bew.lieferantName && <span className="ml-2 text-slate-400">({bew.lieferantName})</span>}
+                                </td>
+                                <td className={`px-4 py-2 text-right font-medium tabular-nums ${bew.betrag < 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                    {bew.betrag > 0 ? '+' : ''}{formatEuro(bew.betrag)} €
+                                </td>
+                                <td className="px-4 py-2 text-right font-semibold tabular-nums">
+                                    {formatEuro(bew.saldoNachher)} €
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </Card>
+        </div>
+    );
+}
+
+function KpiTile({ label, value, icon, highlight }: { label: string; value: string; icon: React.ReactNode; highlight?: boolean }) {
+    return (
+        <Card className={`p-4 ${highlight ? 'border-rose-200 bg-rose-50/50' : ''}`}>
+            <div className="flex items-center gap-2 text-slate-500 text-xs uppercase font-semibold tracking-wide">
+                {icon}
+                {label}
+            </div>
+            <div className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">{value}</div>
+        </Card>
+    );
+}
+
+// ===================== Detail / Validierungs-Modal =====================
+
+function BelegDetailModal({ beleg, sachkonten, onClose, onSaved, onDeleted }: {
+    beleg: Beleg;
+    sachkonten: Sachkonto[];
+    onClose: () => void;
+    onSaved: (b: Beleg) => void;
+    onDeleted: (id: number) => void;
+}) {
+    const [form, setForm] = useState({
+        belegKategorie: beleg.belegKategorie,
+        belegDatum: beleg.belegDatum ?? '',
+        belegNummer: beleg.belegNummer ?? '',
+        beschreibung: beleg.beschreibung ?? '',
+        betragNetto: beleg.betragNetto ?? '',
+        betragBrutto: beleg.betragBrutto ?? '',
+        mwstSatz: beleg.mwstSatz ?? '',
+        zahlungsart: beleg.zahlungsart ?? '',
+        lieferantId: beleg.lieferantId ?? null as number | null,
+        lieferantName: beleg.lieferantName ?? '',
+        sachkontoId: beleg.sachkontoId ?? null as number | null,
+        notiz: beleg.notiz ?? '',
+    });
+    const [saving, setSaving] = useState(false);
+    const [lieferantPicker, setLieferantPicker] = useState(false);
+
+    const update = <K extends keyof typeof form>(k: K, v: typeof form[K]) =>
+        setForm(f => ({ ...f, [k]: v }));
+
+    const save = async (alsValidiert: boolean) => {
+        setSaving(true);
+        try {
+            const body = {
+                belegKategorie: form.belegKategorie,
+                status: alsValidiert ? 'VALIDIERT' : undefined,
+                belegDatum: form.belegDatum || null,
+                belegNummer: form.belegNummer || null,
+                beschreibung: form.beschreibung || null,
+                betragNetto: form.betragNetto === '' ? null : Number(form.betragNetto),
+                betragBrutto: form.betragBrutto === '' ? null : Number(form.betragBrutto),
+                mwstSatz: form.mwstSatz === '' ? null : Number(form.mwstSatz),
+                zahlungsart: form.zahlungsart || null,
+                lieferantId: form.lieferantId,
+                sachkontoId: form.sachkontoId,
+                notiz: form.notiz || null,
+            };
+            const res = await fetch(`/api/buchhaltung/belege/${beleg.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (res.ok) {
+                const updated: Beleg = await res.json();
+                onSaved(updated);
+            } else {
+                alert('Speichern fehlgeschlagen');
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Netzwerkfehler');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const verwerfen = async () => {
+        if (!confirm('Beleg wirklich verwerfen? Die Datei bleibt erhalten (Steuer-Nachweis).')) return;
+        setSaving(true);
+        try {
+            const res = await fetch(`/api/buchhaltung/belege/${beleg.id}`, { method: 'DELETE' });
+            if (res.ok) onDeleted(beleg.id);
+            else alert('Verwerfen fehlgeschlagen');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const kiVorschlag = beleg.kiVorgeschlagenerLieferant && !form.lieferantName
+        ? beleg.kiVorgeschlagenerLieferant : null;
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+                <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <Receipt className="w-5 h-5 text-rose-600" />
+                        <div>
+                            <h2 className="font-bold text-slate-900">Beleg prüfen & validieren</h2>
+                            <p className="text-xs text-slate-500">Hochgeladen {formatDateTime(beleg.uploadDatum)} {beleg.uploadedByName ? `von ${beleg.uploadedByName}` : ''}</p>
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-5 h-5 text-slate-500" /></button>
+                </div>
+
+                <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-5 gap-0 min-h-0">
+                    {/* Vorschau */}
+                    <div className="lg:col-span-2 bg-slate-100 flex flex-col items-center justify-center p-4 border-r border-slate-200 overflow-auto">
+                        <BelegPreview belegId={beleg.id} mimeType={beleg.mimeType} originalDateiname={beleg.originalDateiname} />
+                    </div>
+
+                    {/* Form */}
+                    <div className="lg:col-span-3 overflow-auto p-6 space-y-5">
+                        {beleg.kiAnalyseStatus === 'FAILED' && (
+                            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                                <strong>KI-Analyse fehlgeschlagen:</strong> {beleg.kiFehlerText}
+                            </div>
+                        )}
+                        {beleg.kiAnalyseStatus === 'PENDING' || beleg.kiAnalyseStatus === 'LAEUFT' ? (
+                            <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-sm text-sky-700 inline-flex items-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                KI-Analyse läuft – Werte erscheinen automatisch, sobald sie fertig ist.
+                            </div>
+                        ) : null}
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Wo gezahlt</label>
+                                <select
+                                    value={form.belegKategorie}
+                                    onChange={e => update('belegKategorie', e.target.value as BelegKategorie)}
+                                    className="w-full p-2.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-rose-500 outline-none"
+                                >
+                                    {Object.entries(KATEGORIE_LABELS).map(([k, v]) => (
+                                        <option key={k} value={k}>{v}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1 inline-flex items-center gap-1">
+                                    <BookOpen className="w-3 h-3" /> Konto / Wofür?
+                                </label>
+                                <select
+                                    value={form.sachkontoId ?? ''}
+                                    onChange={e => update('sachkontoId', e.target.value ? Number(e.target.value) : null)}
+                                    className="w-full p-2.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-rose-500 outline-none"
+                                >
+                                    <option value="">– kein Konto zugewiesen –</option>
+                                    {(['AUFWAND', 'ERTRAG', 'PRIVAT', 'NEUTRAL'] as SachkontoTyp[]).map(typ => {
+                                        const items = sachkonten.filter(s => s.kontoTyp === typ);
+                                        if (items.length === 0) return null;
+                                        const labels: Record<SachkontoTyp, string> = {
+                                            AUFWAND: 'Aufwand', ERTRAG: 'Ertrag', PRIVAT: 'Privat', NEUTRAL: 'Neutral',
+                                        };
+                                        return (
+                                            <optgroup key={typ} label={labels[typ]}>
+                                                {items.map(s => (
+                                                    <option key={s.id} value={s.id}>
+                                                        {s.nummer ? `${s.nummer} ` : ''}{s.bezeichnung}
+                                                    </option>
+                                                ))}
+                                            </optgroup>
+                                        );
+                                    })}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <Field label="Beleg-Nummer">
+                                <input type="text" value={form.belegNummer}
+                                    onChange={e => update('belegNummer', e.target.value)}
+                                    className={inputCls} />
+                            </Field>
+                            <Field label="Beleg-Datum">
+                                <input type="date" value={form.belegDatum}
+                                    onChange={e => update('belegDatum', e.target.value)}
+                                    className={inputCls} />
+                            </Field>
+                            <Field label="Brutto (€)">
+                                <input type="number" step="0.01" value={form.betragBrutto}
+                                    onChange={e => update('betragBrutto', e.target.value as never)}
+                                    className={inputCls} />
+                            </Field>
+                            <Field label="Netto (€)">
+                                <input type="number" step="0.01" value={form.betragNetto}
+                                    onChange={e => update('betragNetto', e.target.value as never)}
+                                    className={inputCls} />
+                            </Field>
+                            <Field label="MwSt-Satz (%)">
+                                <input type="number" step="0.1" value={form.mwstSatz}
+                                    onChange={e => update('mwstSatz', e.target.value as never)}
+                                    className={inputCls} />
+                            </Field>
+                            <Field label="Zahlungsart">
+                                <input type="text" value={form.zahlungsart}
+                                    onChange={e => update('zahlungsart', e.target.value)}
+                                    placeholder="z.B. Bar, EC, Überweisung"
+                                    className={inputCls} />
+                            </Field>
+                        </div>
+
+                        <Field label="Beschreibung">
+                            <input type="text" value={form.beschreibung}
+                                onChange={e => update('beschreibung', e.target.value)}
+                                placeholder="z.B. Tankquittung, Büromaterial…"
+                                className={inputCls} />
+                        </Field>
+
+                        <Field label="Lieferant (optional)">
+                            <div className="flex items-center gap-2">
+                                <input type="text" readOnly
+                                    value={form.lieferantName || (kiVorschlag ? `KI-Vorschlag: ${kiVorschlag}` : '')}
+                                    placeholder="Kein Lieferant – z.B. bei Kassen-Einnahme"
+                                    className={`${inputCls} bg-slate-50`} />
+                                <Button variant="outline" type="button" onClick={() => setLieferantPicker(true)}>
+                                    <Truck className="w-4 h-4 mr-2" />
+                                    Wählen
+                                </Button>
+                                {form.lieferantId && (
+                                    <Button variant="ghost" type="button"
+                                        onClick={() => { update('lieferantId', null); update('lieferantName', ''); }}>
+                                        <X className="w-4 h-4" />
+                                    </Button>
+                                )}
+                            </div>
+                        </Field>
+
+                        <Field label="Notiz">
+                            <textarea rows={2} value={form.notiz}
+                                onChange={e => update('notiz', e.target.value)}
+                                className={inputCls} />
+                        </Field>
+                    </div>
+                </div>
+
+                <div className="border-t border-slate-200 p-4 flex items-center justify-between gap-3 bg-slate-50">
+                    <Button variant="ghost" onClick={verwerfen} disabled={saving} className="text-red-600 hover:bg-red-50">
+                        <Trash2 className="w-4 h-4 mr-2" /> Verwerfen
+                    </Button>
+                    <div className="flex items-center gap-2">
+                        <Button variant="outline" onClick={() => save(false)} disabled={saving}>
+                            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                            Zwischenspeichern
+                        </Button>
+                        <Button onClick={() => save(true)} disabled={saving}>
+                            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                            Prüfen & Übernehmen
+                        </Button>
+                    </div>
+                </div>
+            </div>
+
+            {lieferantPicker && (
+                <LieferantSearchModal
+                    isOpen={lieferantPicker}
+                    onClose={() => setLieferantPicker(false)}
+                    currentLieferantId={form.lieferantId ?? undefined}
+                    onSelect={(l: LieferantSuchErgebnis) => {
+                        update('lieferantId', l.id);
+                        update('lieferantName', l.lieferantenname);
+                    }}
+                />
+            )}
+        </div>
+    );
+}
+
+const inputCls = 'w-full p-2.5 border border-slate-200 rounded-lg bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-500';
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">{label}</label>
+            {children}
+        </div>
+    );
+}
+
+function AuswertungView({ auswertung, loading, von, bis, onVonChange, onBisChange, onReload }: {
+    auswertung: Auswertung | null;
+    loading: boolean;
+    von: string;
+    bis: string;
+    onVonChange: (v: string) => void;
+    onBisChange: (v: string) => void;
+    onReload: () => void;
+}) {
+    const typLabel: Record<SachkontoTyp, string> = {
+        AUFWAND: 'Aufwand', ERTRAG: 'Ertrag', PRIVAT: 'Privat', NEUTRAL: 'Neutral',
+    };
+    const typFarbe: Record<SachkontoTyp, string> = {
+        AUFWAND: 'bg-amber-100 text-amber-700',
+        ERTRAG: 'bg-emerald-100 text-emerald-700',
+        PRIVAT: 'bg-fuchsia-100 text-fuchsia-700',
+        NEUTRAL: 'bg-slate-100 text-slate-600',
+    };
+
+    const ergebnis = auswertung
+        ? (auswertung.summeErtrag - auswertung.summeAufwand)
+        : 0;
+
+    return (
+        <div className="space-y-4">
+            <Card className="p-4 flex flex-wrap items-end gap-3">
+                <Field label="Von">
+                    <input type="date" value={von} onChange={e => onVonChange(e.target.value)} className={inputCls} />
+                </Field>
+                <Field label="Bis">
+                    <input type="date" value={bis} onChange={e => onBisChange(e.target.value)} className={inputCls} />
+                </Field>
+                <Button onClick={onReload} disabled={loading}>
+                    {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                    Aktualisieren
+                </Button>
+            </Card>
+
+            {loading ? (
+                <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-rose-500" /></div>
+            ) : !auswertung ? (
+                <Card className="p-12 text-center text-slate-500"><BarChart3 className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>Noch keine Auswertung geladen.</p></Card>
+            ) : (
+                <>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <KpiTile label="Erträge" value={`${formatEuro(auswertung.summeErtrag)} €`} icon={<Banknote className="w-5 h-5 text-emerald-600" />} />
+                        <KpiTile label="Aufwand" value={`${formatEuro(auswertung.summeAufwand)} €`} icon={<CreditCard className="w-5 h-5 text-amber-600" />} />
+                        <KpiTile label="Privatentnahmen" value={`${formatEuro(auswertung.summePrivat)} €`} icon={<Wallet className="w-5 h-5 text-fuchsia-600" />} />
+                        <KpiTile label="Ergebnis" value={`${formatEuro(ergebnis)} €`} icon={<BarChart3 className={`w-5 h-5 ${ergebnis < 0 ? 'text-red-500' : 'text-emerald-600'}`} />} highlight />
+                    </div>
+
+                    {auswertung.summeOhneKonto > 0 && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800 inline-flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4" />
+                            {formatEuro(auswertung.summeOhneKonto)} € sind noch keinem Sachkonto zugeordnet.
+                        </div>
+                    )}
+
+                    <Card className="overflow-hidden">
+                        <table className="w-full text-sm">
+                            <thead className="bg-slate-50 text-slate-600">
+                                <tr>
+                                    <th className="text-left px-4 py-2 font-medium">Nr.</th>
+                                    <th className="text-left px-4 py-2 font-medium">Konto</th>
+                                    <th className="text-left px-4 py-2 font-medium">Typ</th>
+                                    <th className="text-right px-4 py-2 font-medium">Belege</th>
+                                    <th className="text-right px-4 py-2 font-medium">Summe brutto</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {auswertung.zeilen.length === 0 ? (
+                                    <tr><td colSpan={5} className="text-center py-8 text-slate-400">Keine validierten Belege im Zeitraum.</td></tr>
+                                ) : auswertung.zeilen.map((z, i) => (
+                                    <tr key={z.sachkontoId ?? `none-${i}`} className="hover:bg-slate-50">
+                                        <td className="px-4 py-2 text-slate-500 tabular-nums">{z.nummer ?? '–'}</td>
+                                        <td className="px-4 py-2 font-medium text-slate-900">{z.bezeichnung}</td>
+                                        <td className="px-4 py-2">
+                                            {z.kontoTyp ? (
+                                                <span className={`text-xs px-2 py-0.5 rounded-full ${typFarbe[z.kontoTyp]}`}>
+                                                    {typLabel[z.kontoTyp]}
+                                                </span>
+                                            ) : (
+                                                <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">offen</span>
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-2 text-right tabular-nums">{z.anzahlBelege}</td>
+                                        <td className="px-4 py-2 text-right font-semibold tabular-nums">{formatEuro(z.summe)} €</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </Card>
+                </>
+            )}
+        </div>
+    );
+}
+
+function BelegPreview({ belegId, mimeType, originalDateiname }: {
+    belegId: number; mimeType?: string | null; originalDateiname?: string | null;
+}) {
+    const src = `/api/buchhaltung/belege/${belegId}/datei`;
+    const istPdf = mimeType?.includes('pdf') || originalDateiname?.toLowerCase().endsWith('.pdf');
+    const istBild = mimeType?.startsWith('image/');
+
+    if (istPdf) {
+        return <iframe src={src} title={originalDateiname ?? 'Beleg-PDF'} className="w-full h-full min-h-[400px] bg-white rounded border border-slate-200" />;
+    }
+    if (istBild) {
+        return <img src={src} alt={originalDateiname ?? 'Beleg'} className="max-w-full max-h-[600px] rounded shadow" />;
+    }
+    return (
+        <div className="text-center text-slate-500 p-8">
+            <FileText className="w-12 h-12 mx-auto mb-2 opacity-30" />
+            <p className="text-sm">{originalDateiname}</p>
+            <a href={src} target="_blank" rel="noopener noreferrer" className="text-rose-600 text-sm underline mt-2 inline-block">
+                Datei öffnen
+            </a>
+        </div>
+    );
+}

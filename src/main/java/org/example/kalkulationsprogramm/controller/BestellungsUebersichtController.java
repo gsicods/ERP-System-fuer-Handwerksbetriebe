@@ -608,6 +608,7 @@ public class BestellungsUebersichtController {
             case RECHNUNG -> 3;
             case GUTSCHRIFT -> 4;
             case SONSTIG -> 99;
+            case BELEG -> 100; // gehört nicht zur Bestellkette, wird hier nicht erwartet
         };
     }
 

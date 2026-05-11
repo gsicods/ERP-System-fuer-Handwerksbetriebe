@@ -712,6 +712,7 @@ public class ProjektController {
             case RECHNUNG -> 4;
             case GUTSCHRIFT -> 5;
             case SONSTIG -> 6;
+            case BELEG -> 7; // Buchhaltungs-Belege erscheinen nicht in der Projektkette
         };
     }
 

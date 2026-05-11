@@ -1,0 +1,426 @@
+package org.example.kalkulationsprogramm.service;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.example.kalkulationsprogramm.domain.Beleg;
+import org.example.kalkulationsprogramm.domain.BelegKategorie;
+import org.example.kalkulationsprogramm.domain.BelegKiAnalyseStatus;
+import org.example.kalkulationsprogramm.domain.BelegStatus;
+import org.example.kalkulationsprogramm.domain.Lieferanten;
+import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp;
+import org.example.kalkulationsprogramm.domain.Mitarbeiter;
+import org.example.kalkulationsprogramm.domain.Sachkonto;
+import org.example.kalkulationsprogramm.dto.BelegDto;
+import org.example.kalkulationsprogramm.repository.AbteilungDokumentBerechtigungRepository;
+import org.example.kalkulationsprogramm.repository.BelegRepository;
+import org.example.kalkulationsprogramm.repository.LieferantenRepository;
+import org.example.kalkulationsprogramm.repository.MitarbeiterRepository;
+import org.example.kalkulationsprogramm.repository.SachkontoRepository;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * Kernservice für das Beleg-Modul.
+ *
+ * - Upload (Mobile + PC): speichert Datei, legt Beleg mit Status=NEU an,
+ *   stößt asynchrone KI-Analyse an. KI darf das HTTP-Response NICHT blockieren.
+ * - Update: Validierung am PC, korrigiert KI-Vorschläge.
+ * - Kassenbuch: chronologische Liste der Bar-Bewegungen mit laufendem Saldo.
+ * - Permission-Check: Mitarbeiter darf scannen/sehen, wenn er einer Abteilung
+ *   angehört, die für LieferantDokumentTyp.BELEG entsprechend berechtigt ist
+ *   (verwaltet unter Administration → Lieferanten-Dokumentenrechte).
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class BelegService {
+
+    private static final String BELEG_TYP = LieferantDokumentTyp.BELEG.name();
+
+    private final BelegRepository belegRepository;
+    private final LieferantenRepository lieferantenRepository;
+    private final MitarbeiterRepository mitarbeiterRepository;
+    private final AbteilungDokumentBerechtigungRepository berechtigungRepository;
+    private final SachkontoRepository sachkontoRepository;
+    private final BelegKiAnalyseService kiAnalyseService;
+
+    @Value("${upload.path:uploads}")
+    private String uploadPath;
+
+    /** Whitelist der akzeptierten Beleg-MIME-Types. Alles andere wird abgelehnt. */
+    private static final Set<String> ERLAUBTE_MIME_TYPES = Set.of(
+            "image/jpeg", "image/jpg", "image/png", "image/webp",
+            "image/heic", "image/heif", "application/pdf");
+
+    /** Whitelist der Dateiendungen. Defense-in-Depth zu MIME — Client darf nicht entscheiden. */
+    private static final Set<String> ERLAUBTE_ENDUNGEN = Set.of(
+            ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".pdf");
+
+    /** Max. Belegdateigröße. Globale multipart-max-file-size ist zu großzügig. */
+    private static final long MAX_DATEI_BYTES = 25L * 1024 * 1024;
+
+    // ===================== Permissions =====================
+
+    public BelegDto.PermissionResponse getPermissions(Mitarbeiter mitarbeiter) {
+        if (mitarbeiter == null || mitarbeiter.getAbteilungen() == null
+                || mitarbeiter.getAbteilungen().isEmpty()) {
+            return BelegDto.PermissionResponse.builder()
+                    .darfScannen(false).darfSehen(false).build();
+        }
+        List<Long> abteilungIds = mitarbeiter.getAbteilungen().stream()
+                .map(a -> a.getId()).toList();
+        Set<String> sichtbar = Set.copyOf(berechtigungRepository.findSichtbareTypenByAbteilungIds(abteilungIds));
+        Set<String> scanbar = Set.copyOf(berechtigungRepository.findScanbarTypenByAbteilungIds(abteilungIds));
+        return BelegDto.PermissionResponse.builder()
+                .darfSehen(sichtbar.contains(BELEG_TYP))
+                .darfScannen(scanbar.contains(BELEG_TYP))
+                .build();
+    }
+
+    public boolean darfScannen(Mitarbeiter mitarbeiter) {
+        return getPermissions(mitarbeiter).isDarfScannen();
+    }
+
+    public boolean darfSehen(Mitarbeiter mitarbeiter) {
+        return getPermissions(mitarbeiter).isDarfSehen();
+    }
+
+    // ===================== Upload =====================
+
+    /**
+     * Nimmt eine Datei vom Scanner entgegen, speichert sie und legt einen Beleg
+     * mit Status=NEU an. Stößt anschließend die asynchrone KI-Analyse an.
+     *
+     * Der Aufrufer (Mobile/PC) blockiert nicht auf der KI — sobald die Antwort
+     * mit der Beleg-ID zurückkommt, ist der Scanner wieder bereit für den
+     * nächsten Beleg.
+     */
+    @Transactional
+    public Beleg uploadBeleg(MultipartFile datei, Mitarbeiter uploader) throws IOException {
+        if (datei == null || datei.isEmpty()) {
+            throw new IllegalArgumentException("Datei fehlt");
+        }
+        if (datei.getSize() > MAX_DATEI_BYTES) {
+            throw new IllegalArgumentException("Datei zu groß (max. 25 MB)");
+        }
+
+        String originalFilename = StringUtils.cleanPath(
+                Objects.requireNonNullElse(datei.getOriginalFilename(), "beleg"));
+        // Pfad-Traversal blocken (analog zu RechnungsuebersichtController)
+        if (originalFilename.contains("..") || originalFilename.contains("/")
+                || originalFilename.contains("\\")) {
+            throw new IllegalArgumentException("Ungueltiger Dateiname");
+        }
+
+        // MIME + Extension müssen beide auf der Whitelist stehen.
+        // SVG würde z.B. als image/* durchrutschen, ist hier aber nicht in
+        // ERLAUBTE_MIME_TYPES — Schutz vor Stored-XSS via Beleg-Vorschau.
+        String mimeType = datei.getContentType() != null
+                ? datei.getContentType().toLowerCase(Locale.ROOT) : "";
+        if (!ERLAUBTE_MIME_TYPES.contains(mimeType)) {
+            throw new IllegalArgumentException(
+                    "Dateityp nicht erlaubt. Erlaubt sind: JPG, PNG, WEBP, HEIC, PDF");
+        }
+        String lower = originalFilename.toLowerCase(Locale.ROOT);
+        int dot = lower.lastIndexOf('.');
+        String endung = dot >= 0 ? lower.substring(dot) : "";
+        if (!ERLAUBTE_ENDUNGEN.contains(endung)) {
+            throw new IllegalArgumentException(
+                    "Dateiendung nicht erlaubt. Erlaubt sind: " + String.join(", ", ERLAUBTE_ENDUNGEN));
+        }
+
+        String storedFilename = UUID.randomUUID() + "_" + originalFilename;
+        Path belegDir = Paths.get(uploadPath, "belege");
+        Files.createDirectories(belegDir);
+        Path target = belegDir.resolve(storedFilename);
+        datei.transferTo(target);
+
+        Beleg beleg = new Beleg();
+        beleg.setStatus(BelegStatus.NEU);
+        beleg.setKiAnalyseStatus(BelegKiAnalyseStatus.PENDING);
+        beleg.setBelegKategorie(BelegKategorie.UNZUGEORDNET);
+        beleg.setOriginalDateiname(originalFilename);
+        beleg.setGespeicherterDateiname(storedFilename);
+        beleg.setMimeType(mimeType);
+        beleg.setUploadDatum(LocalDateTime.now());
+        beleg.setUploadedBy(uploader);
+
+        beleg = belegRepository.save(beleg);
+
+        // Async-Start NACH Transaktions-Commit. Sonst würde der Async-Thread
+        // den frisch persistierten Beleg in seiner eigenen Transaktion noch
+        // nicht sehen und mit "Beleg null" abbrechen.
+        final Long belegId = beleg.getId();
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        kiAnalyseService.analysiereBelegAsync(belegId);
+                    } catch (Exception e) {
+                        log.warn("KI-Analyse fuer Beleg {} konnte nicht angestossen werden: {}",
+                                belegId, e.getMessage());
+                    }
+                }
+            });
+        } else {
+            // Falls keine Transaktion aktiv ist (Tests etc.) — direkter Aufruf reicht.
+            try {
+                kiAnalyseService.analysiereBelegAsync(belegId);
+            } catch (Exception e) {
+                log.warn("KI-Analyse fuer Beleg {} konnte nicht angestossen werden: {}",
+                        belegId, e.getMessage());
+            }
+        }
+
+        return beleg;
+    }
+
+    // ===================== Read =====================
+
+    @Transactional(readOnly = true)
+    public List<BelegDto.Response> listBelege(BelegStatus statusFilter, BelegKategorie kategorieFilter) {
+        List<Beleg> list;
+        if (statusFilter != null && kategorieFilter != null) {
+            list = belegRepository.findByStatusAndBelegKategorieOrderByBelegDatumDesc(statusFilter, kategorieFilter);
+        } else if (statusFilter != null) {
+            list = belegRepository.findByStatusOrderByUploadDatumDesc(statusFilter);
+        } else {
+            list = belegRepository.findAllByOrderByUploadDatumDesc();
+        }
+        return list.stream().map(this::toDto).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public BelegDto.Response getBeleg(Long id) {
+        return belegRepository.findById(id).map(this::toDto).orElse(null);
+    }
+
+    @Transactional(readOnly = true)
+    public Beleg getRawBeleg(Long id) {
+        return belegRepository.findById(id).orElse(null);
+    }
+
+    public Path getBelegDatei(Beleg beleg) {
+        return Paths.get(uploadPath, "belege", beleg.getGespeicherterDateiname());
+    }
+
+    // ===================== Update / Validierung =====================
+
+    @Transactional
+    public BelegDto.Response updateBeleg(Long id, BelegDto.UpdateRequest req, Mitarbeiter validierer) {
+        Beleg beleg = belegRepository.findById(id).orElse(null);
+        if (beleg == null) {
+            return null;
+        }
+
+        if (req.getBelegKategorie() != null) {
+            try {
+                beleg.setBelegKategorie(BelegKategorie.valueOf(req.getBelegKategorie()));
+            } catch (IllegalArgumentException ignored) {
+                // ungueltige Kategorie -> Feld unveraendert lassen
+            }
+        }
+        if (req.getStatus() != null) {
+            try {
+                BelegStatus neuerStatus = BelegStatus.valueOf(req.getStatus());
+                boolean wechselAufValidiert = beleg.getStatus() != BelegStatus.VALIDIERT
+                        && neuerStatus == BelegStatus.VALIDIERT;
+                beleg.setStatus(neuerStatus);
+                if (wechselAufValidiert) {
+                    beleg.setValidiertAm(LocalDateTime.now());
+                    beleg.setValidiertVon(validierer);
+                }
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        if (req.getBelegDatum() != null) beleg.setBelegDatum(req.getBelegDatum());
+        if (req.getBelegNummer() != null) beleg.setBelegNummer(req.getBelegNummer());
+        if (req.getBeschreibung() != null) beleg.setBeschreibung(req.getBeschreibung());
+        if (req.getBetragNetto() != null) beleg.setBetragNetto(req.getBetragNetto());
+        if (req.getBetragBrutto() != null) beleg.setBetragBrutto(req.getBetragBrutto());
+        if (req.getMwstSatz() != null) beleg.setMwstSatz(req.getMwstSatz());
+        if (req.getZahlungsart() != null) beleg.setZahlungsart(req.getZahlungsart());
+        if (req.getNotiz() != null) beleg.setNotiz(req.getNotiz());
+
+        if (req.getLieferantId() != null) {
+            Lieferanten l = lieferantenRepository.findById(req.getLieferantId()).orElse(null);
+            beleg.setLieferant(l);
+        }
+        if (req.getSachkontoId() != null) {
+            Sachkonto sk = sachkontoRepository.findById(req.getSachkontoId()).orElse(null);
+            beleg.setSachkonto(sk);
+        }
+
+        belegRepository.save(beleg);
+        return toDto(beleg);
+    }
+
+    @Transactional
+    public boolean deleteBeleg(Long id) {
+        Beleg beleg = belegRepository.findById(id).orElse(null);
+        if (beleg == null) {
+            return false;
+        }
+        // Datei zur Sicherheit nicht löschen — falls Steuerprüfung. Soft via VERWORFEN.
+        beleg.setStatus(BelegStatus.VERWORFEN);
+        belegRepository.save(beleg);
+        return true;
+    }
+
+    // ===================== Kassenbuch =====================
+
+    @Transactional(readOnly = true)
+    public BelegDto.KassenbuchResponse getKassenbuch(LocalDate von, LocalDate bis) {
+        List<Beleg> belege = belegRepository.findValidierteByKategorien(
+                BelegStatus.VALIDIERT,
+                List.of(BelegKategorie.KASSE_EINNAHME,
+                        BelegKategorie.KASSE_AUSGABE,
+                        BelegKategorie.PRIVATENTNAHME));
+
+        // Saldo-Start: Summe aller Bar-Bewegungen VOR dem Startdatum
+        BigDecimal saldoStart = BigDecimal.ZERO;
+        if (von != null) {
+            for (Beleg b : belege) {
+                if (b.getBelegDatum() == null) continue;
+                if (b.getBelegDatum().isBefore(von)) {
+                    saldoStart = saldoStart.add(signedBetrag(b));
+                }
+            }
+        }
+
+        // Bewegungen im Zeitraum, chronologisch aufsteigend für laufenden Saldo
+        List<Beleg> imZeitraum = new ArrayList<>();
+        for (Beleg b : belege) {
+            LocalDate d = b.getBelegDatum();
+            if (d == null) continue;
+            if (von != null && d.isBefore(von)) continue;
+            if (bis != null && d.isAfter(bis)) continue;
+            imZeitraum.add(b);
+        }
+        imZeitraum.sort(Comparator
+                .comparing(Beleg::getBelegDatum, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparing(Beleg::getId));
+
+        BigDecimal saldo = saldoStart;
+        BigDecimal sumEin = BigDecimal.ZERO;
+        BigDecimal sumAus = BigDecimal.ZERO;
+        BigDecimal sumPriv = BigDecimal.ZERO;
+
+        List<BelegDto.KassenBewegung> bewegungen = new ArrayList<>(imZeitraum.size());
+        for (Beleg b : imZeitraum) {
+            BigDecimal signed = signedBetrag(b);
+            saldo = saldo.add(signed);
+            switch (b.getBelegKategorie()) {
+                case KASSE_EINNAHME -> sumEin = sumEin.add(nullSafe(b.getBetragBrutto()));
+                case KASSE_AUSGABE -> sumAus = sumAus.add(nullSafe(b.getBetragBrutto()));
+                case PRIVATENTNAHME -> sumPriv = sumPriv.add(nullSafe(b.getBetragBrutto()));
+                default -> {
+                    // andere Kategorien sind hier nicht enthalten
+                }
+            }
+            bewegungen.add(BelegDto.KassenBewegung.builder()
+                    .belegId(b.getId())
+                    .datum(b.getBelegDatum())
+                    .kategorie(b.getBelegKategorie().name())
+                    .beschreibung(b.getBeschreibung() != null ? b.getBeschreibung() : b.getBelegNummer())
+                    .lieferantName(b.getLieferant() != null ? b.getLieferant().getLieferantenname() : null)
+                    .betrag(signed.setScale(2, RoundingMode.HALF_UP))
+                    .saldoNachher(saldo.setScale(2, RoundingMode.HALF_UP))
+                    .build());
+        }
+
+        return BelegDto.KassenbuchResponse.builder()
+                .saldoStart(saldoStart.setScale(2, RoundingMode.HALF_UP))
+                .saldoEnde(saldo.setScale(2, RoundingMode.HALF_UP))
+                .summeEinnahmen(sumEin.setScale(2, RoundingMode.HALF_UP))
+                .summeAusgaben(sumAus.setScale(2, RoundingMode.HALF_UP))
+                .summePrivatentnahmen(sumPriv.setScale(2, RoundingMode.HALF_UP))
+                .bewegungen(bewegungen)
+                .build();
+    }
+
+    private BigDecimal signedBetrag(Beleg b) {
+        BigDecimal brutto = nullSafe(b.getBetragBrutto());
+        return b.getBelegKategorie().istAusgang() ? brutto.negate() : brutto;
+    }
+
+    private BigDecimal nullSafe(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
+    // ===================== DTO-Mapping =====================
+
+    public BelegDto.Response toDto(Beleg b) {
+        return BelegDto.Response.builder()
+                .id(b.getId())
+                .belegKategorie(b.getBelegKategorie() != null ? b.getBelegKategorie().name() : null)
+                .status(b.getStatus() != null ? b.getStatus().name() : null)
+                .kiAnalyseStatus(b.getKiAnalyseStatus() != null ? b.getKiAnalyseStatus().name() : null)
+                .belegDatum(b.getBelegDatum())
+                .belegNummer(b.getBelegNummer())
+                .beschreibung(b.getBeschreibung())
+                .betragNetto(b.getBetragNetto())
+                .betragBrutto(b.getBetragBrutto())
+                .mwstSatz(b.getMwstSatz())
+                .zahlungsart(b.getZahlungsart())
+                .lieferantId(b.getLieferant() != null ? b.getLieferant().getId() : null)
+                .lieferantName(b.getLieferant() != null ? b.getLieferant().getLieferantenname() : null)
+                .sachkontoId(b.getSachkonto() != null ? b.getSachkonto().getId() : null)
+                .sachkontoBezeichnung(b.getSachkonto() != null ? b.getSachkonto().getBezeichnung() : null)
+                .sachkontoNummer(b.getSachkonto() != null ? b.getSachkonto().getNummer() : null)
+                .sachkontoTyp(b.getSachkonto() != null && b.getSachkonto().getKontoTyp() != null
+                        ? b.getSachkonto().getKontoTyp().name() : null)
+                .kiVorgeschlagenerLieferant(b.getKiVorgeschlagenerLieferant())
+                .kiConfidence(b.getKiConfidence())
+                .kiFehlerText(b.getKiFehlerText())
+                .originalDateiname(b.getOriginalDateiname())
+                .mimeType(b.getMimeType())
+                .uploadDatum(b.getUploadDatum())
+                .uploadedById(b.getUploadedBy() != null ? b.getUploadedBy().getId() : null)
+                .uploadedByName(mitarbeiterName(b.getUploadedBy()))
+                .validiertAm(b.getValidiertAm())
+                .validiertVonId(b.getValidiertVon() != null ? b.getValidiertVon().getId() : null)
+                .validiertVonName(mitarbeiterName(b.getValidiertVon()))
+                .notiz(b.getNotiz())
+                .build();
+    }
+
+    private String mitarbeiterName(Mitarbeiter m) {
+        if (m == null) return null;
+        String v = m.getVorname() != null ? m.getVorname() : "";
+        String n = m.getNachname() != null ? m.getNachname() : "";
+        return (v + " " + n).trim();
+    }
+
+    // Helper: Mitarbeiter per Login-Token holen — wird vom Controller benutzt,
+    // damit alle Token-Lookups an einer Stelle liegen.
+    public Mitarbeiter findByToken(String token) {
+        if (token == null || token.isBlank()) return null;
+        // findByLoginTokenAndAktivTrue: deaktivierte Mitarbeiter mit altem Token
+        // verlieren sofort den Zugriff (konsistent mit Zeiterfassung-Login).
+        return mitarbeiterRepository.findByLoginTokenAndAktivTrue(token).orElse(null);
+    }
+
+}

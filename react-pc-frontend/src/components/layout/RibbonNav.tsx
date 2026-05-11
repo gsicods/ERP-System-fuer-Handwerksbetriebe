@@ -5,7 +5,7 @@ import {
     BarChart3, Briefcase, Building2, Clock, Euro, FileCheck, FileJson,
     FileText, Gem, Home, Layers, List, Mail, MailPlus, Package, Settings,
     ShoppingCart, Truck, ChevronUp, ChevronDown, User, LogOut,
-    Calendar, CalendarDays, Plane, Shield
+    Calendar, CalendarDays, Plane, Shield, Receipt
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { NotificationBell } from './NotificationBell';
@@ -150,6 +150,7 @@ const NAVIGATION: NavCategory[] = [
                 items: [
                     { name: 'Offene Posten', href: '/offeneposten', icon: Euro },
                     { name: 'Rechnungen', href: '/rechnungsuebersicht', icon: FileText },
+                    { name: 'Belege & Kasse', href: '/belege-kasse', icon: Receipt },
                     { name: 'Mietabrechnung', href: '/miete', icon: Home },
                 ]
             },
