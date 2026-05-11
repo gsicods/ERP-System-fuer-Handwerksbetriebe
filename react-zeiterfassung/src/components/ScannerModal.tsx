@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import Webcam from 'react-webcam'
+import Camera, { type CameraHandle } from './Camera'
 import { X, Loader2, Check, ArrowRight, Plus, Trash2, Layers, Wand2, ScanLine } from 'lucide-react'
 import { jsPDF } from "jspdf"
 import { detectDocumentCorners, detectDocumentCornersOnCanvasSync, preloadEdgeDetector } from '../services/DocumentEdgeDetector'
@@ -76,9 +76,13 @@ function solveHomography(srcPts: Point[], dstPts: Point[]) {
 }
 
 export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
-    const webcamRef = useRef<Webcam>(null)
+    const webcamRef = useRef<CameraHandle>(null)
     const [step, setStep] = useState<'CAMERA' | 'CROP' | 'PREVIEW'>('CAMERA')
     const [isProcessing, setIsProcessing] = useState(false)
+    // Fehler-Text, wenn getUserMedia rejectet (Permission-Deny, kein Geraet,
+    // belegte Hardware). Wird ueber dem Video-Feed eingeblendet, damit der
+    // User nicht einfach auf ein schwarzes Bild starrt.
+    const [cameraError, setCameraError] = useState<string | null>(null)
 
     // Multi-Page State
     const [pages, setPages] = useState<Blob[]>([])
@@ -692,19 +696,34 @@ export default function ScannerModal({ onClose, onSave }: ScannerModalProps) {
             >
                 {step === 'CAMERA' && (
                     <>
-                        <Webcam
+                        <Camera
                             ref={webcamRef}
-                            audio={false}
-                            screenshotFormat="image/jpeg"
                             screenshotQuality={1}
-                            forceScreenshotSourceSize={true}
                             videoConstraints={{
                                 facingMode: 'environment',
                                 width: { min: 1920, ideal: 3840, max: 4096 },
                                 height: { min: 1080, ideal: 2160, max: 2160 }
                             }}
                             className="absolute inset-0 w-full h-full object-cover"
+                            onError={(err) => {
+                                const msg = err instanceof Error ? err.message : String(err)
+                                const isPermission = /denied|not allowed|notallowed/i.test(msg)
+                                setCameraError(
+                                    isPermission
+                                        ? 'Kein Zugriff auf die Kamera. Bitte in den iOS-Einstellungen unter Safari → Kamera erlauben und die App neu starten.'
+                                        : `Kamera konnte nicht gestartet werden: ${msg}`
+                                )
+                            }}
                         />
+
+                        {cameraError && (
+                            <div className="absolute inset-0 z-30 flex items-center justify-center p-6 bg-black/80">
+                                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-5 max-w-sm text-center">
+                                    <p className="text-rose-800 font-semibold mb-2">Kamera nicht verfügbar</p>
+                                    <p className="text-sm text-slate-700">{cameraError}</p>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Live-Erkennungs-Overlay: Canvas hat dieselbe object-cover-
                             Geometrie wie das Video, daher decken sich die gezeichneten

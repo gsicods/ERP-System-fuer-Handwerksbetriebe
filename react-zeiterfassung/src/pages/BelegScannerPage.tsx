@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import ScannerModal from '../components/ScannerModal'
 import { SupplierSelectionModal } from '../components/SupplierSelectionModal'
+import { releaseCameraStream } from '../services/cameraStreamService'
 
 interface LieferantOption {
     id: number
@@ -70,6 +71,14 @@ export default function BelegScannerPage() {
             .catch(() => setPermission({ darfScannen: false, darfSehen: false }))
             .finally(() => setPermissionLoading(false))
     }, [token])
+
+    // Beim Verlassen der Scanner-Page Kamera-Tracks freigeben. Innerhalb der
+    // Page bleibt der MediaStream im cameraStreamService gecacht — so wird
+    // bei iOS PWA pro Page-Besuch nur EIN Permission-Prompt ausgeloest,
+    // statt bei jedem Modal-Open neu zu fragen.
+    useEffect(() => {
+        return () => { releaseCameraStream() }
+    }, [])
 
     const enqueue = (file: File, lieferant: LieferantOption | null) => {
         const item: QueueItem = {

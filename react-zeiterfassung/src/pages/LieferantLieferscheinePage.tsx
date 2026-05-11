@@ -5,6 +5,7 @@ import { ArrowLeft, Search, ScanLine, Upload, FileText, Loader2, X, ChevronRight
 import ScannerModal from '../components/ScannerModal'
 import MobileDatePicker from '../components/MobileDatePicker'
 import { NotificationService } from '../services/NotificationService'
+import { releaseCameraStream } from '../services/cameraStreamService'
 
 interface Lieferant {
     id: number
@@ -91,6 +92,13 @@ export default function LieferantLieferscheinePage() {
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [lieferantId])
+
+    // Beim Verlassen der Page Kamera-Tracks freigeben. Innerhalb der Page
+    // bleibt der MediaStream im cameraStreamService gecacht — so wird bei
+    // iOS PWA pro Page-Besuch nur EIN Permission-Prompt ausgeloest.
+    useEffect(() => {
+        return () => { releaseCameraStream() }
+    }, [])
 
     const loadData = async () => {
         setLoading(true)
