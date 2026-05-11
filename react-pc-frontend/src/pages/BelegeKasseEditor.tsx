@@ -7,6 +7,7 @@ import {
 import { PageLayout } from '../components/layout/PageLayout';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
+import { Select } from '../components/ui/select-custom';
 import { LieferantSearchModal, type LieferantSuchErgebnis } from '../components/LieferantSearchModal';
 
 // ===================== Types =====================
@@ -142,6 +143,27 @@ const formatDateTime = (iso?: string | null): string => {
     const d = new Date(iso);
     return Number.isNaN(d.getTime()) ? '–' : d.toLocaleString('de-DE');
 };
+
+const SACHKONTO_TYP_LABEL: Record<SachkontoTyp, string> = {
+    AUFWAND: 'Aufwand', ERTRAG: 'Ertrag', PRIVAT: 'Privat', NEUTRAL: 'Neutral',
+};
+
+// Flacht Sachkonten in Optionen ab und gruppiert sie ueber ein Praefix im Label,
+// damit die Pflicht-<Select>-Komponente (ohne optgroup-Support) verwendet werden
+// kann. Reihenfolge: Aufwand, Ertrag, Privat, Neutral – innerhalb sortiert nach
+// `sortierung`.
+function buildSachkontoOptions(sachkonten: Sachkonto[]): { value: string; label: string }[] {
+    const order: SachkontoTyp[] = ['AUFWAND', 'ERTRAG', 'PRIVAT', 'NEUTRAL'];
+    return order.flatMap(typ =>
+        sachkonten
+            .filter(s => s.kontoTyp === typ)
+            .sort((a, b) => a.sortierung - b.sortierung)
+            .map(s => ({
+                value: String(s.id),
+                label: `${SACHKONTO_TYP_LABEL[typ]} · ${s.nummer ? `${s.nummer} ` : ''}${s.bezeichnung}`,
+            }))
+    );
+}
 
 const KI_LABEL: Record<KiStatus, { label: string; cls: string }> = {
     PENDING: { label: 'KI wartet…', cls: 'bg-slate-100 text-slate-500' },
@@ -527,15 +549,11 @@ function UmbuchungModal({ sachkonten, onClose, onCreated }: {
                     )}
 
                     <Field label="Art der Buchung">
-                        <select
+                        <Select
                             value={form.belegKategorie}
-                            onChange={e => update('belegKategorie', e.target.value as BelegKategorie)}
-                            className={inputCls}
-                        >
-                            {KATEGORIEN_UMBUCHUNG.map(k => (
-                                <option key={k} value={k}>{KATEGORIE_LABELS[k]}</option>
-                            ))}
-                        </select>
+                            onChange={v => update('belegKategorie', v as BelegKategorie)}
+                            options={KATEGORIEN_UMBUCHUNG.map(k => ({ value: k, label: KATEGORIE_LABELS[k] }))}
+                        />
                     </Field>
 
                     <div className="grid grid-cols-2 gap-3">
@@ -568,18 +586,12 @@ function UmbuchungModal({ sachkonten, onClose, onCreated }: {
                                 className={inputCls} />
                         </Field>
                         <Field label="Konto (optional)">
-                            <select
-                                value={form.sachkontoId ?? ''}
-                                onChange={e => update('sachkontoId', e.target.value ? Number(e.target.value) : null)}
-                                className={inputCls}
-                            >
-                                <option value="">– kein Konto –</option>
-                                {sachkonten.map(s => (
-                                    <option key={s.id} value={s.id}>
-                                        {s.nummer ? `${s.nummer} ` : ''}{s.bezeichnung}
-                                    </option>
-                                ))}
-                            </select>
+                            <Select
+                                value={form.sachkontoId != null ? String(form.sachkontoId) : ''}
+                                onChange={v => update('sachkontoId', v ? Number(v) : null)}
+                                placeholder="– kein Konto –"
+                                options={buildSachkontoOptions(sachkonten)}
+                            />
                         </Field>
                     </div>
 
@@ -882,43 +894,23 @@ function BelegDetailModal({ beleg, sachkonten, onClose, onSaved, onDeleted }: {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                                 <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Wo gezahlt</label>
-                                <select
+                                <Select
                                     value={form.belegKategorie}
-                                    onChange={e => update('belegKategorie', e.target.value as BelegKategorie)}
-                                    className="w-full p-2.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-rose-500 outline-none"
-                                >
-                                    {Object.entries(KATEGORIE_LABELS).map(([k, v]) => (
-                                        <option key={k} value={k}>{v}</option>
-                                    ))}
-                                </select>
+                                    onChange={v => update('belegKategorie', v as BelegKategorie)}
+                                    options={(Object.entries(KATEGORIE_LABELS) as [BelegKategorie, string][])
+                                        .map(([k, label]) => ({ value: k, label }))}
+                                />
                             </div>
                             <div>
                                 <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1 inline-flex items-center gap-1">
                                     <BookOpen className="w-3 h-3" /> Konto / Wofür?
                                 </label>
-                                <select
-                                    value={form.sachkontoId ?? ''}
-                                    onChange={e => update('sachkontoId', e.target.value ? Number(e.target.value) : null)}
-                                    className="w-full p-2.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-rose-500 outline-none"
-                                >
-                                    <option value="">– kein Konto zugewiesen –</option>
-                                    {(['AUFWAND', 'ERTRAG', 'PRIVAT', 'NEUTRAL'] as SachkontoTyp[]).map(typ => {
-                                        const items = sachkonten.filter(s => s.kontoTyp === typ);
-                                        if (items.length === 0) return null;
-                                        const labels: Record<SachkontoTyp, string> = {
-                                            AUFWAND: 'Aufwand', ERTRAG: 'Ertrag', PRIVAT: 'Privat', NEUTRAL: 'Neutral',
-                                        };
-                                        return (
-                                            <optgroup key={typ} label={labels[typ]}>
-                                                {items.map(s => (
-                                                    <option key={s.id} value={s.id}>
-                                                        {s.nummer ? `${s.nummer} ` : ''}{s.bezeichnung}
-                                                    </option>
-                                                ))}
-                                            </optgroup>
-                                        );
-                                    })}
-                                </select>
+                                <Select
+                                    value={form.sachkontoId != null ? String(form.sachkontoId) : ''}
+                                    onChange={v => update('sachkontoId', v ? Number(v) : null)}
+                                    placeholder="– kein Konto zugewiesen –"
+                                    options={buildSachkontoOptions(sachkonten)}
+                                />
                             </div>
                         </div>
 
