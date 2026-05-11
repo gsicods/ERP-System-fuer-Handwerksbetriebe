@@ -14,6 +14,9 @@ import java.util.List;
 import java.util.Map;
 import org.example.email.EmailService;
 import org.example.kalkulationsprogramm.domain.Anfrage;
+import org.example.kalkulationsprogramm.domain.Email;
+import org.example.kalkulationsprogramm.domain.EmailDirection;
+import org.example.kalkulationsprogramm.domain.EmailZuordnungTyp;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -24,20 +27,23 @@ class AnfrageBestaetigungVersandServiceTest {
     private EmailTextTemplateService emailTextTemplateService;
     private EmailSignatureService emailSignatureService;
     private SystemSettingsService systemSettingsService;
+    private EmailOutboundPersistenceService outboundPersistenceService;
     private EmailService emailService;
     private AnfrageBestaetigungVersandService service;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         emailTextTemplateService = Mockito.mock(EmailTextTemplateService.class);
         emailSignatureService = Mockito.mock(EmailSignatureService.class);
         systemSettingsService = Mockito.mock(SystemSettingsService.class);
+        outboundPersistenceService = Mockito.mock(EmailOutboundPersistenceService.class);
         emailService = Mockito.mock(EmailService.class);
 
         // Echte Spring-Bean-Verkabelung umgehen: wir ueberschreiben die
         // EmailService-Factory, damit der Test keinen echten SMTP-Connect macht.
         service = new AnfrageBestaetigungVersandService(
-                emailTextTemplateService, emailSignatureService, systemSettingsService) {
+                emailTextTemplateService, emailSignatureService, systemSettingsService,
+                outboundPersistenceService) {
             @Override
             EmailService baueEmailService() {
                 return emailService;
@@ -48,10 +54,15 @@ class AnfrageBestaetigungVersandServiceTest {
         given(systemSettingsService.getMailFromAddress()).willReturn("kontakt@example.de");
         given(emailSignatureService.appendSystemSignatureIfConfigured(anyString()))
                 .willAnswer(inv -> inv.getArgument(0) + "<signatur/>");
+        given(emailService.sendEmailAndReturnMessageId(
+                anyString(), Mockito.any(), anyString(), anyString(), anyString(),
+                Mockito.any(), Mockito.any()))
+                .willReturn("<test-msgid@example.de>");
+        given(outboundPersistenceService.existsByMessageId(anyString())).willReturn(false);
     }
 
     @Test
-    void rendertVorlageMitFunnelDatenUndVersendetAnErstenEmpfaenger() {
+    void rendertVorlageMitFunnelDatenUndVersendetAnErstenEmpfaenger() throws Exception {
         Anfrage anfrage = baseAnfrage();
         given(emailTextTemplateService.render(eq("WEBSITE_ANFRAGE_BESTAETIGUNG"), any()))
                 .willReturn(new EmailService.EmailContent(
@@ -77,7 +88,7 @@ class AnfrageBestaetigungVersandServiceTest {
                 .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")));
         assertThat(ctx).containsEntry("ANFRAGENUMMER", "42");
 
-        verify(emailService).sendEmail(
+        verify(emailService).sendEmailAndReturnMessageId(
                 eq("max@example.de"),
                 eq(null),
                 eq("kontakt@example.de"),
@@ -85,6 +96,75 @@ class AnfrageBestaetigungVersandServiceTest {
                 eq("<p>{{ANREDE}}</p><p>{{NACHRICHT}}</p><signatur/>"),
                 eq(null),
                 eq(null));
+    }
+
+    @Test
+    void persistiertVersandteMailDirektMitAnfrageZuordnung() throws Exception {
+        Anfrage anfrage = baseAnfrage();
+        given(emailTextTemplateService.render(eq("WEBSITE_ANFRAGE_BESTAETIGUNG"), any()))
+                .willReturn(new EmailService.EmailContent("Anfrage erhalten", "<p>Hallo</p>"));
+
+        service.versendeBestaetigung(anfrage, "Max", "Mustermann", "Bitte um Angebot");
+
+        ArgumentCaptor<Email> emailCaptor = ArgumentCaptor.forClass(Email.class);
+        verify(outboundPersistenceService).speichereOutEmail(emailCaptor.capture());
+        Email gespeichert = emailCaptor.getValue();
+        assertThat(gespeichert.getAnfrage()).isSameAs(anfrage);
+        assertThat(gespeichert.getZuordnungTyp()).isEqualTo(EmailZuordnungTyp.ANFRAGE);
+        assertThat(gespeichert.getDirection()).isEqualTo(EmailDirection.OUT);
+        assertThat(gespeichert.getMessageId()).isEqualTo("<test-msgid@example.de>");
+        assertThat(gespeichert.getRecipient()).isEqualTo("max@example.de");
+        assertThat(gespeichert.getFromAddress()).isEqualTo("kontakt@example.de");
+        assertThat(gespeichert.isRead()).isTrue();
+        assertThat(gespeichert.getSentAt()).isNotNull();
+    }
+
+    @Test
+    void persistenzFehlerWirdGeschlucktUndMailGiltTrotzdemAlsErfolgreich() throws Exception {
+        // Wenn die Sub-Transaktion (REQUIRES_NEW) wirft — z.B. weil der
+        // IMAP-Sent-Scheduler die Mail Millisekunden vorher importiert hat
+        // (Unique-Constraint auf messageId) — darf das nicht propagieren.
+        // Die SMTP-Mail ist beim Kunden bereits angekommen, der IMAP-Poll
+        // legt den DB-Eintrag spaeter sicher an.
+        Anfrage anfrage = baseAnfrage();
+        given(emailTextTemplateService.render(anyString(), any()))
+                .willReturn(new EmailService.EmailContent("Subject", "Body"));
+        Mockito.doThrow(new RuntimeException("DB down"))
+                .when(outboundPersistenceService).speichereOutEmail(any());
+
+        boolean ok = service.versendeBestaetigung(anfrage, "Max", "Mustermann", "Hi");
+
+        assertThat(ok).isTrue();
+    }
+
+    @Test
+    void leereMessageIdLoestKeinenDbEintragAus() throws Exception {
+        // Falls JavaMail keine Message-ID liefert (theoretischer Edge-Case),
+        // ueberspringen wir den DB-Eintrag und ueberlassen das dem IMAP-Sent-Poll.
+        Anfrage anfrage = baseAnfrage();
+        given(emailTextTemplateService.render(anyString(), any()))
+                .willReturn(new EmailService.EmailContent("Subject", "Body"));
+        given(emailService.sendEmailAndReturnMessageId(
+                any(), any(), any(), any(), any(), any(), any()))
+                .willReturn(null);
+
+        boolean ok = service.versendeBestaetigung(anfrage, "Max", "Mustermann", "Hi");
+
+        assertThat(ok).isTrue();
+        verify(outboundPersistenceService, never()).speichereOutEmail(any());
+    }
+
+    @Test
+    void duplikatPersistenzWirdUebersprungen() throws Exception {
+        Anfrage anfrage = baseAnfrage();
+        given(emailTextTemplateService.render(anyString(), any()))
+                .willReturn(new EmailService.EmailContent("Subject", "Body"));
+        given(outboundPersistenceService.existsByMessageId("<test-msgid@example.de>")).willReturn(true);
+
+        boolean ok = service.versendeBestaetigung(anfrage, "Max", "Mustermann", "Hallo");
+
+        assertThat(ok).isTrue();
+        verify(outboundPersistenceService, never()).speichereOutEmail(any());
     }
 
     @Test
@@ -115,18 +195,20 @@ class AnfrageBestaetigungVersandServiceTest {
     }
 
     @Test
-    void brichtAbWennKeineAktiveVorlageExistiert() {
+    void brichtAbWennKeineAktiveVorlageExistiert() throws Exception {
         Anfrage anfrage = baseAnfrage();
         given(emailTextTemplateService.render(anyString(), any())).willReturn(null);
 
         boolean ok = service.versendeBestaetigung(anfrage, "Max", "Mustermann", "Hallo");
 
         assertThat(ok).isFalse();
-        verify(emailService, never()).sendEmail(any(), any(), any(), any(), any(), any(), any());
+        verify(emailService, never()).sendEmailAndReturnMessageId(
+                any(), any(), any(), any(), any(), any(), any());
+        verify(outboundPersistenceService, never()).speichereOutEmail(any());
     }
 
     @Test
-    void brichtAbWennSmtpNichtKonfiguriertIst() {
+    void brichtAbWennSmtpNichtKonfiguriertIst() throws Exception {
         Anfrage anfrage = baseAnfrage();
         given(systemSettingsService.isSmtpConfigured()).willReturn(false);
         given(emailTextTemplateService.render(anyString(), any()))
@@ -135,7 +217,9 @@ class AnfrageBestaetigungVersandServiceTest {
         boolean ok = service.versendeBestaetigung(anfrage, "Max", "Mustermann", "Hallo");
 
         assertThat(ok).isFalse();
-        verify(emailService, never()).sendEmail(any(), any(), any(), any(), any(), any(), any());
+        verify(emailService, never()).sendEmailAndReturnMessageId(
+                any(), any(), any(), any(), any(), any(), any());
+        verify(outboundPersistenceService, never()).speichereOutEmail(any());
     }
 
     @Test

@@ -1,5 +1,6 @@
 package org.example.kalkulationsprogramm.service;
 
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
@@ -7,6 +8,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.email.EmailService;
 import org.example.kalkulationsprogramm.domain.Anfrage;
+import org.example.kalkulationsprogramm.domain.Email;
+import org.example.kalkulationsprogramm.domain.EmailDirection;
+import org.example.kalkulationsprogramm.util.EmailHtmlSanitizer;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.HtmlUtils;
 
@@ -43,6 +47,7 @@ public class AnfrageBestaetigungVersandService {
     private final EmailTextTemplateService emailTextTemplateService;
     private final EmailSignatureService emailSignatureService;
     private final SystemSettingsService systemSettingsService;
+    private final EmailOutboundPersistenceService outboundPersistenceService;
 
     /**
      * Versendet eine Bestätigungsmail an den ersten in der Anfrage hinterlegten
@@ -83,7 +88,7 @@ public class AnfrageBestaetigungVersandService {
             String absender = systemSettingsService.getMailFromAddress();
 
             EmailService emailService = baueEmailService();
-            emailService.sendEmail(
+            String messageId = emailService.sendEmailAndReturnMessageId(
                     empfaenger,
                     null,
                     absender,
@@ -91,6 +96,9 @@ public class AnfrageBestaetigungVersandService {
                     htmlMitSignatur,
                     null,
                     null);
+
+            persistiereAusgangsEmail(anfrage, empfaenger, absender,
+                    content.subject(), htmlMitSignatur, messageId);
 
             log.info("Anfrage-Bestaetigung an {} versendet (anfrageId={})", empfaenger, anfrage.getId());
             return true;
@@ -100,6 +108,61 @@ public class AnfrageBestaetigungVersandService {
             log.error("Anfrage-Bestaetigung fuer Anfrage {} fehlgeschlagen: {}",
                     anfrage.getId(), e.getMessage(), e);
             return false;
+        }
+    }
+
+    /**
+     * Persistiert die gerade per SMTP versandte Bestaetigung als OUT-Email und
+     * ordnet sie direkt der Anfrage zu — so taucht sie sofort im E-Mail-Center
+     * der Anfrage auf (ohne auf den naechsten IMAP-Sent-Poll zu warten).
+     *
+     * <p>Die Dedup ueber {@code messageId} im {@code EmailImportService} sorgt
+     * dafuer, dass der spaetere IMAP-Scan des Sent-Ordners keinen Duplikat-Eintrag
+     * anlegt: gleiche Message-ID -> {@code existsByMessageId == true}.</p>
+     *
+     * <p>Fehler werden geschluckt — die SMTP-Mail ist an dieser Stelle bereits
+     * raus; ein DB-Problem darf den Funnel-Flow nicht kippen.</p>
+     */
+    private void persistiereAusgangsEmail(Anfrage anfrage, String empfaenger, String absender,
+                                          String subject, String htmlBody, String messageId) {
+        if (messageId == null || messageId.isBlank()) {
+            log.warn("Anfrage-Bestaetigung ohne Message-ID — kein DB-Eintrag, IMAP-Poll uebernimmt (anfrageId={})",
+                    anfrage.getId());
+            return;
+        }
+        try {
+            if (outboundPersistenceService.existsByMessageId(messageId)) {
+                return;
+            }
+            Email email = new Email();
+            email.assignToAnfrage(anfrage);
+            email.setMessageId(messageId);
+            email.setDirection(EmailDirection.OUT);
+            email.setFromAddress(absender);
+            email.setRecipient(empfaenger);
+            email.setSubject(subject);
+            email.setHtmlBody(htmlBody);
+            email.setBody(EmailHtmlSanitizer.htmlToPlainText(htmlBody));
+            email.setSentAt(LocalDateTime.now());
+            email.setRead(true);
+            // imapFolder konsistent mit IMAP-importierten Sent-Mails, damit
+            // E-Mail-Center-Filter "Gesendet" gleich matcht. rawBody bleibt null —
+            // wir haben hier keinen ungeparsten MIME-Roh-Body, nur HTML.
+            email.setImapFolder("INBOX.Sent");
+            outboundPersistenceService.speichereOutEmail(email);
+        } catch (org.springframework.dao.DataIntegrityViolationException race) {
+            // Race-Ausgang: der IMAP-Sent-Poll hat die Mail zwischen unserem
+            // existsByMessageId-Check und dem save bereits persistiert. Der
+            // Unique-Constraint auf messageId hat den Doppel-Insert verhindert
+            // — kein Fehler im fachlichen Sinn.
+            log.info("Anfrage-Bestaetigung bereits vom IMAP-Sent-Poll persistiert (race) — anfrageId={}, messageId={}",
+                    anfrage.getId(), messageId);
+        } catch (Exception e) {
+            // Failsafe: alles andere (DB down, JPA-Validation, …) wird hier
+            // geschluckt. Die SMTP-Mail ist beim Kunden, und der IMAP-Sent-Poll
+            // legt den DB-Eintrag spaeter via Message-ID-Dedupe ohnehin an.
+            log.error("Konnte Anfrage-Bestaetigung nicht in email-Tabelle persistieren (anfrageId={}, messageId={}): {}",
+                    anfrage.getId(), messageId, e.getMessage(), e);
         }
     }
 
