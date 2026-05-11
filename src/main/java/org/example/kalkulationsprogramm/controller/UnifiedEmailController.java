@@ -1918,17 +1918,34 @@ public class UnifiedEmailController {
                 });
     }
 
-    /** Match-Pattern für E-Mail-Adressen in beliebigen Header-Werten (Display-Name + Adresse). */
+    /**
+     * Match-Pattern für E-Mail-Adressen in beliebigen Header-Werten (Display-Name + Adresse).
+     * Possessive Quantoren (`++`) verhindern Backtracking und damit polynomiales ReDoS
+     * (CodeQL java/polynomial-redos) auf Eingaben mit vielen Wiederholungen aus den Zeichenklassen.
+     * Die Domain ist als Folge von `label.`-Gruppen + TLD aufgebaut, damit der Punkt in
+     * keiner Zeichenklasse mit `++` doppelt vorkommt (sonst würde der TLD-Teil leer laufen).
+     */
     private static final java.util.regex.Pattern EMAIL_PATTERN = java.util.regex.Pattern
-            .compile("[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}");
+            .compile("[A-Za-z0-9._%+\\-]++@(?:[A-Za-z0-9\\-]++\\.)++[A-Za-z]{2,}+");
+
+    /**
+     * Defense-in-depth-Cap, um die Regex-Laufzeit auf adversarialen Eingaben endgültig zu deckeln.
+     * RFC 5322 begrenzt Header-Zeilen auf 998 Zeichen; 4096 lässt Display-Namen, Encoded-Words
+     * und kurze To-Listen großzügig zu. Bewusster Trade-off: Bei extrem langer To-/Cc-Liste
+     * wird nur die erste Adresse gesucht, ein Cut innerhalb einer einzelnen Adresse ist daher
+     * praktisch ausgeschlossen.
+     */
+    private static final int EMAIL_HEADER_MAX_LEN = 4096;
 
     /**
      * Extrahiert die erste E-Mail-Adresse aus einem rohen Header-Wert
      * (z.B. {@code "Max Mustermann <max@example.com>, foo@bar.com"} → {@code "max@example.com"}).
+     * Package-private für direkte Unit-Tests.
      */
-    private static String extractFirstEmailAddress(String raw) {
+    static String extractFirstEmailAddress(String raw) {
         if (raw == null || raw.isBlank()) return null;
-        java.util.regex.Matcher m = EMAIL_PATTERN.matcher(raw);
+        String input = raw.length() > EMAIL_HEADER_MAX_LEN ? raw.substring(0, EMAIL_HEADER_MAX_LEN) : raw;
+        java.util.regex.Matcher m = EMAIL_PATTERN.matcher(input);
         return m.find() ? m.group() : null;
     }
 }
