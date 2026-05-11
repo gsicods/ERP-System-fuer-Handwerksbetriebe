@@ -1039,7 +1039,7 @@ function BelegDetailModal({ beleg, sachkonten, zahlungsarten, onClose, onSaved, 
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-[98vw] max-h-[95vh] flex flex-col overflow-hidden">
                 <div className="p-4 border-b border-slate-200 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <Receipt className="w-5 h-5 text-rose-600" />
@@ -1051,14 +1051,14 @@ function BelegDetailModal({ beleg, sachkonten, zahlungsarten, onClose, onSaved, 
                     <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-5 h-5 text-slate-500" /></button>
                 </div>
 
-                <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-5 gap-0 min-h-0">
+                <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-3 gap-0 min-h-0">
                     {/* Vorschau */}
-                    <div className="lg:col-span-2 bg-slate-100 flex flex-col items-center justify-center p-4 border-r border-slate-200 overflow-auto">
+                    <div className="lg:col-span-2 bg-slate-100 flex flex-col items-stretch p-4 border-r border-slate-200 overflow-auto">
                         <BelegPreview belegId={beleg.id} mimeType={beleg.mimeType} originalDateiname={beleg.originalDateiname} />
                     </div>
 
                     {/* Form */}
-                    <div className="lg:col-span-3 overflow-auto p-6 space-y-5">
+                    <div className="lg:col-span-1 overflow-auto p-6 space-y-5">
                         {beleg.kiAnalyseStatus === 'FAILED' && (
                             <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
                                 <strong>KI-Analyse fehlgeschlagen:</strong> {beleg.kiFehlerText}
