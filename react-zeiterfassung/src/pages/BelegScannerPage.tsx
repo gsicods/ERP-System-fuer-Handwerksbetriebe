@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-    ArrowLeft, ScanLine, Upload, Loader2, CheckCircle2, AlertCircle,
-    Receipt, RefreshCw, X, Building2, ChevronRight, SplitSquareHorizontal, CheckSquare, ListChecks, Calculator,
+    ArrowLeft, ScanLine, Loader2, CheckCircle2, AlertCircle,
+    Receipt, RefreshCw, X, Plus, ChevronRight, SplitSquareHorizontal, CheckSquare, ListChecks, FileText,
 } from 'lucide-react'
 import ScannerModal from '../components/ScannerModal'
 import { SupplierSelectionModal } from '../components/SupplierSelectionModal'
@@ -14,22 +14,25 @@ interface LieferantOption {
 }
 
 /**
- * Mobile-Beleg-Scanner für die Buchhaltung.
+ * Mobile-Beleg-Scanner mit Wizard-Flow.
  *
- * Workflow: Foto -> sofort asynchron hochladen -> Scanner ist sofort wieder
- * frei für den nächsten Beleg. Keine Validierung am Handy — alle Korrekturen
- * passieren am PC unter "Belege & Kasse".
+ * Schritte pro Beleg:
+ *  1) Quelle: Scannen vs. Galerie (PDFs)
+ *  2) Lieferant optional zuweisen (oder überspringen)
+ *  3) Aufteilung: Ganz für Firma vs. Nur Teile
+ *  4) Aufnahme: Kamera-Scan oder PDF-Auswahl
  *
- * Die Upload-Queue wird im Hintergrund abgearbeitet und visuell unten als
- * "läuft / fertig / fehlgeschlagen"-Karten dargestellt. Fehlgeschlagene
- * Uploads können retried werden.
+ * Anschliessend laeuft der Upload im Hintergrund, der Scanner ist sofort
+ * wieder frei. Bei "Nur Teile" extrahiert der Server die Positionen und
+ * der Nutzer hakt sie auf einer Folgeseite an. Bei "Ganz" ist der Mobile-
+ * Vorgang abgeschlossen — die Validierung findet am PC statt.
  */
 type ItemStatus = 'pending' | 'uploading' | 'done' | 'failed'
 
-// Aufteilungs-Modus: vom Nutzer VOR dem Scan gewaehlt.
-// VOLLSTAENDIG = ganzer Beleg fuer die Firma (Standardfall)
-// TEILWEISE    = Mischbon, Positionen-Auswahl per Checkbox-Liste folgt nach KI-Extraktion
 type AufteilungsModus = 'VOLLSTAENDIG' | 'TEILWEISE'
+
+type WizardStep = 'idle' | 'source' | 'lieferant' | 'aufteilung'
+type CaptureSource = 'scan' | 'gallery'
 
 interface QueueItem {
     localId: string
@@ -38,8 +41,6 @@ interface QueueItem {
     serverId?: number
     error?: string
     addedAt: number
-    // Optional vom User vor dem Scan ausgewaehlter Lieferant — wird beim Upload
-    // mitgegeben, damit die KI-Auto-Eingangsrechnung sofort verknuepft werden kann.
     lieferantId?: number
     lieferantName?: string
     aufteilungsModus: AufteilungsModus
@@ -57,14 +58,16 @@ export default function BelegScannerPage() {
     const [showScanner, setShowScanner] = useState(false)
     const [queue, setQueue] = useState<QueueItem[]>([])
     const fileInputRef = useRef<HTMLInputElement>(null)
-    // Lieferanten-Picker laeuft VOR dem Scanner/File-Picker.
-    // pendingAction merkt sich, was nach der Auswahl getriggert werden soll.
-    const [supplierPickerOpen, setSupplierPickerOpen] = useState(false)
-    const [pendingAction, setPendingAction] = useState<'scan' | 'gallery' | null>(null)
-    const [chosenLieferant, setChosenLieferant] = useState<LieferantOption | null>(null)
-    // Aufteilungs-Modus fuer ALLE Scans dieser Session, bis der Nutzer es umschaltet.
-    // Beim Mischbon-Workflow waehlt er einmal "Teilweise" und scannt direkt mehrere.
-    const [aufteilungsModus, setAufteilungsModus] = useState<AufteilungsModus>('VOLLSTAENDIG')
+
+    // Wizard-State: ein Beleg wird in 3 Schritten konfiguriert, dann aufgenommen.
+    const [wizardStep, setWizardStep] = useState<WizardStep>('idle')
+    const [draftSource, setDraftSource] = useState<CaptureSource | null>(null)
+    const [draftLieferant, setDraftLieferant] = useState<LieferantOption | null>(null)
+
+    // Halte den aktiven Capture-Kontext zwischen Wizard-Ende und Datei-Eingang
+    // ausserhalb des Render-Zyklus. Vermeidet State-Race wenn das File-Event
+    // noch waehrend des Rerenders nach Sheet-Close hereinkommt.
+    const captureContextRef = useRef<{ lieferant: LieferantOption | null; modus: AufteilungsModus } | null>(null)
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('zeiterfassung_token') : null
 
@@ -83,8 +86,7 @@ export default function BelegScannerPage() {
 
     // Beim Verlassen der Scanner-Page Kamera-Tracks freigeben. Innerhalb der
     // Page bleibt der MediaStream im cameraStreamService gecacht — so wird
-    // bei iOS PWA pro Page-Besuch nur EIN Permission-Prompt ausgeloest,
-    // statt bei jedem Modal-Open neu zu fragen.
+    // bei iOS PWA pro Page-Besuch nur EIN Permission-Prompt ausgeloest.
     useEffect(() => {
         return () => { releaseCameraStream() }
     }, [])
@@ -102,6 +104,22 @@ export default function BelegScannerPage() {
         setQueue(q => [item, ...q])
         // Fire-and-forget: kein await — Scanner ist sofort wieder bereit.
         void uploadItem(item)
+    }
+
+    // Sichtbare Fehler-Karte fuer Dateien, die wir gar nicht erst hochladen
+    // (z.B. JPG aus der Galerie auf Android-Browsern, die das accept-Attribut
+    // ignorieren). Ohne das wuerde der Tipp einfach stumm verschwinden.
+    const pushRejected = (file: File, reason: string, lieferant: LieferantOption | null, modus: AufteilungsModus) => {
+        setQueue(q => [{
+            localId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            file,
+            status: 'failed',
+            addedAt: Date.now(),
+            error: reason,
+            lieferantId: lieferant?.id,
+            lieferantName: lieferant?.firmenname,
+            aufteilungsModus: modus,
+        }, ...q])
     }
 
     const uploadItem = async (item: QueueItem) => {
@@ -142,53 +160,73 @@ export default function BelegScannerPage() {
         setQueue(q => q.filter(x => x.localId !== localId))
     }
 
+    // --- Wizard-Flow ---
+
+    const startWizard = () => {
+        setDraftSource(null)
+        setDraftLieferant(null)
+        setWizardStep('source')
+    }
+
+    const cancelWizard = () => {
+        setWizardStep('idle')
+        setDraftSource(null)
+        setDraftLieferant(null)
+    }
+
+    const pickSource = (src: CaptureSource) => {
+        setDraftSource(src)
+        setWizardStep('lieferant')
+    }
+
+    const handleSupplierPicked = (l: LieferantOption | null) => {
+        setDraftLieferant(l)
+        setWizardStep('aufteilung')
+    }
+
+    const finishWizard = (modus: AufteilungsModus) => {
+        const src = draftSource
+        if (src === 'scan') {
+            captureContextRef.current = { lieferant: draftLieferant, modus }
+            setWizardStep('idle')
+            setShowScanner(true)
+        } else if (src === 'gallery') {
+            captureContextRef.current = { lieferant: draftLieferant, modus }
+            setWizardStep('idle')
+            // Im naechsten Tick triggern, damit das Bottom-Sheet zuerst schliesst.
+            setTimeout(() => fileInputRef.current?.click(), 0)
+        }
+    }
+
     const handleScanComplete = async (file: File) => {
         setShowScanner(false)
-        enqueue(file, chosenLieferant, aufteilungsModus)
-        // chosenLieferant wird NICHT zurueckgesetzt: ein Buchhalter scannt
-        // typischerweise mehrere Belege desselben Lieferanten direkt hintereinander.
-        // Der User aendert die Auswahl via "Lieferant aendern"-Chip oben.
+        const ctx = captureContextRef.current
+        if (!ctx) return
+        enqueue(file, ctx.lieferant, ctx.modus)
+        captureContextRef.current = null
     }
 
     const handleFileChoose = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files
-        if (!files) return
-        for (let i = 0; i < files.length; i++) {
-            enqueue(files[i], chosenLieferant, aufteilungsModus)
+        const ctx = captureContextRef.current
+        if (!files || !ctx) {
+            if (fileInputRef.current) fileInputRef.current.value = ''
+            return
         }
+        for (let i = 0; i < files.length; i++) {
+            const f = files[i]
+            // Defensive: Filepicker akzeptiert zwar nur PDFs (accept-Attr),
+            // aber Mobile-Browser ignorieren das teils — also Endung pruefen
+            // und bei Mismatch sichtbare Fehler-Karte erzeugen.
+            if (!f.type.includes('pdf') && !f.name.toLowerCase().endsWith('.pdf')) {
+                pushRejected(f, 'Nur PDF-Dateien erlaubt', ctx.lieferant, ctx.modus)
+                continue
+            }
+            enqueue(f, ctx.lieferant, ctx.modus)
+        }
+        captureContextRef.current = null
         if (fileInputRef.current) fileInputRef.current.value = ''
     }
-
-    // Picker -> dann eigentliche Aktion (Scan/Galerie). Nur ueberspringen, wenn
-    // der User in dieser Session schon einen Lieferanten gewaehlt hat (Chip).
-    const requestScan = () => {
-        if (chosenLieferant !== null || pendingAction === 'scan') {
-            setShowScanner(true)
-            return
-        }
-        setPendingAction('scan')
-        setSupplierPickerOpen(true)
-    }
-    const requestGallery = () => {
-        if (chosenLieferant !== null) {
-            fileInputRef.current?.click()
-            return
-        }
-        setPendingAction('gallery')
-        setSupplierPickerOpen(true)
-    }
-    const handleSupplierPicked = (l: { id: number; firmenname: string } | null) => {
-        setSupplierPickerOpen(false)
-        setChosenLieferant(l)
-        if (pendingAction === 'scan') {
-            setShowScanner(true)
-        } else if (pendingAction === 'gallery') {
-            // Im naechsten Tick triggern, damit der Modal-Close zuerst gerendert wird.
-            setTimeout(() => fileInputRef.current?.click(), 0)
-        }
-        setPendingAction(null)
-    }
-    const clearLieferant = () => setChosenLieferant(null)
 
     // --- Gating ---
 
@@ -239,107 +277,25 @@ export default function BelegScannerPage() {
                 </div>
             </header>
 
-            {/* Sticky Aktions-Bereich */}
-            <div className="p-4 space-y-3 bg-white border-b border-slate-100 shadow-sm">
-                {/* Lieferant-Chip: zeigt aktuelle Auswahl + Wechsel/Entfernen.
-                    Ohne Auswahl bietet er einen direkten Weg zur Lieferanten-Wahl
-                    (bevor man scannt) — fuer Belege bei einem festen Lieferanten. */}
+            {/* Haupt-Aktion: ein einziger Einstieg in den Wizard */}
+            <div className="p-4 bg-white border-b border-slate-100 shadow-sm">
                 <button
-                    onClick={() => { setPendingAction(null); setSupplierPickerOpen(true) }}
-                    className={`w-full border rounded-xl px-4 py-3 flex items-center gap-3 text-left transition-colors ${
-                        chosenLieferant
-                            ? 'bg-rose-50 border-rose-200 text-rose-800'
-                            : 'bg-white border-slate-200 text-slate-600 hover:border-rose-200'
-                    }`}
-                >
-                    <Building2 className={`w-5 h-5 ${chosenLieferant ? 'text-rose-600' : 'text-slate-400'}`} />
-                    <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Lieferant</p>
-                        <p className="font-medium truncate">
-                            {chosenLieferant ? chosenLieferant.firmenname : 'Optional auswählen'}
-                        </p>
-                    </div>
-                    {chosenLieferant ? (
-                        <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={(e) => { e.stopPropagation(); clearLieferant() }}
-                            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); clearLieferant() } }}
-                            aria-label="Lieferant entfernen"
-                            className="p-1.5 hover:bg-rose-100 rounded-full cursor-pointer"
-                        >
-                            <X className="w-4 h-4 text-rose-600" />
-                        </span>
-                    ) : (
-                        <ChevronRight className="w-5 h-5 text-slate-400" />
-                    )}
-                </button>
-
-                {/* Aufteilungs-Modus VOR dem Scan auswaehlen. Bei "Teilweise" extrahiert
-                    die KI alle Positionen und der Nutzer hakt sie nach dem Upload an. */}
-                <div className="grid grid-cols-2 gap-2">
-                    <button
-                        onClick={() => setAufteilungsModus('VOLLSTAENDIG')}
-                        className={`rounded-xl px-3 py-3 flex items-center gap-2 border-2 text-left transition-colors active:scale-[0.98] ${
-                            aufteilungsModus === 'VOLLSTAENDIG'
-                                ? 'bg-rose-50 border-rose-500 text-rose-800'
-                                : 'bg-white border-slate-200 text-slate-600'
-                        }`}
-                    >
-                        <CheckSquare className={`w-5 h-5 ${aufteilungsModus === 'VOLLSTAENDIG' ? 'text-rose-600' : 'text-slate-400'}`} />
-                        <div className="min-w-0">
-                            <p className="font-semibold text-sm leading-tight">Ganz für Firma</p>
-                            <p className="text-xs text-slate-500 leading-tight mt-0.5">Komplette Rechnung</p>
-                        </div>
-                    </button>
-                    <button
-                        onClick={() => setAufteilungsModus('TEILWEISE')}
-                        className={`rounded-xl px-3 py-3 flex items-center gap-2 border-2 text-left transition-colors active:scale-[0.98] ${
-                            aufteilungsModus === 'TEILWEISE'
-                                ? 'bg-rose-50 border-rose-500 text-rose-800'
-                                : 'bg-white border-slate-200 text-slate-600'
-                        }`}
-                    >
-                        <SplitSquareHorizontal className={`w-5 h-5 ${aufteilungsModus === 'TEILWEISE' ? 'text-rose-600' : 'text-slate-400'}`} />
-                        <div className="min-w-0">
-                            <p className="font-semibold text-sm leading-tight">Nur Teile</p>
-                            <p className="text-xs text-slate-500 leading-tight mt-0.5">Positionen auswählen</p>
-                        </div>
-                    </button>
-                </div>
-
-                <button
-                    onClick={requestScan}
+                    onClick={startWizard}
                     className="w-full bg-rose-600 hover:bg-rose-700 active:scale-[0.98] text-white font-bold rounded-2xl py-5 flex items-center justify-center gap-3 shadow-lg transition-all"
                 >
-                    <ScanLine className="w-7 h-7" />
-                    <span className="text-lg">Beleg scannen</span>
+                    <Plus className="w-7 h-7" />
+                    <span className="text-lg">Beleg hinzufügen</span>
                 </button>
-
-                <button
-                    onClick={() => navigate('/mwst-rechner')}
-                    className="w-full bg-white border-2 border-slate-200 hover:border-rose-300 active:scale-[0.98] text-slate-700 font-semibold rounded-2xl py-3 flex items-center justify-center gap-2 text-sm"
-                >
-                    <Calculator className="w-4 h-4 text-rose-600" />
-                    MwSt-Rechner öffnen
-                </button>
-
-                <button
-                    onClick={requestGallery}
-                    className="w-full bg-white border-2 border-slate-200 hover:border-rose-300 active:scale-[0.98] text-slate-700 font-semibold rounded-2xl py-4 flex items-center justify-center gap-2 transition-all"
-                >
-                    <Upload className="w-5 h-5" />
-                    Aus Galerie wählen
-                </button>
-                <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*,application/pdf"
-                    multiple
-                    onChange={handleFileChoose}
-                    className="hidden"
-                />
             </div>
+
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf"
+                multiple
+                onChange={handleFileChoose}
+                className="hidden"
+            />
 
             {/* Queue-Status */}
             <div className="grid grid-cols-3 gap-2 px-4 py-3 bg-slate-100/50">
@@ -354,7 +310,7 @@ export default function BelegScannerPage() {
                     <div className="text-center text-slate-400 py-12">
                         <Receipt className="w-12 h-12 mx-auto mb-2 opacity-40" />
                         <p className="text-sm">Noch keine Belege gescannt.</p>
-                        <p className="text-xs mt-1">Tippe oben auf <strong>Beleg scannen</strong>.</p>
+                        <p className="text-xs mt-1">Tippe oben auf <strong>Beleg hinzufügen</strong>.</p>
                     </div>
                 ) : queue.map(item => (
                     <QueueRow
@@ -369,18 +325,161 @@ export default function BelegScannerPage() {
                 ))}
             </div>
 
-            {showScanner && (
-                <ScannerModal
-                    onClose={() => setShowScanner(false)}
-                    onSave={handleScanComplete}
+            {/* Wizard Schritt 1: Quelle waehlen */}
+            {wizardStep === 'source' && (
+                <SourceSheet
+                    onPick={pickSource}
+                    onCancel={cancelWizard}
                 />
             )}
 
+            {/* Wizard Schritt 2: Lieferant zuweisen oder ueberspringen */}
             <SupplierSelectionModal
-                isOpen={supplierPickerOpen}
-                onClose={() => { setSupplierPickerOpen(false); setPendingAction(null) }}
+                isOpen={wizardStep === 'lieferant'}
+                onClose={cancelWizard}
                 onSelect={handleSupplierPicked}
+                onBack={() => setWizardStep('source')}
             />
+
+            {/* Wizard Schritt 3: Aufteilung waehlen */}
+            {wizardStep === 'aufteilung' && (
+                <AufteilungSheet
+                    onPick={finishWizard}
+                    onBack={() => setWizardStep('lieferant')}
+                    onCancel={cancelWizard}
+                    lieferantName={draftLieferant?.firmenname ?? null}
+                />
+            )}
+
+            {showScanner && (
+                <ScannerModal
+                    onClose={() => { setShowScanner(false); captureContextRef.current = null }}
+                    onSave={handleScanComplete}
+                />
+            )}
+        </div>
+    )
+}
+
+// --- Wizard-Bottom-Sheets ---
+
+function SourceSheet({ onPick, onCancel }: {
+    onPick: (s: CaptureSource) => void
+    onCancel: () => void
+}) {
+    return (
+        <SheetShell title="Wie möchtest du den Beleg erfassen?" onCancel={onCancel}>
+            <button
+                onClick={() => onPick('scan')}
+                className="w-full bg-white border-2 border-slate-200 hover:border-rose-300 active:bg-rose-50 rounded-2xl p-5 flex items-center gap-4 text-left transition-all"
+            >
+                <div className="w-12 h-12 bg-rose-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <ScanLine className="w-6 h-6 text-rose-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-900">Beleg scannen</p>
+                    <p className="text-sm text-slate-500 mt-0.5">Mit der Kamera abfotografieren</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-400 flex-shrink-0" />
+            </button>
+
+            <button
+                onClick={() => onPick('gallery')}
+                className="w-full bg-white border-2 border-slate-200 hover:border-rose-300 active:bg-rose-50 rounded-2xl p-5 flex items-center gap-4 text-left transition-all"
+            >
+                <div className="w-12 h-12 bg-rose-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-6 h-6 text-rose-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-900">Aus Galerie auswählen</p>
+                    <p className="text-sm text-slate-500 mt-0.5">Nur PDF-Dateien</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-400 flex-shrink-0" />
+            </button>
+        </SheetShell>
+    )
+}
+
+function AufteilungSheet({ onPick, onBack, onCancel, lieferantName }: {
+    onPick: (m: AufteilungsModus) => void
+    onBack: () => void
+    onCancel: () => void
+    lieferantName: string | null
+}) {
+    return (
+        <SheetShell
+            title="Was ist auf dem Beleg?"
+            subtitle={lieferantName ? `Lieferant: ${lieferantName}` : 'Ohne Lieferant'}
+            onCancel={onCancel}
+            onBack={onBack}
+        >
+            <button
+                onClick={() => onPick('VOLLSTAENDIG')}
+                className="w-full bg-white border-2 border-slate-200 hover:border-rose-300 active:bg-rose-50 rounded-2xl p-5 flex items-center gap-4 text-left transition-all"
+            >
+                <div className="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <CheckSquare className="w-6 h-6 text-emerald-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-900">Ganz für die Firma</p>
+                    <p className="text-sm text-slate-500 mt-0.5">Kompletter Beleg wird gebucht</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-400 flex-shrink-0" />
+            </button>
+
+            <button
+                onClick={() => onPick('TEILWEISE')}
+                className="w-full bg-white border-2 border-slate-200 hover:border-rose-300 active:bg-rose-50 rounded-2xl p-5 flex items-center gap-4 text-left transition-all"
+            >
+                <div className="w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <SplitSquareHorizontal className="w-6 h-6 text-amber-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-900">Nur Teile</p>
+                    <p className="text-sm text-slate-500 mt-0.5">Positionen nach dem Scan auswählen</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-400 flex-shrink-0" />
+            </button>
+        </SheetShell>
+    )
+}
+
+function SheetShell({ title, subtitle, onCancel, onBack, children }: {
+    title: string
+    subtitle?: string
+    onCancel: () => void
+    onBack?: () => void
+    children: React.ReactNode
+}) {
+    return (
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-slate-900/50">
+            <div className="w-full sm:max-w-md bg-slate-50 rounded-t-3xl sm:rounded-3xl shadow-2xl safe-area-bottom">
+                <div className="px-5 pt-5 pb-3 flex items-start gap-3">
+                    {onBack && (
+                        <button
+                            onClick={onBack}
+                            className="p-2 -ml-2 hover:bg-slate-200 rounded-lg"
+                            aria-label="Zurück"
+                        >
+                            <ArrowLeft className="w-5 h-5 text-slate-600" />
+                        </button>
+                    )}
+                    <div className="flex-1 min-w-0">
+                        <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+                        {subtitle && <p className="text-sm text-slate-500 mt-0.5">{subtitle}</p>}
+                    </div>
+                    <button
+                        onClick={onCancel}
+                        className="p-2 -mr-2 hover:bg-slate-200 rounded-lg"
+                        aria-label="Abbrechen"
+                    >
+                        <X className="w-5 h-5 text-slate-600" />
+                    </button>
+                </div>
+                <div className="px-5 pb-6 space-y-3">
+                    {children}
+                </div>
+            </div>
         </div>
     )
 }
@@ -425,6 +524,9 @@ function QueueRow({ item, onRetry, onRemove, onOpenPositionen }: {
                     {item.status === 'done' && `Hochgeladen (#${item.serverId}) · ${time}`}
                     {item.status === 'failed' && (item.error || 'Fehler')}
                 </p>
+                {item.lieferantName && (
+                    <p className="text-xs text-slate-500 truncate">→ {item.lieferantName}</p>
+                )}
             </div>
             {item.status === 'failed' && (
                 <button onClick={() => onRetry(item)} className="p-2 hover:bg-white rounded-lg" aria-label="Erneut versuchen">

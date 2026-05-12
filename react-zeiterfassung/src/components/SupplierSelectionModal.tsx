@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Search, Building2, ChevronRight, Loader2 } from 'lucide-react'
+import { X, Search, Building2, ChevronRight, Loader2, ArrowLeft } from 'lucide-react'
 
 interface Lieferant {
     id: number
@@ -17,12 +17,15 @@ interface SupplierSelectionModalProps {
     isOpen: boolean
     onClose: () => void
     onSelect: (lieferant: Lieferant | null) => void
+    // Optional: wenn gesetzt, zeigt das Modal links einen Zurueck-Pfeil
+    // (z.B. fuer Wizard-Flows). Sonst nur das Schliessen-Kreuz rechts.
+    onBack?: () => void
 }
 
 const DEBOUNCE_MS = 250
 const INITIAL_LIMIT = 50
 
-export function SupplierSelectionModal({ isOpen, onClose, onSelect }: SupplierSelectionModalProps) {
+export function SupplierSelectionModal({ isOpen, onClose, onSelect, onBack }: SupplierSelectionModalProps) {
     const [searchTerm, setSearchTerm] = useState('')
     const [results, setResults] = useState<Lieferant[]>([])
     const [loading, setLoading] = useState(false)
@@ -91,16 +94,36 @@ export function SupplierSelectionModal({ isOpen, onClose, onSelect }: SupplierSe
         <div className="fixed inset-0 bg-slate-50 z-[60] flex flex-col safe-area-top safe-area-bottom animate-in slide-in-from-bottom duration-200">
             {/* Header */}
             <div className="bg-white border-b border-slate-200 px-4 py-4 flex items-center gap-3 shadow-sm z-10">
-                <button
-                    onClick={resetAndClose}
-                    className="p-2 hover:bg-slate-100 rounded-full transition-colors"
-                >
-                    <X className="w-6 h-6 text-slate-600" />
-                </button>
+                {onBack ? (
+                    <button
+                        onClick={() => { abortRef.current?.abort(); setSearchTerm(''); setResults([]); setLoading(false); onBack() }}
+                        className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                        aria-label="Zurück"
+                    >
+                        <ArrowLeft className="w-6 h-6 text-slate-600" />
+                    </button>
+                ) : (
+                    <button
+                        onClick={resetAndClose}
+                        className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                        aria-label="Schließen"
+                    >
+                        <X className="w-6 h-6 text-slate-600" />
+                    </button>
+                )}
                 <div className="flex-1">
                     <h2 className="text-lg font-bold text-slate-900">Lieferant auswählen</h2>
                     <p className="text-sm text-slate-500">Für Dokument-Zuordnung</p>
                 </div>
+                {onBack && (
+                    <button
+                        onClick={resetAndClose}
+                        className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                        aria-label="Abbrechen"
+                    >
+                        <X className="w-6 h-6 text-slate-600" />
+                    </button>
+                )}
             </div>
 
             {/* Content */}
