@@ -163,6 +163,19 @@ public class BelegController {
         return setzePositionsAuswahl(id, req, token, null);
     }
 
+    /**
+     * Mobile-Spiegel fuer den Beleg-Detail-Fetch. Wird von der mobilen
+     * Positionen-Auswahl-Page beim Polling auf {@code kiAnalyseStatus DONE}
+     * gerufen — die PWA hat nur einen Token, keine Session, und kommt
+     * deshalb nicht durch die session-basierte apiFilterChain.
+     */
+    @GetMapping("/mobile/belege/{id}")
+    public ResponseEntity<BelegDto.Response> getBelegMobile(
+            @PathVariable Long id,
+            @RequestParam(value = "token", required = false) String token) {
+        return getBeleg(id, token, null);
+    }
+
     // ===================== MwSt-Rechner =====================
 
     /**

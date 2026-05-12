@@ -63,7 +63,9 @@ export default function BelegPositionenAuswahlPage() {
     const ladeBeleg = useCallback(async () => {
         if (belegId == null || !token) return null
         try {
-            const res = await fetch(`/api/buchhaltung/belege/${belegId}?token=${token}`)
+            // Mobile-Spiegel verwenden — die PWA kommt nicht durch die
+            // session-basierte apiFilterChain, nur durch /mobile/** mit Token.
+            const res = await fetch(`/api/buchhaltung/mobile/belege/${belegId}?token=${token}`)
             if (!res.ok) {
                 setError(`Beleg konnte nicht geladen werden (HTTP ${res.status})`)
                 return null
