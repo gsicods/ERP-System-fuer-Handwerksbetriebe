@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { escapeHtml, isLikelyPlainText } from './emailContentFrameUtils';
 
 interface EmailContentFrameProps {
     html: string;
@@ -283,6 +284,18 @@ export const EmailContentFrame: React.FC<EmailContentFrameProps> = ({ html, clas
         }
     };
 
+    // Plain-Text-Mails (z. B. t-online, Hetzner-Tickets) liefern den Body als
+    // Fließtext mit \n-Umbrüchen und ohne HTML-Struktur. Ohne pre-wrap kollabieren
+    // alle Zeilen zu einem unleserlichen Bandwurm.
+    const plainText = isLikelyPlainText(html);
+    // Bei als Plain-Text klassifiziertem Inhalt vor dem Einsetzen in <body>
+    // HTML-escapen, sonst würden eingebettete `<script>` / `<img onerror=…>`
+    // im iframe ausgeführt (das Sandboxing ohne `allow-scripts` mildert
+    // das, aber Defense-in-Depth ist hier billig).
+    const bodyHtml = plainText
+        ? escapeHtml(html)
+        : (html || '<p style="color:#94a3b8;font-style:italic">Kein Inhalt</p>');
+
     const baseStyles = `
         <style>
             body {
@@ -294,6 +307,7 @@ export const EmailContentFrame: React.FC<EmailContentFrameProps> = ({ html, clas
                 color: #334155;
                 overflow-wrap: break-word;
                 word-wrap: break-word;
+                ${plainText ? 'white-space: pre-wrap;' : ''}
             }
             a { color: #e11d48; text-decoration: underline; }
             img { max-width: 100%; height: auto; display: block; }
@@ -312,7 +326,7 @@ export const EmailContentFrame: React.FC<EmailContentFrameProps> = ({ html, clas
 ${baseStyles}
 </head>
 <body>
-${html || '<p style="color:#94a3b8;font-style:italic">Kein Inhalt</p>'}
+${bodyHtml}
 </body>
 </html>`;
 
