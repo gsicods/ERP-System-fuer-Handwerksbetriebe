@@ -819,18 +819,60 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         }
     }, []);
 
-    // Verlaengert das Soft-Lock fire-and-forget nach jedem Save. Wichtig, weil
-    // der Page-Level useDocumentLock-Hook die per replaceState gesetzte ID
-    // nicht mitbekommt und ohne Heartbeat das Backend-Lock nach 90s ablaeuft —
-    // das naechste PUT wuerde sonst mit 409 scheitern.
+    // Soft-Lock kontinuierlich am Leben halten (alle 30s, STALE_AFTER serverseitig 90s).
+    // Notwendig zusaetzlich zum Page-Level useDocumentLock-Hook, weil dieser die
+    // per replaceState nach POST gesetzte ID nicht mitbekommt — neu erstellte
+    // Dokumente bleiben sonst ohne Heartbeat und das Lock verfaellt nach 90s,
+    // was dazu fuehrt, dass der naechste PUT mit 409 abgelehnt wird (auch wenn
+    // der User das Fenster ruhig offen haelt und nicht tippt).
     // Hinweis: hartkodiert auf TYP_AUSGANG, weil diese Editor-Komponente nur
     // fuer Ausgangsdokumente genutzt wird (Eingangs-Editor hat einen eigenen).
-    const pingDocumentLock = useCallback((savedDocumentId?: number) => {
-        if (!savedDocumentId) return;
-        void fetch(`/api/dokument-locks/AUSGANG/${savedDocumentId}/heartbeat`, {
-            method: 'POST',
-            credentials: 'same-origin',
-        }).catch(() => { /* best effort */ });
+    const currentDokumentId = dokument?.id;
+    useEffect(() => {
+        if (!currentDokumentId || isLocked) return;
+        const ping = () => {
+            void fetch(`/api/dokument-locks/AUSGANG/${currentDokumentId}/heartbeat`, {
+                method: 'POST',
+                credentials: 'same-origin',
+            }).catch(() => { /* best effort, nicht stoeren */ });
+        };
+        // Direkt nach jedem Mount/Wechsel der dokumentId einmal pingen,
+        // damit das Lock auch nach Tab-Backgrounding sofort wieder lebt.
+        ping();
+        const intervalId = setInterval(ping, 30_000);
+        // Tab kommt zurueck in den Vordergrund → Browser drosselt setInterval
+        // im Hintergrund. Wir holen sofort einen Heartbeat nach, damit der
+        // Nutzer nach einer Pause direkt speichern kann, ohne 409.
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') ping();
+        };
+        const onFocus = () => ping();
+        document.addEventListener('visibilitychange', onVisible);
+        window.addEventListener('focus', onFocus);
+        return () => {
+            clearInterval(intervalId);
+            document.removeEventListener('visibilitychange', onVisible);
+            window.removeEventListener('focus', onFocus);
+        };
+    }, [currentDokumentId, isLocked]);
+
+    // Versucht das Lock fuer den aktuellen User (zurueck) zu erwerben.
+    // Liefert true bei Erfolg, false wenn ein anderer User das Lock haelt.
+    const tryAcquireLock = useCallback(async (id: number): Promise<{ ok: boolean; holderName?: string }> => {
+        try {
+            const res = await fetch(`/api/dokument-locks/AUSGANG/${id}/acquire`, {
+                method: 'POST',
+                credentials: 'same-origin',
+            });
+            if (res.ok) return { ok: true };
+            if (res.status === 409) {
+                const data = await res.json().catch(() => null) as { holderDisplayName?: string } | null;
+                return { ok: false, holderName: data?.holderDisplayName };
+            }
+            return { ok: false };
+        } catch {
+            return { ok: false };
+        }
     }, []);
 
     // --- Save ---
@@ -855,23 +897,38 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
             });
 
             if (dokument?.id) {
-                const res = await fetch(`/api/ausgangs-dokumente/${dokument.id}`, {
+                const id = dokument.id;
+                const body = JSON.stringify({
+                    datum,
+                    betreff,
+                    betragNetto,
+                    htmlInhalt,
+                    positionenJson: positionenData
+                });
+                const doPut = () => fetch(`/api/ausgangs-dokumente/${id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        datum,
-                        betreff,
-                        betragNetto,
-                        htmlInhalt,
-                        positionenJson: positionenData
-                    })
+                    body,
                 });
+                let res = await doPut();
+                // Soft-Lock abgelaufen (z.B. Pause vor dem Speichern): einmalig
+                // automatisch re-acquiren und erneut versuchen. Erst wenn das
+                // Lock wirklich bei jemand anderem liegt, geben wir auf.
+                if (res.status === 409) {
+                    const lockResult = await tryAcquireLock(id);
+                    if (lockResult.ok) {
+                        res = await doPut();
+                    } else {
+                        const who = lockResult.holderName ? ` von ${lockResult.holderName}` : '';
+                        toast.warning(`Dieses Dokument wird gerade${who} bearbeitet. Bitte kurz warten und es erneut versuchen.`);
+                        return null;
+                    }
+                }
                 if (res.ok) {
                     const updated = await res.json();
                     setDokument(updated);
                     setDokumentNummer(updated.dokumentNummer);
                     syncDocumentIdInUrl(updated.id);
-                    pingDocumentLock(updated.id);
                     const currentState = JSON.stringify({ blocks, datum, betreff, dokumentTyp });
                     lastSavedStateRef.current = currentState;
                     setHasUnsavedChanges(false);
@@ -880,9 +937,9 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     notifyDokumentChanged({ projektId, anfrageId, dokumentId: updated.id });
                     return updated;
                 } else {
-                    const errorText = await res.text();
+                    const errorText = await res.text().catch(() => '');
                     console.error('Fehler beim Speichern:', res.status, errorText);
-                    alert(`Fehler beim Speichern: ${errorText || res.statusText}`);
+                    toast.error(`Speichern fehlgeschlagen: ${errorText || res.statusText}`);
                 }
             } else {
                 const dto: AusgangsGeschaeftsDokumentErstellen = {
@@ -905,7 +962,6 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     setDokument(created);
                     setDokumentNummer(created.dokumentNummer);
                     syncDocumentIdInUrl(created.id);
-                    pingDocumentLock(created.id);
                     const currentState = JSON.stringify({ blocks, datum, betreff, dokumentTyp });
                     lastSavedStateRef.current = currentState;
                     setHasUnsavedChanges(false);
@@ -913,16 +969,21 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     setTimeout(() => setSaveSuccess(false), 2000);
                     notifyDokumentChanged({ projektId, anfrageId, dokumentId: created.id });
                     return created;
+                } else {
+                    const errorText = await res.text().catch(() => '');
+                    console.error('Fehler beim Erstellen:', res.status, errorText);
+                    toast.error(`Speichern fehlgeschlagen: ${errorText || res.statusText}`);
                 }
             }
         } catch (err) {
             console.error('Fehler beim Speichern:', err);
+            toast.error('Speichern fehlgeschlagen — Verbindung pruefen und erneut versuchen.');
         } finally {
             setSaving(false);
         }
         return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [dokument, dokumentTyp, datum, betreff, blocks, projektId, anfrageId, isLocked, syncDocumentIdInUrl, pingDocumentLock, bereitsAbgerechnetDurchAndere, globalRabatt]);
+    }, [dokument, dokumentTyp, datum, betreff, blocks, projektId, anfrageId, isLocked, syncDocumentIdInUrl, tryAcquireLock, bereitsAbgerechnetDurchAndere, globalRabatt]);
 
     // --- Change Detection ---
     useEffect(() => {
