@@ -244,6 +244,9 @@ public class GeminiDokumentAnalyseService {
                 - "Vorauskasse", "Vorkasse", "prepaid" → zahlungsart="VORAUSKASSE"
                 - "SEPA-Lastschrift", "SEPA-Mandat", "Lastschrifteinzug", "Bankeinzug", "SEPA Direct Debit" → zahlungsart="SEPA_LASTSCHRIFT"
                 - "Kreditkarte", "MasterCard", "VISA" → zahlungsart="KREDITKARTE"
+                - "Kartenzahlung", "Kartenzahlg.", "EC-Karte", "EC Karte", "girocard", "Girocard", "Maestro", "V Pay", "Debitkarte" → zahlungsart="KREDITKARTE"
+                  (Begruendung: Im ERP gibt es nur eine "Karte"-Kategorie — Debit-/Kreditkarte
+                  werden zusammengefasst. Der Buchhalter kann am PC noch praezisieren.)
                 - "PayPal" → zahlungsart="PAYPAL"
                 - "Amazon Pay" → zahlungsart="AMAZON_PAY"
                 - "Überweisung", "bitte überweisen" → zahlungsart="UEBERWEISUNG"
@@ -2517,13 +2520,16 @@ public class GeminiDokumentAnalyseService {
 
         String normalized = zahlungsart.trim().toUpperCase()
                 .replace('-', '_')
-                .replace(' ', '_');
+                .replace(' ', '_')
+                .replace(".", "");
 
         return switch (normalized) {
             case "VORAUSKASSE", "VORKASSE", "PREPAID", "PREPAYMENT" -> "VORAUSKASSE";
             case "SEPA_LASTSCHRIFT", "LASTSCHRIFT", "SEPA", "SEPA_DIRECT_DEBIT", "DIRECT_DEBIT",
                     "BANKEINZUG", "LASTSCHRIFTEINZUG", "EINZUGSERMACHTIGUNG" -> "SEPA_LASTSCHRIFT";
-            case "KREDITKARTE", "CREDIT_CARD", "MASTERCARD", "VISA" -> "KREDITKARTE";
+            case "KREDITKARTE", "CREDIT_CARD", "MASTERCARD", "VISA",
+                    "KARTENZAHLUNG", "KARTENZAHLG", "EC_KARTE", "EC", "GIROCARD",
+                    "MAESTRO", "V_PAY", "DEBITKARTE", "DEBIT_CARD" -> "KREDITKARTE";
             case "PAYPAL" -> "PAYPAL";
             case "AMAZON_PAY", "AMAZONPAY" -> "AMAZON_PAY";
             case "UEBERWEISUNG", "ÜBERWEISUNG", "BANK_TRANSFER", "TRANSFER" -> "UEBERWEISUNG";

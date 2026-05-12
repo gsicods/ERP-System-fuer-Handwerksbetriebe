@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.kalkulationsprogramm.domain.Beleg;
 import org.example.kalkulationsprogramm.domain.BelegAufteilungsModus;
+import org.example.kalkulationsprogramm.domain.BelegKategorie;
 import org.example.kalkulationsprogramm.domain.BelegKiAnalyseStatus;
 import org.example.kalkulationsprogramm.domain.BelegPosition;
 import org.example.kalkulationsprogramm.domain.LieferantDokument;
@@ -125,15 +126,33 @@ public class BelegKiAnalyseService {
                 beleg.setKiConfidence(java.math.BigDecimal.valueOf(ergebnis.getAiConfidence())
                         .setScale(2, java.math.RoundingMode.HALF_UP));
             }
-            beleg.setKiVorgeschlagenerLieferant(ergebnis.getLieferantName());
-
-            // Versuche Lieferant per Namen zu matchen (nur exakt / case-insensitive).
-            // Derived Query laedt direkt in der DB statt ueber alle Lieferanten zu streamen.
+            // KI-Vorschlag fuer den Lieferanten nur uebernehmen, wenn der Name auch
+            // tatsaechlich einem aktiven Lieferanten in der Stammdaten-Tabelle
+            // entspricht. Andernfalls hat der Buchhalter im Validier-Dialog nichts
+            // davon — "KI-Vorschlag: Q1 Energie AG" anzuzeigen, obwohl dieser
+            // Lieferant gar nicht angelegt ist, fuehrt zu Klick-Aufwand ohne Nutzen
+            // (man kann den Vorschlag nicht uebernehmen, ohne ihn vorher manuell
+            // anzulegen). Quelle: Lieferantenstammdaten siehe Lieferanten-Entity.
             if (ergebnis.getLieferantName() != null && !ergebnis.getLieferantName().isBlank()
                     && beleg.getLieferant() == null) {
                 lieferantenRepository.findByLieferantennameIgnoreCase(ergebnis.getLieferantName().trim())
                         .filter(l -> !Boolean.FALSE.equals(l.getIstAktiv()))
                         .ifPresent(beleg::setLieferant);
+            }
+            beleg.setKiVorgeschlagenerLieferant(
+                    beleg.getLieferant() != null ? beleg.getLieferant().getLieferantenname() : null);
+
+            // "Wo gezahlt" (BelegKategorie) aus der erkannten Zahlungsart ableiten,
+            // solange der Buchhalter noch nichts vorgegeben hat. Karte/Lastschrift/
+            // PayPal/Ueberweisung gehen ueber die Bank- oder Kreditkarten-Kategorie,
+            // Bargeld geht in die Kasse. Damit verschwindet die Doppel-Eingabe
+            // "Wo gezahlt" + "Zahlungsart" im Validier-Dialog.
+            if (beleg.getBelegKategorie() == null
+                    || beleg.getBelegKategorie() == BelegKategorie.UNZUGEORDNET) {
+                BelegKategorie abgeleitet = ableitenBelegKategorie(ergebnis.getZahlungsart());
+                if (abgeleitet != null) {
+                    beleg.setBelegKategorie(abgeleitet);
+                }
             }
 
             // Komplettes Extraktions-JSON für Debug / spätere Re-Analyse
@@ -255,6 +274,32 @@ public class BelegKiAnalyseService {
     private static String textOrFallback(JsonNode n, String fallback) {
         String v = textOrNull(n);
         return v != null ? (v.length() > 500 ? v.substring(0, 500) : v) : fallback;
+    }
+
+    /**
+     * Mappt eine KI-erkannte Zahlungsart auf die passende {@link BelegKategorie}
+     * ("Wo gezahlt"). Liefert null, wenn keine eindeutige Zuordnung moeglich ist —
+     * dann bleibt die Kategorie auf {@code UNZUGEORDNET} und der Buchhalter
+     * waehlt manuell.
+     *
+     * Mapping:
+     *  - BAR                                       -> KASSE_AUSGABE (Bon = Ausgabe)
+     *  - KREDITKARTE                               -> KREDITKARTE
+     *  - SEPA_LASTSCHRIFT / UEBERWEISUNG /
+     *    VORAUSKASSE / PAYPAL / AMAZON_PAY         -> BANK (alles per Bankkonto)
+     *  - SONSTIGE / null                           -> keine Ableitung
+     */
+    static BelegKategorie ableitenBelegKategorie(String zahlungsart) {
+        if (zahlungsart == null || zahlungsart.isBlank()) {
+            return null;
+        }
+        return switch (zahlungsart.trim().toUpperCase()) {
+            case "BAR" -> BelegKategorie.KASSE_AUSGABE;
+            case "KREDITKARTE" -> BelegKategorie.KREDITKARTE;
+            case "SEPA_LASTSCHRIFT", "UEBERWEISUNG", "VORAUSKASSE",
+                 "PAYPAL", "AMAZON_PAY" -> BelegKategorie.BANK;
+            default -> null;
+        };
     }
 
     private static BigDecimal numericOrNull(JsonNode n) {

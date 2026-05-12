@@ -197,6 +197,112 @@ class BelegKiAnalyseServiceTest {
         verify(lieferantGeschaeftsdokumentRepository, never()).save(any());
     }
 
+    @Test
+    @DisplayName("KI-Vorschlag-Lieferant ohne DB-Match -> Feld bleibt null (kein Falsch-Vorschlag im PC-Dialog)")
+    void kiVorgeschlagenerLieferant_nullWennNichtInDb() {
+        // Tankquittung Q1: KI erkennt "Q1 Energie AG", dieser Lieferant ist aber
+        // NICHT in der Stammdaten-Tabelle angelegt. Der "KI-Vorschlag: Q1 Energie AG"
+        // soll dann NICHT im Validier-Dialog erscheinen, weil der Buchhalter ihn
+        // ohnehin nicht uebernehmen koennte.
+        Beleg beleg = beleg(7L, null);
+
+        given(belegRepository.findById(7L)).willReturn(Optional.of(beleg));
+        given(geminiService.analyzeFile(any(), anyString()))
+                .willReturn(LieferantDokumentDto.AnalyzeResponse.builder()
+                        .dokumentTyp(LieferantDokumentTyp.SONSTIG)
+                        .lieferantName("Q1 Energie AG")
+                        .build());
+        given(lieferantenRepository.findByLieferantennameIgnoreCase("Q1 Energie AG"))
+                .willReturn(Optional.empty());
+
+        service.analysiereBelegAsync(7L);
+
+        assertThat(beleg.getLieferant()).isNull();
+        assertThat(beleg.getKiVorgeschlagenerLieferant()).isNull();
+    }
+
+    @Test
+    @DisplayName("KI-Vorschlag-Lieferant MIT DB-Match -> Lieferant + Vorschlag gesetzt")
+    void kiVorgeschlagenerLieferant_gesetztBeiDbMatch() {
+        Lieferanten lief = lieferant(42L, "Aral Tankstelle");
+        Beleg beleg = beleg(7L, null);
+
+        given(belegRepository.findById(7L)).willReturn(Optional.of(beleg));
+        given(geminiService.analyzeFile(any(), anyString()))
+                .willReturn(LieferantDokumentDto.AnalyzeResponse.builder()
+                        .dokumentTyp(LieferantDokumentTyp.SONSTIG)
+                        .lieferantName("aral tankstelle")
+                        .build());
+        given(lieferantenRepository.findByLieferantennameIgnoreCase("aral tankstelle"))
+                .willReturn(Optional.of(lief));
+
+        service.analysiereBelegAsync(7L);
+
+        assertThat(beleg.getLieferant()).isEqualTo(lief);
+        assertThat(beleg.getKiVorgeschlagenerLieferant()).isEqualTo("Aral Tankstelle");
+    }
+
+    @Test
+    @DisplayName("ableitenBelegKategorie: KREDITKARTE -> KREDITKARTE, BAR -> KASSE_AUSGABE, Lastschrift/Ueberweisung/PayPal/Vorkasse -> BANK")
+    void ableitenBelegKategorie_mapping() {
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie("KREDITKARTE"))
+                .isEqualTo(BelegKategorie.KREDITKARTE);
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie("BAR"))
+                .isEqualTo(BelegKategorie.KASSE_AUSGABE);
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie("SEPA_LASTSCHRIFT"))
+                .isEqualTo(BelegKategorie.BANK);
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie("UEBERWEISUNG"))
+                .isEqualTo(BelegKategorie.BANK);
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie("PAYPAL"))
+                .isEqualTo(BelegKategorie.BANK);
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie("VORAUSKASSE"))
+                .isEqualTo(BelegKategorie.BANK);
+        // SONSTIGE/null -> keine Ableitung, Buchhalter waehlt manuell
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie("SONSTIGE")).isNull();
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie(null)).isNull();
+        assertThat(BelegKiAnalyseService.ableitenBelegKategorie("")).isNull();
+    }
+
+    @Test
+    @DisplayName("Manuell gesetzte BelegKategorie wird NICHT von der KI-Ableitung ueberschrieben")
+    void belegKategorie_manuellGesetzt_wirdNichtUeberschrieben() {
+        // Buchhalter hat den Beleg bereits auf BANK gestellt (z.B. weil Mobile-User
+        // den Upload-Knopf "Bank-Beleg" gedrueckt hat). KI erkennt KREDITKARTE als
+        // Zahlungsart — die Kategorie darf trotzdem nicht auf KREDITKARTE
+        // zurueckgesetzt werden.
+        Beleg beleg = beleg(7L, null);
+        beleg.setBelegKategorie(BelegKategorie.BANK);
+
+        given(belegRepository.findById(7L)).willReturn(Optional.of(beleg));
+        given(geminiService.analyzeFile(any(), anyString()))
+                .willReturn(LieferantDokumentDto.AnalyzeResponse.builder()
+                        .dokumentTyp(LieferantDokumentTyp.SONSTIG)
+                        .zahlungsart("KREDITKARTE")
+                        .build());
+
+        service.analysiereBelegAsync(7L);
+
+        assertThat(beleg.getBelegKategorie()).isEqualTo(BelegKategorie.BANK);
+    }
+
+    @Test
+    @DisplayName("Kartenzahlung -> WO GEZAHLT wird auf KREDITKARTE gesetzt (nicht mehr UNZUGEORDNET)")
+    void zahlungsart_treibtBelegKategorie() {
+        Beleg beleg = beleg(7L, null);
+        assertThat(beleg.getBelegKategorie()).isEqualTo(BelegKategorie.UNZUGEORDNET);
+
+        given(belegRepository.findById(7L)).willReturn(Optional.of(beleg));
+        given(geminiService.analyzeFile(any(), anyString()))
+                .willReturn(LieferantDokumentDto.AnalyzeResponse.builder()
+                        .dokumentTyp(LieferantDokumentTyp.SONSTIG)
+                        .zahlungsart("KREDITKARTE")
+                        .build());
+
+        service.analysiereBelegAsync(7L);
+
+        assertThat(beleg.getBelegKategorie()).isEqualTo(BelegKategorie.KREDITKARTE);
+    }
+
     // ===================== Helfer =====================
 
     private static Lieferanten lieferant(Long id, String name) {
