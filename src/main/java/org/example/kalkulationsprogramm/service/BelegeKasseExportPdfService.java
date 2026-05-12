@@ -1,20 +1,27 @@
 package org.example.kalkulationsprogramm.service;
 
 import com.lowagie.text.*;
+import com.lowagie.text.BadElementException;
 import com.lowagie.text.Font;
 import com.lowagie.text.Image;
 import com.lowagie.text.Rectangle;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
+
+import java.io.IOException;
+import java.nio.file.Paths;
 import lombok.RequiredArgsConstructor;
 import org.example.kalkulationsprogramm.domain.Beleg;
 import org.example.kalkulationsprogramm.domain.BelegKategorie;
 import org.example.kalkulationsprogramm.domain.BelegStatus;
+import org.example.kalkulationsprogramm.domain.Firmeninformation;
 import org.example.kalkulationsprogramm.domain.Sachkonto;
 import org.example.kalkulationsprogramm.domain.SachkontoTyp;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
+import org.example.kalkulationsprogramm.repository.FirmeninformationRepository;
 import org.example.kalkulationsprogramm.repository.SachkontoRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.awt.Color;
@@ -48,6 +55,10 @@ public class BelegeKasseExportPdfService {
 
     private final BelegRepository belegRepository;
     private final SachkontoRepository sachkontoRepository;
+    private final FirmeninformationRepository firmeninformationRepository;
+
+    @Value("${upload.path:uploads}")
+    private String uploadPath;
 
     private static final Color HEADER_BG   = new Color(220, 38, 38);   // rose-600
     private static final Color ROW_ALT     = new Color(254, 242, 242); // rose-50
@@ -83,24 +94,19 @@ public class BelegeKasseExportPdfService {
                 .toList();
 
         try {
-            Path dir = Path.of("uploads");
+            // Temp-PDF unter dem konfigurierten upload.path ablegen — sonst
+            // driftet die Temp-Location, wenn das Upload-Verzeichnis (z.B. in
+            // application-local.properties) umgebogen wurde.
+            Path dir = Paths.get(uploadPath);
             Files.createDirectories(dir);
             Path temp = Files.createTempFile(dir, "belege-export-", ".pdf");
             Document doc = new Document(PageSize.A4.rotate(), 36, 36, 36, 36);
             PdfWriter.getInstance(doc, Files.newOutputStream(temp));
             doc.open();
 
-            // Logo (optional)
-            try {
-                java.net.URL url = getClass().getResource("/static/firmenlogo_icon.png");
-                if (url != null) {
-                    Image logo = Image.getInstance(url);
-                    logo.scaleToFit(120, 60);
-                    doc.add(logo);
-                }
-            } catch (Exception ignored) {
-                // Kein Logo verfuegbar - PDF trotzdem rendern
-            }
+            // Kopfzeile: Firmenlogo links, Firmeninformationen rechts.
+            Firmeninformation firma = firmeninformationRepository.findFirmeninformation().orElse(null);
+            addBriefkopf(doc, firma);
 
             addTitle(doc, ym);
             addKpiSection(doc, imMonat);
@@ -117,6 +123,127 @@ public class BelegeKasseExportPdfService {
     }
 
     // ===================== Sections =====================
+
+    /**
+     * Briefkopf mit Firmenlogo (aus {@code uploads/firma/logo/<logoDateiname>})
+     * links und Firmenstammdaten (Name, Adresse, Kontakt, Steuernummern) rechts.
+     * Wird oben in das Dokument gerendert, bevor der eigentliche Titel kommt —
+     * der Steuerberater sieht damit auf einen Blick, von welcher Firma der
+     * Export stammt.
+     *
+     * Fallbacks:
+     *  - Logo nicht gepflegt oder Datei fehlt: nur Firmen-Text rechts wird gerendert.
+     *  - Keine Firmeninformation in der DB: nur das (eventuelle) Static-Logo.
+     *  - Beides fehlt: stillschweigend ueberspringen — PDF bleibt valide.
+     */
+    private void addBriefkopf(Document doc, Firmeninformation firma) throws DocumentException {
+        Image logo = ladeFirmenlogo(firma);
+        if (logo == null && firma == null) {
+            return; // nichts zu zeigen, Title-Section folgt direkt
+        }
+        PdfPTable kopf = new PdfPTable(new float[]{ 2f, 5f });
+        kopf.setWidthPercentage(100);
+        kopf.setSpacingAfter(8f);
+
+        // Linke Spalte: Logo (zentriert) oder leere Zelle
+        PdfPCell logoCell = new PdfPCell();
+        logoCell.setBorder(Rectangle.NO_BORDER);
+        logoCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+        if (logo != null) {
+            logo.scaleToFit(140, 70);
+            logoCell.addElement(logo);
+        }
+        kopf.addCell(logoCell);
+
+        // Rechte Spalte: Firmenstammdaten in Handwerker-Sprache (kein Buchhalter-Jargon)
+        PdfPCell infoCell = new PdfPCell();
+        infoCell.setBorder(Rectangle.NO_BORDER);
+        infoCell.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        infoCell.setVerticalAlignment(Element.ALIGN_MIDDLE);
+
+        if (firma != null) {
+            Font firmenname = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 13, TEXT_DARK);
+            Font line       = FontFactory.getFont(FontFactory.HELVETICA, 9, TEXT_CELL);
+            Font lineMuted  = FontFactory.getFont(FontFactory.HELVETICA, 8, TEXT_MUTED);
+
+            addRightLine(infoCell, firma.getFirmenname(), firmenname);
+            addRightLine(infoCell, joinNonEmpty(" ", firma.getStrasse()), line);
+            addRightLine(infoCell, joinNonEmpty(" ", firma.getPlz(), firma.getOrt()), line);
+            // Kontakt-Zeile: Tel · E-Mail · Web (nur was gepflegt ist)
+            String kontakt = joinNonEmpty(" · ",
+                    prefix("Tel. ",     firma.getTelefon()),
+                    prefix("",          firma.getEmail()),
+                    prefix("",          firma.getWebsite()));
+            addRightLine(infoCell, kontakt, lineMuted);
+            // Steuer-Zeile: nur fuer Steuerberater relevant, daher klein darunter
+            String steuer = joinNonEmpty(" · ",
+                    prefix("St.-Nr. ",  firma.getSteuernummer()),
+                    prefix("USt-IdNr. ", firma.getUstIdNr()));
+            addRightLine(infoCell, steuer, lineMuted);
+        }
+        kopf.addCell(infoCell);
+
+        doc.add(kopf);
+    }
+
+    /**
+     * Laedt das im FirmaEditor hinterlegte Logo aus dem Upload-Verzeichnis.
+     * Faellt auf die mitgelieferte Static-Resource zurueck, wenn das Firmen-Logo
+     * nicht gepflegt oder die Datei nicht (mehr) vorhanden ist.
+     */
+    private Image ladeFirmenlogo(Firmeninformation firma) {
+        String dateiname = firma != null ? firma.getLogoDateiname() : null;
+        if (dateiname != null && !dateiname.isBlank()) {
+            // Pfad-Traversal blocken — Defense-in-Depth, der Upload-Pfad sollte
+            // den Dateinamen ohnehin sanitisieren, aber wir prüfen hier nochmal.
+            String safe = dateiname.trim();
+            if (!safe.contains("..") && !safe.contains("/") && !safe.contains("\\")) {
+                Path base = Paths.get(uploadPath, "firma", "logo").toAbsolutePath().normalize();
+                Path logoPath = base.resolve(safe).normalize();
+                // Zweiter Check: nach Normalisierung muss der aufgeloeste Pfad
+                // immer noch unterhalb des Logo-Verzeichnisses liegen — sonst
+                // hat der Dateiname uns ueber einen exotischen Trick (z.B. NUL,
+                // Unicode-Slash) doch aus dem Sandkasten herausgehoben.
+                if (logoPath.startsWith(base) && Files.exists(logoPath)) {
+                    try {
+                        return Image.getInstance(logoPath.toString());
+                    } catch (IOException | BadElementException ex) {
+                        // Datei kaputt / kein gueltiges Bild — Fallback unten greift
+                    }
+                }
+            }
+        }
+        // Fallback: mitgelieferte Static-Resource (kann ebenfalls fehlen).
+        try {
+            java.net.URL url = getClass().getResource("/static/firmenlogo_icon.png");
+            if (url != null) return Image.getInstance(url);
+        } catch (IOException | BadElementException ignored) {
+            // Kein Logo verfuegbar — PDF wird ohne Logo gerendert.
+        }
+        return null;
+    }
+
+    private void addRightLine(PdfPCell cell, String text, Font font) {
+        if (text == null || text.isBlank()) return;
+        Paragraph p = new Paragraph(text, font);
+        p.setAlignment(Element.ALIGN_RIGHT);
+        cell.addElement(p);
+    }
+
+    private String joinNonEmpty(String sep, String... parts) {
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) {
+            if (p == null || p.isBlank()) continue;
+            if (sb.length() > 0) sb.append(sep);
+            sb.append(p.trim());
+        }
+        return sb.toString();
+    }
+
+    private String prefix(String prefix, String value) {
+        if (value == null || value.isBlank()) return null;
+        return prefix + value.trim();
+    }
 
     private void addTitle(Document doc, YearMonth ym) throws DocumentException {
         Font titleFont    = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 18, TEXT_DARK);
