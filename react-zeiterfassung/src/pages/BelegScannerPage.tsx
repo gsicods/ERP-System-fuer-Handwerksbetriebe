@@ -91,7 +91,28 @@ export default function BelegScannerPage() {
         return () => { releaseCameraStream() }
     }, [])
 
+    // Vollbild-Overlay fuer den TEILWEISE-Flow: nach Capture wartet die UI
+    // hier, bis der Upload durch ist und die Beleg-ID zurueckkommt. Danach
+    // navigieren wir direkt zur Positionen-Auswahl-Page, die selbst weiter
+    // pollt bis die KI-Extraktion fertig ist. So muss der Buchhalter nicht
+    // nochmal in einer Queue auf "Auswaehlen" klicken.
+    const [direktUploadDateiname, setDirektUploadDateiname] = useState<string | null>(null)
+    // Schutz gegen Doppel-Auslsung (z.B. Doppel-Tap im ScannerModal) und
+    // gegen State-Updates nach Unmount (User drueckt Back waehrend Upload).
+    const direktUploadInFlightRef = useRef(false)
+    const mountedRef = useRef(true)
+    useEffect(() => {
+        mountedRef.current = true
+        return () => { mountedRef.current = false }
+    }, [])
+
     const enqueue = (file: File, lieferant: LieferantOption | null, modus: AufteilungsModus) => {
+        // TEILWEISE laeuft NICHT ueber die Hintergrund-Queue — der Nutzer wartet
+        // bis die Beleg-ID da ist und landet sofort auf der Positionen-Auswahl.
+        if (modus === 'TEILWEISE') {
+            void uploadUndNavigiereZuPositionen(file, lieferant)
+            return
+        }
         const item: QueueItem = {
             localId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             file,
@@ -104,6 +125,56 @@ export default function BelegScannerPage() {
         setQueue(q => [item, ...q])
         // Fire-and-forget: kein await — Scanner ist sofort wieder bereit.
         void uploadItem(item)
+    }
+
+    const uploadUndNavigiereZuPositionen = async (file: File, lieferant: LieferantOption | null) => {
+        // Doppel-Guard: Wenn schon ein TEILWEISE-Upload laeuft, ignoriere zweite
+        // Auslsung (sonst gehen Belege verloren, weil Overlay ueberschrieben wird).
+        if (direktUploadInFlightRef.current) return
+        direktUploadInFlightRef.current = true
+        setDirektUploadDateiname(file.name)
+        try {
+            const fd = new FormData()
+            fd.append('datei', file)
+            const url = new URL(`/api/buchhaltung/mobile/belege`, window.location.origin)
+            if (token) url.searchParams.set('token', token)
+            if (lieferant?.id != null) url.searchParams.set('lieferantId', String(lieferant.id))
+            url.searchParams.set('aufteilungsModus', 'TEILWEISE')
+            const res = await fetch(url.pathname + url.search, {
+                method: 'POST',
+                body: fd,
+            })
+            if (!res.ok) {
+                const txt = await res.text().catch(() => '')
+                throw new Error(`HTTP ${res.status}: ${txt}`)
+            }
+            const data = await res.json()
+            // Wenn der User waehrend des Uploads die Page verlassen hat, NICHT
+            // mehr navigieren — sonst springt er aus einer ganz anderen Page
+            // ploetzlich zur Positionen-Auswahl.
+            if (!mountedRef.current) return
+            // Direkt rueber — die Page pollt selbst, bis kiAnalyseStatus DONE ist.
+            navigate(`/belege/${data.id}/positionen`)
+        } catch (err) {
+            if (!mountedRef.current) return
+            // Bei Fehler nicht spurlos verschwinden: in die Queue als failed,
+            // damit der Buchhalter den Beleg sieht und retryen kann.
+            const msg = err instanceof Error ? err.message : String(err)
+            setQueue(q => [{
+                localId: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                file,
+                status: 'failed',
+                addedAt: Date.now(),
+                error: msg,
+                lieferantId: lieferant?.id,
+                lieferantName: lieferant?.firmenname,
+                aufteilungsModus: 'TEILWEISE',
+            }, ...q])
+        } finally {
+            // Overlay garantiert zumachen, Lock loesen — auch bei Unmount.
+            if (mountedRef.current) setDirektUploadDateiname(null)
+            direktUploadInFlightRef.current = false
+        }
     }
 
     // Sichtbare Fehler-Karte fuer Dateien, die wir gar nicht erst hochladen
@@ -357,6 +428,28 @@ export default function BelegScannerPage() {
                     onSave={handleScanComplete}
                 />
             )}
+
+            {direktUploadDateiname && (
+                <DirektUploadOverlay dateiname={direktUploadDateiname} />
+            )}
+        </div>
+    )
+}
+
+function DirektUploadOverlay({ dateiname }: { dateiname: string }) {
+    return (
+        <div className="fixed inset-0 z-[70] bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 safe-area-top safe-area-bottom">
+            <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full flex flex-col items-center gap-4 text-center">
+                <Loader2 className="w-12 h-12 text-rose-600 animate-spin" />
+                <div>
+                    <p className="text-lg font-bold text-slate-900">Beleg wird hochgeladen…</p>
+                    <p className="text-sm text-slate-500 mt-1 truncate max-w-full">{dateiname}</p>
+                </div>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                    Gleich werden die einzelnen Positionen erkannt — du kannst sie dann direkt
+                    anhaken. Bitte einen Moment nicht zurückgehen.
+                </p>
+            </div>
         </div>
     )
 }
