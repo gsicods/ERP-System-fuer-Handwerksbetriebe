@@ -4,10 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
+
+import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.sun.mail.imap.IMAPFolder;
 import jakarta.mail.Address;
@@ -685,6 +689,105 @@ class EmailImportServiceTest {
             assertThat(service.normalizeSubject("RE: ")).isEmpty();
             assertThat(service.normalizeSubject("AW: ")).isEmpty();
             assertThat(service.normalizeSubject("Fwd: ")).isEmpty();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Subject-basiertes Fallback-Matching beim Live-Import
+    // (findParentBySubject – greift, wenn In-Reply-To/References-Header
+    //  beim Import keinen Parent liefern)
+    // ═══════════════════════════════════════════════════════════════
+
+    @Nested
+    class SubjectFallbackBeimImport {
+
+        @BeforeEach
+        void setupLookback() {
+            // @Value wird im Unit-Test nicht aufgelöst → manuell setzen.
+            ReflectionTestUtils.setField(service, "subjectFallbackLookback", 500);
+        }
+
+        private Email mailMitSubject(Long id, String subject, LocalDateTime sentAt) {
+            Email e = new Email();
+            e.setId(id);
+            e.setSubject(subject);
+            e.setSentAt(sentAt);
+            return e;
+        }
+
+        @Test
+        void rueckgabeNullWennSubjectKeinReply() {
+            Email reply = mailMitSubject(1L, "Angebot AG-2026/04/00005", LocalDateTime.now());
+
+            Email parent = service.findParentBySubject(reply);
+
+            assertThat(parent).isNull();
+            verify(emailRepository, never()).findRecentBefore(any(), any());
+        }
+
+        @Test
+        void rueckgabeNullWennNormalisatBlank() {
+            // "RE: " allein → normalisiert zu "" → DB darf nicht angefasst werden.
+            Email reply = mailMitSubject(1L, "RE: ", LocalDateTime.now());
+
+            Email parent = service.findParentBySubject(reply);
+
+            assertThat(parent).isNull();
+            verify(emailRepository, never()).findRecentBefore(any(), any());
+        }
+
+        @Test
+        void rueckgabeNullWennSentAtNull() {
+            Email reply = mailMitSubject(1L, "AW: Angebot AG-2026/04/00005", null);
+
+            Email parent = service.findParentBySubject(reply);
+
+            assertThat(parent).isNull();
+            verify(emailRepository, never()).findRecentBefore(any(), any());
+        }
+
+        @Test
+        void waehltJuengstenKandidatVorReplyAlsParent() {
+            LocalDateTime jetzt = LocalDateTime.now();
+            Email reply = mailMitSubject(99L, "AW: Angebot AG-2026/04/00005 - Balkongelaender", jetzt);
+            Email aelterer = mailMitSubject(1L, "Angebot AG-2026/04/00005 - Balkongelaender", jetzt.minusDays(3));
+            Email juengerer = mailMitSubject(2L, "Angebot AG-2026/04/00005 - Balkongelaender", jetzt.minusHours(2));
+            when(emailRepository.findRecentBefore(any(LocalDateTime.class), any(Pageable.class)))
+                    .thenReturn(List.of(juengerer, aelterer));
+
+            Email parent = service.findParentBySubject(reply);
+
+            assertThat(parent).isNotNull();
+            assertThat(parent.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        void ignoriertKandidatenMitAbweichendemNormalisat() {
+            LocalDateTime jetzt = LocalDateTime.now();
+            Email reply = mailMitSubject(99L, "AW: Angebot AG-2026/04/00005", jetzt);
+            Email fremd = mailMitSubject(1L, "Rechnung RE-2026/04/00007", jetzt.minusHours(1));
+            when(emailRepository.findRecentBefore(any(LocalDateTime.class), any(Pageable.class)))
+                    .thenReturn(List.of(fremd));
+
+            Email parent = service.findParentBySubject(reply);
+
+            assertThat(parent).isNull();
+        }
+
+        @Test
+        void selfMatchWirdAusgeschlossen() {
+            // Re-Import: Mail liegt mit gleicher id schon im Lookback-Fenster und
+            // hat sentAt == reply.sentAt (Edge-Case: gleicher Zeitstempel im
+            // selben Sekundenraster). Darf NICHT zu sich selbst threaden.
+            LocalDateTime jetzt = LocalDateTime.now();
+            Email reply = mailMitSubject(42L, "AW: Angebot AG-2026/04/00005", jetzt);
+            Email selbst = mailMitSubject(42L, "AW: Angebot AG-2026/04/00005", jetzt.minusSeconds(1));
+            when(emailRepository.findRecentBefore(any(LocalDateTime.class), any(Pageable.class)))
+                    .thenReturn(List.of(selbst));
+
+            Email parent = service.findParentBySubject(reply);
+
+            assertThat(parent).isNull();
         }
     }
 }

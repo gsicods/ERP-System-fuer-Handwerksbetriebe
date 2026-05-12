@@ -13,6 +13,7 @@ import org.example.kalkulationsprogramm.domain.Lieferanten;
 import org.example.kalkulationsprogramm.domain.Projekt;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -336,6 +337,17 @@ public interface EmailRepository extends JpaRepository<Email, Long> {
    */
   @Query("SELECT e FROM Email e WHERE e.messageId IN :messageIds ORDER BY e.sentAt DESC")
   List<Email> findByMessageIdIn(@Param("messageIds") java.util.Collection<String> messageIds);
+
+  /**
+   * Liefert kürzlich vor {@code before} eingegangene Mails (sentAt DESC) als
+   * Kandidaten für Subject-basiertes Threading beim Live-Import.
+   * <p>Pagination via {@link Pageable} begrenzt den Lookback, damit der
+   * Fallback pro importierter Mail O(LIMIT) bleibt und nicht über die gesamte
+   * Mailbox scannt.
+   */
+  @Query("SELECT e FROM Email e WHERE e.sentAt IS NOT NULL AND e.sentAt < :before"
+          + " AND e.subject IS NOT NULL ORDER BY e.sentAt DESC, e.id DESC")
+  List<Email> findRecentBefore(@Param("before") LocalDateTime before, Pageable pageable);
 
   long countByDirection(EmailDirection direction);
 

@@ -25,6 +25,7 @@ import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,6 +61,15 @@ public class EmailImportService {
 
     @Value("${email.features.enabled:true}")
     private boolean emailFeaturesEnabled;
+
+    /**
+     * Wie viele Mails vor {@code email.sentAt} der Subject-Fallback beim Live-
+     * Import maximal scannt. Default 500 deckt bei normalem Mailaufkommen
+     * mehrere Tage ab. Bei sehr aktiven Mailboxen über
+     * {@code email.threading.subject-fallback-lookback} hochsetzen.
+     */
+    @Value("${email.threading.subject-fallback-lookback:500}")
+    private int subjectFallbackLookback;
 
     private final EmailRepository emailRepository;
     private final EmailAttachmentRepository attachmentRepository;
@@ -355,8 +365,17 @@ public class EmailImportService {
                     .toLocalDateTime());
         }
 
-        // Parent-Email via In-Reply-To oder References Header finden
+        // Parent-Email via In-Reply-To oder References Header finden.
+        // Fallback: Subject-Matching (z.B. t-online-Client setzt In-Reply-To
+        // nicht zuverlässig, oder die Original-Message-ID liegt nicht in der DB).
         Email parentEmail = findParentEmail(msg);
+        if (parentEmail == null) {
+            parentEmail = findParentBySubject(email);
+            if (parentEmail != null) {
+                log.info("[EmailImport] Parent via Subject-Fallback gefunden für '{}' → '{}'",
+                        email.getSubject(), parentEmail.getSubject());
+            }
+        }
         if (parentEmail != null) {
             email.setParentEmail(parentEmail);
             // Zuordnung vom Parent übernehmen, ABER: Lieferant-Domain hat Vorrang
@@ -572,6 +591,53 @@ public class EmailImportService {
 
         // Fallback: Neueste aus References
         return foundParents.getFirst();
+    }
+
+    /**
+     * Subject-basiertes Fallback-Matching beim Live-Import: greift, wenn
+     * {@link #findParentEmail(Message)} kein Header-Match liefert (Client setzt
+     * {@code In-Reply-To} nicht, oder Original-Mail liegt ohne passende
+     * Message-ID in der DB).
+     *
+     * <p>Verwendet dieselbe Normalisierung wie der Startup-Backfill
+     * ({@link #normalizeSubject(String)} + {@link #isReplyOrForward(String)}),
+     * scannt aber nur die {@link #subjectFallbackLookback} jüngsten Mails
+     * vor {@code email.sentAt}, damit der Import nicht über die gesamte
+     * Mailbox läuft.
+     *
+     * <p>Self-Match-Schutz: bei reimportierten Mails kann ein Kandidat
+     * dieselbe ID haben — wird explizit ausgeschlossen.
+     */
+    Email findParentBySubject(Email email) {
+        if (email == null || email.getSubject() == null || email.getSentAt() == null) {
+            return null;
+        }
+        if (!isReplyOrForward(email.getSubject())) {
+            return null;
+        }
+        String normalized = normalizeSubject(email.getSubject());
+        if (normalized.isBlank()) {
+            return null;
+        }
+        List<Email> candidates = emailRepository.findRecentBefore(
+                email.getSentAt(),
+                PageRequest.of(0, subjectFallbackLookback));
+        Email best = null;
+        for (Email candidate : candidates) {
+            if (candidate.getSubject() == null || candidate.getSentAt() == null) {
+                continue;
+            }
+            if (email.getId() != null && email.getId().equals(candidate.getId())) {
+                continue;
+            }
+            if (!normalized.equals(normalizeSubject(candidate.getSubject()))) {
+                continue;
+            }
+            if (best == null || candidate.getSentAt().isAfter(best.getSentAt())) {
+                best = candidate;
+            }
+        }
+        return best;
     }
 
     /**
