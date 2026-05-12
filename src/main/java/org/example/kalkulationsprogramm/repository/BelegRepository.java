@@ -3,6 +3,7 @@ package org.example.kalkulationsprogramm.repository;
 import org.example.kalkulationsprogramm.domain.Beleg;
 import org.example.kalkulationsprogramm.domain.BelegKategorie;
 import org.example.kalkulationsprogramm.domain.BelegStatus;
+import org.example.kalkulationsprogramm.domain.Mitarbeiter;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -18,6 +19,15 @@ public interface BelegRepository extends JpaRepository<Beleg, Long> {
     List<Beleg> findByStatusAndBelegKategorieOrderByBelegDatumDesc(BelegStatus status, BelegKategorie kategorie);
 
     List<Beleg> findAllByOrderByUploadDatumDesc();
+
+    /**
+     * Liefert die zuletzt vom angegebenen Mitarbeiter hochgeladenen Belege.
+     * Wird vom Mobile-Endpoint {@code GET /api/buchhaltung/mobile/belege}
+     * verwendet, damit der Buchhalter am Handy nach App-Wechsel/Reload seine
+     * frisch gescannten Belege wiederfindet — Limit auf 20, weil die Liste
+     * nur den Wiederfindungs-Use-Case bedient (Validierung passiert am PC).
+     */
+    List<Beleg> findTop20ByUploadedByOrderByUploadDatumDesc(Mitarbeiter uploadedBy);
 
     @Query("SELECT b FROM Beleg b WHERE b.status = :status AND b.belegKategorie IN :kategorien ORDER BY b.belegDatum DESC, b.uploadDatum DESC")
     List<Beleg> findValidierteByKategorien(@Param("status") BelegStatus status,

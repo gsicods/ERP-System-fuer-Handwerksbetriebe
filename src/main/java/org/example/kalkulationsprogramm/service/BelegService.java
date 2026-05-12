@@ -255,6 +255,24 @@ public class BelegService {
         return list.stream().map(b -> toDto(b, false)).toList();
     }
 
+    /**
+     * Mobile-Sicht auf die zuletzt vom Aufrufer hochgeladenen Belege.
+     * Bewusst auf den Aufrufer eingeschraenkt (anders als {@link #listBelege}),
+     * weil das Handy nur den Wiederfindungs-Use-Case bedient: "ich habe gerade
+     * etwas gescannt, ist es angekommen". Der Buchhalter sieht am PC die volle
+     * Firmen-Liste.
+     */
+    @Transactional(readOnly = true)
+    public List<BelegDto.Response> listBelegeFuerMobile(Mitarbeiter uploader) {
+        if (uploader == null) {
+            return List.of();
+        }
+        return belegRepository.findTop20ByUploadedByOrderByUploadDatumDesc(uploader)
+                .stream()
+                .map(b -> toDto(b, false))
+                .toList();
+    }
+
     @Transactional(readOnly = true)
     public BelegDto.Response getBeleg(Long id) {
         return belegRepository.findById(id).map(b -> toDto(b, true)).orElse(null);

@@ -208,4 +208,64 @@ class BelegControllerTest {
                     .andExpect(jsonPath("$").isArray());
         }
     }
+
+    /**
+     * Mobile-Liste der zuletzt vom Aufrufer hochgeladenen Belege.
+     * Bug-Szenario: ohne diesen Endpoint sieht der Buchhalter am Handy
+     * nach App-Wechsel/Reload "0 in Queue / 0 Hochgeladen / 0 Fehler",
+     * obwohl die Belege auf dem Server liegen.
+     */
+    @Nested
+    @DisplayName("GET /api/buchhaltung/mobile/belege")
+    class MobileBelegeListe {
+
+        @Test
+        @DisplayName("Happy-Path: Liefert die letzten Belege des aufrufenden Mitarbeiters")
+        void liefertEigeneBelege() throws Exception {
+            Mitarbeiter caller = new Mitarbeiter();
+            caller.setId(42L);
+            given(belegService.findCaller(eq("mob-token"), any())).willReturn(caller);
+            given(belegService.darfSehen(caller)).willReturn(true);
+
+            BelegDto.Response b = BelegDto.Response.builder()
+                    .id(7L)
+                    .originalDateiname("Scan_Max_Mustermann.pdf")
+                    .status("ERFASST")
+                    .kiAnalyseStatus("DONE")
+                    .aufteilungsModus("TEILWEISE")
+                    .lieferantName("Max Mustermann GmbH")
+                    .build();
+            given(belegService.listBelegeFuerMobile(caller)).willReturn(List.of(b));
+
+            mockMvc.perform(get("/api/buchhaltung/mobile/belege")
+                            .param("token", "mob-token"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].id").value(7))
+                    .andExpect(jsonPath("$[0].originalDateiname").value("Scan_Max_Mustermann.pdf"))
+                    .andExpect(jsonPath("$[0].aufteilungsModus").value("TEILWEISE"));
+        }
+
+        @Test
+        @DisplayName("Unbekannter Token -> 403 (Token-only-Endpoint, kein silent-Empty)")
+        void unbekannterToken_liefert403() throws Exception {
+            given(belegService.findCaller(eq("falsch"), any())).willReturn(null);
+
+            mockMvc.perform(get("/api/buchhaltung/mobile/belege")
+                            .param("token", "falsch"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("Aufrufer ohne darfSehen -> 403 (Read-only-Konten ausgeschlossen)")
+        void ohneBerechtigung_liefert403() throws Exception {
+            Mitarbeiter caller = new Mitarbeiter();
+            caller.setId(99L);
+            given(belegService.findCaller(eq("mob-token"), any())).willReturn(caller);
+            given(belegService.darfSehen(caller)).willReturn(false);
+
+            mockMvc.perform(get("/api/buchhaltung/mobile/belege")
+                            .param("token", "mob-token"))
+                    .andExpect(status().isForbidden());
+        }
+    }
 }

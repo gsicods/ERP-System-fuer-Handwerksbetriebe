@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     ArrowLeft, ScanLine, Loader2, CheckCircle2, AlertCircle,
@@ -27,7 +27,9 @@ interface LieferantOption {
  * der Nutzer hakt sie auf einer Folgeseite an. Bei "Ganz" ist der Mobile-
  * Vorgang abgeschlossen — die Validierung findet am PC statt.
  */
-type ItemStatus = 'pending' | 'uploading' | 'done' | 'failed'
+// 'done' gibt es nicht mehr — erfolgreiche Uploads werden aus der Queue
+// entfernt und tauchen in der Server-Liste (serverBelege) auf.
+type ItemStatus = 'pending' | 'uploading' | 'failed'
 
 type AufteilungsModus = 'VOLLSTAENDIG' | 'TEILWEISE'
 
@@ -38,12 +40,25 @@ interface QueueItem {
     localId: string
     file: File
     status: ItemStatus
-    serverId?: number
     error?: string
     addedAt: number
     lieferantId?: number
     lieferantName?: string
     aufteilungsModus: AufteilungsModus
+}
+
+// Server-Sicht auf einen schon hochgeladenen Beleg (GET /mobile/belege).
+// Bewusst nur die Felder, die wir am Handy brauchen — der Buchhalter
+// validiert am PC, das Handy zeigt nur "ist angekommen / Positionen
+// auswaehlen / fehler beim KI-Lesen".
+interface ServerBeleg {
+    id: number
+    originalDateiname: string | null
+    uploadDatum: string
+    status: string
+    kiAnalyseStatus: string | null
+    aufteilungsModus: string
+    lieferantName: string | null
 }
 
 interface Permissions {
@@ -57,6 +72,11 @@ export default function BelegScannerPage() {
     const [permissionLoading, setPermissionLoading] = useState(true)
     const [showScanner, setShowScanner] = useState(false)
     const [queue, setQueue] = useState<QueueItem[]>([])
+    // Serverseitige Liste der zuletzt hochgeladenen Belege des Aufrufers.
+    // Sie ueberlebt App-Wechsel, PWA-Reload und den TEILWEISE-Navigationssprung
+    // — anders als die lokale Queue, die nur in-flight + failed Items haelt.
+    const [serverBelege, setServerBelege] = useState<ServerBeleg[]>([])
+    const [serverLoading, setServerLoading] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
 
     // Wizard-State: ein Beleg wird in 3 Schritten konfiguriert, dann aufgenommen.
@@ -83,6 +103,36 @@ export default function BelegScannerPage() {
             .catch(() => setPermission({ darfScannen: false, darfSehen: false }))
             .finally(() => setPermissionLoading(false))
     }, [token])
+
+    // Server-Liste der zuletzt hochgeladenen Belege laden. Wird beim Mount,
+    // nach jedem erfolgreichen Upload und beim Zurueck-Wechseln in den Tab
+    // (visibilitychange) gerufen — letzteres weil iOS PWA die Page beim
+    // Tab-Wechsel nicht remounted, der KI-Status aber serverseitig
+    // weiterlaeuft.
+    const reloadServerBelege = useCallback(async () => {
+        if (!token) return
+        setServerLoading(true)
+        try {
+            const res = await fetch(`/api/buchhaltung/mobile/belege?token=${encodeURIComponent(token)}`)
+            if (!res.ok) return
+            const data = (await res.json()) as ServerBeleg[]
+            setServerBelege(data)
+        } catch {
+            // Liste ist nur Convenience — bei Netzwerkfehler weiter mit lokalem State.
+        } finally {
+            setServerLoading(false)
+        }
+    }, [token])
+
+    useEffect(() => {
+        if (!permission?.darfSehen) return
+        void reloadServerBelege()
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') void reloadServerBelege()
+        }
+        document.addEventListener('visibilitychange', onVisible)
+        return () => document.removeEventListener('visibilitychange', onVisible)
+    }, [permission?.darfSehen, reloadServerBelege])
 
     // Beim Verlassen der Scanner-Page Kamera-Tracks freigeben. Innerhalb der
     // Page bleibt der MediaStream im cameraStreamService gecacht — so wird
@@ -153,6 +203,9 @@ export default function BelegScannerPage() {
             // mehr navigieren — sonst springt er aus einer ganz anderen Page
             // ploetzlich zur Positionen-Auswahl.
             if (!mountedRef.current) return
+            // Server-Liste refetchen, damit der Beleg auch bei Rueck-Navigation
+            // sichtbar ist (Page bleibt gemountet, State bleibt erhalten).
+            void reloadServerBelege()
             // Direkt rueber — die Page pollt selbst, bis kiAnalyseStatus DONE ist.
             navigate(`/belege/${data.id}/positionen`)
         } catch (err) {
@@ -210,10 +263,34 @@ export default function BelegScannerPage() {
                 const txt = await res.text().catch(() => '')
                 throw new Error(`HTTP ${res.status}: ${txt}`)
             }
-            const data = await res.json()
-            setQueue(q => q.map(x => x.localId === item.localId
-                ? { ...x, status: 'done', serverId: data.id }
-                : x))
+            // Erfolgreich hochgeladen — Item wandert aus der lokalen Queue in
+            // die persistente Server-Liste. Dadurch ueberlebt es Reload/Tab-
+            // Wechsel und der Buchhalter findet es auch nach App-Pause wieder.
+            //
+            // Optimistic Insert: ohne diesen Schritt waere das Item zwischen
+            // setQueue(filter) und Eintreffen der reloadServerBelege()-Response
+            // kurz weder lokal noch in der Server-Liste sichtbar — der
+            // "Hochgeladen"-Counter wuerde flackern (3→2→3). Wir fuegen das
+            // Item daher sofort optimistisch ein; der spaetere Refetch
+            // dedupliziert per id.
+            const data = (await res.json().catch(() => null)) as { id?: number } | null
+            const serverId = data?.id
+            if (serverId != null) {
+                const optimistisch: ServerBeleg = {
+                    id: serverId,
+                    originalDateiname: item.file.name,
+                    uploadDatum: new Date().toISOString(),
+                    status: 'ERFASST',
+                    kiAnalyseStatus: 'PENDING',
+                    aufteilungsModus: item.aufteilungsModus,
+                    lieferantName: item.lieferantName ?? null,
+                }
+                setServerBelege(prev =>
+                    prev.some(b => b.id === serverId) ? prev : [optimistisch, ...prev]
+                )
+            }
+            setQueue(q => q.filter(x => x.localId !== item.localId))
+            void reloadServerBelege()
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err)
             setQueue(q => q.map(x => x.localId === item.localId
@@ -345,9 +422,12 @@ export default function BelegScannerPage() {
         )
     }
 
+    // "Hochgeladen" zaehlt jetzt aus der persistenten Server-Liste, nicht aus
+    // der lokalen Queue — sonst wuerde der Counter beim Refetch zurueckspringen
+    // auf 0, sobald ein Item aus der Queue in die Server-Liste wandert.
     const counts = {
         offen: queue.filter(q => q.status === 'pending' || q.status === 'uploading').length,
-        fertig: queue.filter(q => q.status === 'done').length,
+        fertig: serverBelege.length,
         fehler: queue.filter(q => q.status === 'failed').length,
     }
 
@@ -390,25 +470,36 @@ export default function BelegScannerPage() {
                 <StatBox label="Fehler" value={counts.fehler} color="text-red-600" />
             </div>
 
-            {/* Liste */}
+            {/* Liste: erst lokale in-flight/fehlerhafte Items, danach die
+                persistierte Server-Liste der zuletzt hochgeladenen Belege. */}
             <div className="flex-1 overflow-auto p-4 space-y-2 safe-area-bottom">
-                {queue.length === 0 ? (
+                {queue.length === 0 && serverBelege.length === 0 ? (
                     <div className="text-center text-slate-400 py-12">
                         <Receipt className="w-12 h-12 mx-auto mb-2 opacity-40" />
-                        <p className="text-sm">Noch keine Belege gescannt.</p>
+                        <p className="text-sm">
+                            {serverLoading ? 'Belege werden geladen…' : 'Noch keine Belege gescannt.'}
+                        </p>
                         <p className="text-xs mt-1">Tippe oben auf <strong>Beleg hinzufügen</strong>.</p>
                     </div>
-                ) : queue.map(item => (
-                    <QueueRow
-                        key={item.localId}
-                        item={item}
-                        onRetry={retry}
-                        onRemove={removeItem}
-                        onOpenPositionen={(beleg) =>
-                            navigate(`/belege/${beleg}/positionen`)
-                        }
-                    />
-                ))}
+                ) : (
+                    <>
+                        {queue.map(item => (
+                            <QueueRow
+                                key={item.localId}
+                                item={item}
+                                onRetry={retry}
+                                onRemove={removeItem}
+                            />
+                        ))}
+                        {serverBelege.map(b => (
+                            <ServerBelegRow
+                                key={b.id}
+                                beleg={b}
+                                onOpenPositionen={(id) => navigate(`/belege/${id}/positionen`)}
+                            />
+                        ))}
+                    </>
+                )}
             </div>
 
             {/* Wizard Schritt 1: Quelle waehlen */}
@@ -601,25 +692,22 @@ function StatBox({ label, value, color }: { label: string; value: number; color:
     )
 }
 
-function QueueRow({ item, onRetry, onRemove, onOpenPositionen }: {
+function QueueRow({ item, onRetry, onRemove }: {
     item: QueueItem
     onRetry: (item: QueueItem) => void
     onRemove: (localId: string) => void
-    onOpenPositionen: (belegId: number) => void
 }) {
-    const Icon = item.status === 'done' ? CheckCircle2
-        : item.status === 'failed' ? AlertCircle
+    // 'done' kommt hier nicht mehr vor — erfolgreiche Uploads wandern in die
+    // Server-Liste. QueueRow zeigt also nur in-flight (pending/uploading) und
+    // failed Items.
+    const Icon = item.status === 'failed' ? AlertCircle
         : item.status === 'uploading' ? Loader2
         : Receipt
-    const iconCls = item.status === 'done' ? 'text-emerald-500'
-        : item.status === 'failed' ? 'text-red-500'
+    const iconCls = item.status === 'failed' ? 'text-red-500'
         : item.status === 'uploading' ? 'text-sky-500 animate-spin'
         : 'text-slate-400'
-    const bg = item.status === 'done' ? 'bg-emerald-50 border-emerald-100'
-        : item.status === 'failed' ? 'bg-red-50 border-red-100'
+    const bg = item.status === 'failed' ? 'bg-red-50 border-red-100'
         : 'bg-white border-slate-200'
-
-    const time = new Date(item.addedAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
     return (
         <div className={`flex items-center gap-3 p-3 rounded-xl border ${bg}`}>
@@ -629,7 +717,6 @@ function QueueRow({ item, onRetry, onRemove, onOpenPositionen }: {
                 <p className="text-xs text-slate-500">
                     {item.status === 'pending' && 'Wartet…'}
                     {item.status === 'uploading' && 'Wird hochgeladen…'}
-                    {item.status === 'done' && `Hochgeladen (#${item.serverId}) · ${time}`}
                     {item.status === 'failed' && (item.error || 'Fehler')}
                 </p>
                 {item.lieferantName && (
@@ -641,19 +728,76 @@ function QueueRow({ item, onRetry, onRemove, onOpenPositionen }: {
                     <RefreshCw className="w-4 h-4 text-slate-600" />
                 </button>
             )}
-            {item.status === 'done' && item.aufteilungsModus === 'TEILWEISE' && item.serverId != null && (
+            {item.status === 'failed' && (
+                <button onClick={() => onRemove(item.localId)} className="p-2 hover:bg-white rounded-lg" aria-label="Entfernen">
+                    <X className="w-4 h-4 text-slate-500" />
+                </button>
+            )}
+        </div>
+    )
+}
+
+function ServerBelegRow({ beleg, onOpenPositionen }: {
+    beleg: ServerBeleg
+    onOpenPositionen: (belegId: number) => void
+}) {
+    const istValidiert = beleg.status === 'VALIDIERT'
+    const kiLaeuft = beleg.kiAnalyseStatus === 'PENDING' || beleg.kiAnalyseStatus === 'RUNNING'
+    const kiFehler = beleg.kiAnalyseStatus === 'FAILED'
+    const istTeilweise = beleg.aufteilungsModus === 'TEILWEISE'
+    const kannPositionenWaehlen = istTeilweise && beleg.kiAnalyseStatus === 'DONE' && !istValidiert
+
+    const Icon = istValidiert ? CheckCircle2
+        : kiFehler ? AlertCircle
+        : kiLaeuft ? Loader2
+        : CheckCircle2
+    const iconCls = istValidiert ? 'text-emerald-500'
+        : kiFehler ? 'text-amber-500'
+        : kiLaeuft ? 'text-sky-500 animate-spin'
+        : 'text-emerald-500'
+    const bg = istValidiert ? 'bg-emerald-50 border-emerald-100'
+        : kiFehler ? 'bg-amber-50 border-amber-100'
+        : 'bg-white border-slate-200'
+
+    const zeit = (() => {
+        try {
+            return new Date(beleg.uploadDatum).toLocaleString('de-DE', {
+                day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+            })
+        } catch { return beleg.uploadDatum }
+    })()
+
+    const statusText = istValidiert
+        ? `Validiert · ${zeit}`
+        : kiLaeuft
+        ? `KI liest Beleg… · ${zeit}`
+        : kiFehler
+        ? `KI-Lesefehler · ${zeit}`
+        : `Hochgeladen · ${zeit}`
+
+    return (
+        <div className={`flex items-center gap-3 p-3 rounded-xl border ${bg}`}>
+            <Icon className={`w-6 h-6 flex-shrink-0 ${iconCls}`} />
+            <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm text-slate-900 truncate">
+                    {beleg.originalDateiname || `Beleg #${beleg.id}`}
+                </p>
+                <p className="text-xs text-slate-500">{statusText}</p>
+                {beleg.lieferantName && (
+                    <p className="text-xs text-slate-500 truncate">→ {beleg.lieferantName}</p>
+                )}
+                {istTeilweise && !kannPositionenWaehlen && !istValidiert && (
+                    <p className="text-xs text-amber-700 mt-0.5">Positionen-Auswahl folgt nach KI-Analyse</p>
+                )}
+            </div>
+            {kannPositionenWaehlen && (
                 <button
-                    onClick={() => onOpenPositionen(item.serverId!)}
+                    onClick={() => onOpenPositionen(beleg.id)}
                     className="px-2 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1"
                     aria-label="Positionen auswählen"
                 >
                     <ListChecks className="w-4 h-4" />
                     Auswählen
-                </button>
-            )}
-            {(item.status === 'done' || item.status === 'failed') && (
-                <button onClick={() => onRemove(item.localId)} className="p-2 hover:bg-white rounded-lg" aria-label="Entfernen">
-                    <X className="w-4 h-4 text-slate-500" />
                 </button>
             )}
         </div>

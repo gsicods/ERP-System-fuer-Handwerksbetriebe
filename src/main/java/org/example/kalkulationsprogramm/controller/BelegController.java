@@ -176,6 +176,23 @@ public class BelegController {
         return getBeleg(id, token, null);
     }
 
+    /**
+     * Mobile-Liste der zuletzt vom Aufrufer hochgeladenen Belege. Bedient den
+     * Wiederfindungs-Use-Case auf dem Handy: nach App-Wechsel/Reload/TEILWEISE-
+     * Navigation will der Buchhalter sehen, dass seine Scans angekommen sind.
+     * Bewusst auf den Aufrufer gefiltert — die volle Firmen-Liste gibt es nur
+     * unter dem session-authentifizierten {@link #listBelege} am PC.
+     */
+    @GetMapping("/mobile/belege")
+    public ResponseEntity<List<BelegDto.Response>> listBelegeMobile(
+            @RequestParam(value = "token", required = false) String token) {
+        Mitarbeiter caller = resolveCaller(token, null);
+        if (caller == null || !belegService.darfSehen(caller)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        return ResponseEntity.ok(belegService.listBelegeFuerMobile(caller));
+    }
+
     // ===================== MwSt-Rechner =====================
 
     /**
