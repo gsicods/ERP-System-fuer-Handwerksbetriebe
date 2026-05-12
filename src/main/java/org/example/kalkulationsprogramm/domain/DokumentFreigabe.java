@@ -83,6 +83,26 @@ public class DokumentFreigabe
     @Column(name = "akzeptiert_email", length = 255)
     private String akzeptiertEmail;
 
+    /**
+     * Vorname der konkret klickenden Person. Für Altbestand (Akzeptanzen vor V317)
+     * NULL — neue Akzeptanzen müssen den Wert tragen (Validierung im Service,
+     * siehe {@code DokumentFreigabeService.akzeptiere}).
+     */
+    @Column(name = "unterzeichner_vorname", length = 80)
+    private String unterzeichnerVorname;
+
+    /** Nachname der konkret klickenden Person. Siehe {@link #unterzeichnerVorname}. */
+    @Column(name = "unterzeichner_nachname", length = 80)
+    private String unterzeichnerNachname;
+
+    /**
+     * Vorberechneter Anzeigename "Vorname Nachname". Wird beim Speichern aus
+     * den Einzelfeldern normalisiert, damit das Audit und der Annahme-Beleg
+     * immer denselben Wortlaut zeigen wie das Akzeptanz-Formular.
+     */
+    @Column(name = "unterzeichner_name", length = 160)
+    private String unterzeichnerName;
+
     @Column(name = "hash_acceptance", length = 128)
     private String hashAcceptance;
 

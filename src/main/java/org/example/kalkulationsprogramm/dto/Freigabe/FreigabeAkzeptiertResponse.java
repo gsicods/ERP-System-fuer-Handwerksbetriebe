@@ -20,4 +20,6 @@ public class FreigabeAkzeptiertResponse
     private String dokumentArt;
     private LocalDateTime akzeptiertAm;
     private String hashAcceptance;
+    /** Vor- und Nachname der freigebenden Person, normalisiert wie gespeichert. */
+    private String unterzeichnerName;
 }

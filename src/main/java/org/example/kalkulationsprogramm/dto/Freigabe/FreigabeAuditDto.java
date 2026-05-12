@@ -29,6 +29,14 @@ public class FreigabeAuditDto
     private String akzeptiertEmail;
     private String akzeptiertIp;
     private String akzeptiertUserAgent;
+    /**
+     * Vor- und Nachname der konkret klickenden Person — Teil der Beweissicherung
+     * für die digitale Auftragsannahme. Bei Firmenkunden die vertretungsberechtigte
+     * Person. Für Altbestand (Akzeptanzen vor V317) {@code null}.
+     */
+    private String unterzeichnerVorname;
+    private String unterzeichnerNachname;
+    private String unterzeichnerName;
     private String hashOriginal;
     private String hashAcceptance;
 }

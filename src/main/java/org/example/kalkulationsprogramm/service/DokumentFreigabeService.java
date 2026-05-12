@@ -59,6 +59,12 @@ public class DokumentFreigabeService
 {
     /** Default-Gültigkeit in Tagen, wenn der Aufrufer keine eigene Wahl trifft. */
     public static final int DEFAULT_GUELTIGKEITS_TAGE = 14;
+    /**
+     * Marker-Message für unbekannte UUID — der Controller nutzt sie, um eindeutig
+     * zwischen "Freigabe nicht gefunden" (→ 404) und Service-Validierungsfehlern
+     * (→ 400) zu unterscheiden, ohne auf String-Heuristiken angewiesen zu sein.
+     */
+    public static final String UNBEKANNTE_UUID_MESSAGE = "Unbekannte Freigabe-UUID";
     /** Untere und obere Grenze für vom Anwender gewählte Gültigkeitstage. */
     private static final int MIN_GUELTIGKEITS_TAGE = 1;
     private static final int MAX_GUELTIGKEITS_TAGE = 365;
@@ -372,17 +378,27 @@ public class DokumentFreigabeService
     }
 
     /**
-     * Markiert eine Freigabe als digital akzeptiert. Speichert IP, User-Agent und
-     * berechnet einen unveränderbaren Acceptance-Hash als Beweis.
+     * Markiert eine Freigabe als digital akzeptiert. Speichert IP, User-Agent,
+     * Vor-/Nachname der unterzeichnenden Person und berechnet einen
+     * unveränderbaren Acceptance-Hash als Beweis.
+     *
+     * <p>Idempotent: Wiederholtes Akzeptieren derselben UUID liefert die bereits
+     * gespeicherte Freigabe ohne Namens-, IP- oder Hash-Felder zu überschreiben —
+     * der erste Klick ist beweisrelevant.</p>
+     *
+     * @throws IllegalArgumentException wenn Vor- oder Nachname fehlen
+     *         (Service-Check, der die DB-NULLABLE-Spalte zusätzlich absichert).
      */
     @Transactional
-    public DokumentFreigabe akzeptiere(String uuid, String ip, String userAgent, String email)
+    public DokumentFreigabe akzeptiere(String uuid, String ip, String userAgent, String email,
+                                       String vorname, String nachname, String unterzeichnerName)
     {
         DokumentFreigabe freigabe = repository.findByUuid(uuid)
-                .orElseThrow(() -> new IllegalArgumentException("Unbekannte Freigabe-UUID"));
+                .orElseThrow(() -> new IllegalArgumentException(UNBEKANNTE_UUID_MESSAGE));
 
         if (freigabe.getStatus() == FreigabeStatus.ACCEPTED)
         {
+            // Idempotenz: erster Klick bleibt der Beweis — Namen/IP/Hash unverändert.
             return freigabe;
         }
         if (freigabe.getStatus() != FreigabeStatus.PENDING)
@@ -396,23 +412,47 @@ public class DokumentFreigabeService
             throw new IllegalStateException("Freigabe ist abgelaufen");
         }
 
+        String vornameNorm = normalisiereName(vorname);
+        String nachnameNorm = normalisiereName(nachname);
+        String anzeigeName = normalisiereName(unterzeichnerName);
+        if (vornameNorm == null || vornameNorm.isBlank() || nachnameNorm == null || nachnameNorm.isBlank())
+        {
+            // Service-Check: neue Akzeptanzen müssen den Namen tragen, auch wenn die
+            // DB-Spalte aus Altbestand-Gründen NULLABLE ist.
+            throw new IllegalArgumentException("Vor- und Nachname sind für die digitale Annahme erforderlich.");
+        }
+        if (anzeigeName == null || anzeigeName.isBlank())
+        {
+            anzeigeName = (vornameNorm + " " + nachnameNorm).trim();
+        }
+
         LocalDateTime jetzt = LocalDateTime.now();
         freigabe.setStatus(FreigabeStatus.ACCEPTED);
         freigabe.setAkzeptiertAm(jetzt);
         freigabe.setAkzeptiertIp(ip);
         freigabe.setAkzeptiertUserAgent(userAgent);
         freigabe.setAkzeptiertEmail(email);
+        freigabe.setUnterzeichnerVorname(vornameNorm);
+        freigabe.setUnterzeichnerNachname(nachnameNorm);
+        freigabe.setUnterzeichnerName(anzeigeName);
         freigabe.setHashAcceptance(berechneHashAcceptance(freigabe, ip, email, jetzt));
         DokumentFreigabe saved = repository.save(freigabe);
 
         // Push-Notification an alle registrierten Geräte (Büro), damit jemand sofort
-        // sieht, dass der Kunde digital angenommen hat.
+        // sieht, dass der Kunde digital angenommen hat. Format: "Freigabe eingegangen
+        // von <Unterzeichner> für <Kunde>" — Unterzeichner ist die konkret klickende
+        // Person, Kunde der Stammdatensatz (bei Firmenkunden i.d.R. unterschiedlich).
         try {
             String art = saved.getDokumentArt() == null ? "Dokument" : saved.getDokumentArt();
             String kunde = saved.getKundeName() == null || saved.getKundeName().isBlank()
                     ? (saved.getKundeEmail() == null ? "Ein Kunde" : saved.getKundeEmail())
                     : saved.getKundeName();
-            String body = kunde + " hat " + art + " " + saved.getDokumentNummer() + " digital angenommen.";
+            String unterzeichner = saved.getUnterzeichnerName() == null || saved.getUnterzeichnerName().isBlank()
+                    ? null : saved.getUnterzeichnerName();
+            String body = unterzeichner != null
+                    ? "Freigabe eingegangen von " + unterzeichner + " für " + kunde
+                        + " — " + art + " " + saved.getDokumentNummer() + " digital angenommen."
+                    : kunde + " hat " + art + " " + saved.getDokumentNummer() + " digital angenommen.";
             // Klick auf den Push oeffnet die Mobile-PWA-Projekteseite, weil mit der
             // Annahme die Anfrage zum Projekt wird (siehe erzeugeAutoAuftragsbestaetigungWennAngebot).
             webPushService.notifyFreigabeAnnahme(art + " angenommen", body, "/zeiterfassung/projekte");
@@ -599,6 +639,9 @@ public class DokumentFreigabeService
                 .akzeptiertEmail(f.getAkzeptiertEmail())
                 .akzeptiertIp(f.getAkzeptiertIp())
                 .akzeptiertUserAgent(f.getAkzeptiertUserAgent())
+                .unterzeichnerVorname(f.getUnterzeichnerVorname())
+                .unterzeichnerNachname(f.getUnterzeichnerNachname())
+                .unterzeichnerName(f.getUnterzeichnerName())
                 .hashOriginal(f.getHashOriginal())
                 .hashAcceptance(f.getHashAcceptance())
                 .build());
@@ -785,9 +828,26 @@ public class DokumentFreigabeService
                 ip == null ? "" : ip,
                 email == null ? "" : email,
                 zeitpunkt.toString(),
+                // Unterzeichner-Name ist Teil der Beweissicherung — fließt damit in den
+                // unveränderbaren Acceptance-Hash mit ein. Altdatensätze (vor V317) haben
+                // keinen Namen — String.join behandelt null wie ein leeres Segment.
+                freigabe.getUnterzeichnerName() == null ? "" : freigabe.getUnterzeichnerName(),
                 hashSalt
         );
         return sha256Hex(input);
+    }
+
+    /**
+     * Trimmt, kollabiert Whitespace und entfernt nicht-druckbare Steuerzeichen.
+     * Liefert null, wenn der Eingang null oder nach Bereinigung leer ist.
+     */
+    private static String normalisiereName(String input)
+    {
+        if (input == null) return null;
+        // Steuerzeichen (außer normalem Leerzeichen) raus, Tab/CR/LF zu Leerzeichen,
+        // Mehrfach-Whitespace zu einem Leerzeichen, trimmen.
+        String cleaned = input.replaceAll("[\\p{Cntrl}]", " ").replaceAll("\\s+", " ").trim();
+        return cleaned.isEmpty() ? null : cleaned;
     }
 
     private static String sha256Hex(String input)

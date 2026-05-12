@@ -831,20 +831,43 @@ public class AutoAuftragsbestaetigungVersandService
         String wann = f.getAkzeptiertAm() != null ? f.getAkzeptiertAm().format(ANNAHME_FORMAT) : "—";
         String hash = kuerzeHash(f.getHashAcceptance());
         String angebotsNummer = nullSafe(f.getDokumentNummer());
+        // Unterzeichner-Name gehört zur Beweissicherung (siehe Issue-Spec): bei
+        // Firmenkunden klickt nicht zwingend die Person, deren Name in den Stammdaten
+        // steht. Wir nennen daher die konkret freigebende Person mit Vor- und Nachname.
+        String unterzeichner = f.getUnterzeichnerName() == null || f.getUnterzeichnerName().isBlank()
+                ? null : f.getUnterzeichnerName();
+
+        String beweisZeile = unterzeichner != null
+                ? "Annahme durch <strong>" + escapeHtml(unterzeichner) + "</strong> am <strong>" + wann + "</strong>"
+                : "Annahme am <strong>" + wann + "</strong>";
 
         return "<div style=\"margin:24px 0;padding:16px 18px;border-left:3px solid #500010;background:#fafafa;font-family:Arial,Helvetica,sans-serif;\">"
                 + "<p style=\"margin:0 0 6px 0;font-weight:600;color:#1e293b;\">Angebot angenommen — Auftragsbestätigung</p>"
                 + "<p style=\"margin:0 0 10px 0;color:#475569;line-height:1.45;\">"
-                + "Diese Mail wurde automatisch vom System erstellt, nachdem Sie das Angebot "
-                + "<strong>" + angebotsNummer + "</strong> am <strong>" + wann + "</strong> "
-                + "online digital angenommen haben. Im Anhang finden Sie Ihre verbindliche "
-                + "Auftragsbestätigung als PDF."
+                + "Diese Mail wurde automatisch vom System erstellt, nachdem das Angebot "
+                + "<strong>" + escapeHtml(angebotsNummer) + "</strong> online digital angenommen wurde. "
+                + "Im Anhang finden Sie Ihre verbindliche Auftragsbestätigung als PDF."
                 + "</p>"
                 + "<p style=\"margin:8px 0 0 0;color:#94a3b8;font-size:13px;line-height:1.5;\">"
+                + "Beweissicherung: " + beweisZeile + "<br>"
                 + "Audit-Hash zur Rechtssicherheit: <code style=\"font-family:monospace;color:#64748b;\">" + hash + "</code><br>"
                 + "Sollten Sie diese Annahme <em>nicht</em> selbst durchgeführt haben, melden Sie sich bitte umgehend bei uns."
                 + "</p>"
                 + "</div>";
+    }
+
+    /**
+     * Minimaler HTML-Escape für vom Nutzer eingegebene Namen, damit der
+     * Annahme-Beleg auch bei Sonderzeichen wie {@code &} oder {@code <}
+     * sauber rendert.
+     */
+    private static String escapeHtml(String s)
+    {
+        if (s == null) return "";
+        return s.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
     }
 
     private static String kuerzeHash(String hash)

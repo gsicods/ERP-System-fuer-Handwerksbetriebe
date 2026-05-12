@@ -1,5 +1,6 @@
 package org.example.kalkulationsprogramm.controller;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.example.kalkulationsprogramm.domain.DokumentFreigabe;
@@ -113,8 +114,12 @@ public class FreigabeInternalController
      */
     @PostMapping("/{uuid}/akzeptieren")
     public ResponseEntity<?> akzeptiere(@PathVariable String uuid,
-                                        @RequestBody FreigabeAkzeptierenRequest request)
+                                        @Valid @RequestBody FreigabeAkzeptierenRequest request)
     {
+        // Bean-Validation (@NotBlank / @Size auf Vor-/Nachname) wird vom Spring-
+        // MVC vor dem Methoden-Body geprüft und vom RestExceptionHandler in HTTP 400
+        // mit Feldnamen übersetzt — hier landen wir nur, wenn die Pflichtfelder da sind.
+
         if (!request.isBestaetigung())
         {
             return ResponseEntity.badRequest().body(java.util.Map.of(
@@ -127,18 +132,33 @@ public class FreigabeInternalController
                     uuid,
                     request.getClientIp(),
                     truncate(request.getUserAgent(), 500),
-                    request.getEmail());
+                    request.getEmail(),
+                    request.getVorname(),
+                    request.getNachname(),
+                    request.getUnterzeichnerName());
             return ResponseEntity.ok(FreigabeAkzeptiertResponse.builder()
                     .uuid(freigabe.getUuid())
                     .dokumentNummer(freigabe.getDokumentNummer())
                     .dokumentArt(freigabe.getDokumentArt())
                     .akzeptiertAm(freigabe.getAkzeptiertAm())
                     .hashAcceptance(freigabe.getHashAcceptance())
+                    .unterzeichnerName(freigabe.getUnterzeichnerName())
                     .build());
         }
         catch (IllegalArgumentException e)
         {
-            return ResponseEntity.notFound().build();
+            // Eindeutige Unterscheidung über die Service-Konstante – kein
+            // String-Matching auf "name", das bei einer späteren Umformulierung
+            // der Message stillschweigend brechen würde.
+            if (DokumentFreigabeService.UNBEKANNTE_UUID_MESSAGE.equals(e.getMessage()))
+            {
+                return ResponseEntity.notFound().build();
+            }
+            // Service-Check (fehlender Name etc.) — Bean-Validation fängt das in
+            // der Regel schon vorher, dieser Pfad ist Defense-in-Depth.
+            return ResponseEntity.badRequest().body(java.util.Map.of(
+                    "success", false,
+                    "message", e.getMessage() == null ? "Ungültige Eingabe." : e.getMessage()));
         }
         catch (IllegalStateException e)
         {

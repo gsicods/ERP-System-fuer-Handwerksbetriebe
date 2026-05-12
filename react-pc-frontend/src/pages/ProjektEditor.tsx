@@ -167,6 +167,11 @@ type FreigabeAuditData = {
     akzeptiertEmail: string | null;
     akzeptiertIp: string | null;
     akzeptiertUserAgent: string | null;
+    // Vor-/Nachname der konkret klickenden Person (bei Firmenkunden die
+    // vertretungsberechtigte Person). Für Altbestand (Akzeptanzen vor V317) null.
+    unterzeichnerVorname: string | null;
+    unterzeichnerNachname: string | null;
+    unterzeichnerName: string | null;
     hashOriginal: string | null;
     hashAcceptance: string | null;
 };
@@ -3265,6 +3270,12 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                                         hour: '2-digit', minute: '2-digit', second: '2-digit',
                                     })
                                     : '—'}
+                            />
+                            {/* Unterzeichner: konkret klickende Person — bei Firmenkunden die
+                                vertretungsberechtigte Person, nicht zwangsläufig der Kundenstammname. */}
+                            <AuditRow
+                                label="Angenommen von"
+                                value={auditDaten.unterzeichnerName || '—'}
                             />
                             <AuditRow label="E-Mail" value={auditDaten.akzeptiertEmail || '—'} />
                             <AuditRow label="IP-Adresse" value={auditDaten.akzeptiertIp || '—'} mono />
