@@ -272,15 +272,30 @@ export default function BelegScannerPage() {
     const handleScanComplete = async (file: File) => {
         setShowScanner(false)
         const ctx = captureContextRef.current
-        if (!ctx) return
+        if (!ctx) {
+            // SICHTBAR machen statt silent return — sonst verschwindet der Beleg
+            // spurlos und der User sieht "0 in Queue / 0 Fehler" ohne Hinweis.
+            pushRejected(file, 'Aufnahme-Kontext verloren — bitte Wizard neu starten', null, 'VOLLSTAENDIG')
+            return
+        }
         enqueue(file, ctx.lieferant, ctx.modus)
-        captureContextRef.current = null
+        // ctx bleibt erhalten (wird beim naechsten finishWizard ueberschrieben).
+        // Frueher hier null gesetzt → Race mit ScannerModal-Renders moeglich.
     }
 
     const handleFileChoose = (e: React.ChangeEvent<HTMLInputElement>) => {
         const files = e.target.files
         const ctx = captureContextRef.current
-        if (!files || !ctx) {
+        if (!files || files.length === 0) {
+            // User hat den File-Picker mit Cancel geschlossen — nichts zu tun.
+            if (fileInputRef.current) fileInputRef.current.value = ''
+            return
+        }
+        if (!ctx) {
+            // Files da, aber kein Wizard-Kontext — sichtbar machen statt silent.
+            for (let i = 0; i < files.length; i++) {
+                pushRejected(files[i], 'Aufnahme-Kontext verloren — bitte Wizard neu starten', null, 'VOLLSTAENDIG')
+            }
             if (fileInputRef.current) fileInputRef.current.value = ''
             return
         }
@@ -295,7 +310,7 @@ export default function BelegScannerPage() {
             }
             enqueue(f, ctx.lieferant, ctx.modus)
         }
-        captureContextRef.current = null
+        // ctx NICHT nullen — bleibt bis zum naechsten finishWizard-Aufruf.
         if (fileInputRef.current) fileInputRef.current.value = ''
     }
 
@@ -424,7 +439,7 @@ export default function BelegScannerPage() {
 
             {showScanner && (
                 <ScannerModal
-                    onClose={() => { setShowScanner(false); captureContextRef.current = null }}
+                    onClose={() => setShowScanner(false)}
                     onSave={handleScanComplete}
                 />
             )}
