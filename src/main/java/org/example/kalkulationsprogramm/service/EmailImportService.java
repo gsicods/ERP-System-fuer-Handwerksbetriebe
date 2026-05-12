@@ -917,10 +917,16 @@ public class EmailImportService {
 
         List<Email> allEmails = emailRepository.findAll();
 
-        // Index nach normalisiertem Subject (ohne AW:/RE:/FWD: Prefix)
+        // Index nach normalisiertem Subject (ohne AW:/RE:/FWD: Prefix).
+        // Mails mit leerem Normalisat (z. B. Subject "RE:" allein) NICHT in den
+        // Index aufnehmen — sonst wuerden zwei voellig unverbundene Mails
+        // ohne echtes Subject faelschlich denselben Thread bilden.
         Map<String, List<Email>> byNormalizedSubject = new HashMap<>();
         for (Email email : allEmails) {
             String normalized = normalizeSubject(email.getSubject());
+            if (normalized.isBlank()) {
+                continue;
+            }
             byNormalizedSubject.computeIfAbsent(normalized, k -> new ArrayList<>()).add(email);
         }
 
@@ -939,6 +945,9 @@ public class EmailImportService {
             }
 
             String normalized = normalizeSubject(subject);
+            if (normalized.isBlank()) {
+                continue;
+            }
             List<Email> candidates = byNormalizedSubject.get(normalized);
 
             if (candidates == null || candidates.size() < 2) {
@@ -984,29 +993,83 @@ public class EmailImportService {
     }
 
     /**
-     * Prüft ob ein Betreff eine Antwort oder Weiterleitung ist.
+     * Erkennungs-Pattern für Reply-/Forward-Prefixe (case-insensitive).
+     * Erfordert mindestens ein Whitespace nach dem Doppelpunkt — schliesst
+     * exotische Subjects wie {@code "WG:Foo"} (ohne Space) aus, ohne echten
+     * Mailclients in die Quere zu kommen (Outlook/Gmail/t-online setzen
+     * immer ein Space). Wird in {@link #isReplyOrForward(String)} verwendet.
      */
-    private boolean isReplyOrForward(String subject) {
+    private static final String REPLY_FWD_DETECT_REGEX =
+            "(?i)(aw|re|fwd|fw|wg|antw|antwort):\\s+";
+
+    /**
+     * Strip-Pattern für die Normalisierung: lockerer als das Detect-Pattern,
+     * weil hier bereits feststeht, dass es sich um eine Reply handelt
+     * (Aufrufer prüft vorher mit Detect-Pattern). Erlaubt deshalb auch
+     * trailing-getrimmte Subjects wie {@code "RE:"} → {@code ""}.
+     */
+    private static final String REPLY_FWD_STRIP_REGEX =
+            "(?i)(aw|re|fwd|fw|wg|antw|antwort):\\s*";
+
+    /** Klammer-Prefix wie {@code [Ticket#1234]} oder {@code [External]} am Anfang. */
+    private static final String BRACKET_PREFIX_REGEX = "\\[[^\\]]+\\]\\s*";
+
+    /**
+     * Prüft ob ein Betreff eine Antwort oder Weiterleitung ist.
+     *
+     * <p>Toleriert führende Klammer-Tags wie {@code [Ticket#…]}:
+     * sowohl {@code "RE: Foo"} als auch {@code "[Ticket#1] RE: Foo"} und
+     * {@code "RE: [Ticket#1] Foo"} werden korrekt als Reply erkannt.
+     */
+    boolean isReplyOrForward(String subject) {
         if (subject == null)
             return false;
-        String lower = subject.toLowerCase().trim();
-        return lower.startsWith("aw:") || lower.startsWith("re:")
-                || lower.startsWith("fwd:") || lower.startsWith("wg:");
+        String s = subject.trim();
+        // Klammer-Tags am Anfang abschälen (z. B. "[Ticket#…] RE: …")
+        while (s.startsWith("[")) {
+            int end = s.indexOf(']');
+            if (end < 0)
+                break;
+            s = s.substring(end + 1).trim();
+        }
+        return s.matches("(?is)^" + REPLY_FWD_DETECT_REGEX + ".*");
     }
 
     /**
-     * Normalisiert Betreff durch Entfernen von AW:/RE:/FWD:/WG: Prefixen.
+     * Normalisiert Betreff für Subject-basiertes Thread-Matching:
+     * Entfernt AW/RE/FWD/WG/Antw-Prefixe (auch wenn sie nach einem
+     * {@code [Ticket#…]}-Klammer-Tag stehen) und lowercased das Ergebnis.
+     *
+     * <p>Klammer-Tags selbst bleiben erhalten, damit Mails zu unterschiedlichen
+     * Tickets nicht fälschlich in denselben Thread fallen.
+     *
+     * <p>Beispiele (vereinheitlichen sich auf {@code "[ticket#1] transfer"}):
+     * <ul>
+     *   <li>{@code "[Ticket#1] Transfer"}</li>
+     *   <li>{@code "RE: [Ticket#1] Transfer"}</li>
+     *   <li>{@code "[Ticket#1] RE: Transfer"}</li>
+     *   <li>{@code "AW: [Ticket#1] Re: Transfer"}</li>
+     * </ul>
      */
-    private String normalizeSubject(String subject) {
+    String normalizeSubject(String subject) {
         if (subject == null)
             return "";
-        String normalized = subject.trim();
-        // Entferne alle Prefixe rekursiv
-        String pattern = "(?i)^(aw:|re:|fwd:|wg:)\\s*";
-        while (normalized.matches(pattern + ".*")) {
-            normalized = normalized.replaceFirst(pattern, "").trim();
-        }
-        return normalized.toLowerCase();
+        String s = subject.trim();
+        // Wechselweise Reply-Prefix am Anfang ODER nach Klammer-Tag entfernen,
+        // bis sich nichts mehr ändert. So werden auch mehrfach verschachtelte
+        // Kombinationen ("RE: [Ticket#1] AW: …") sauber aufgelöst.
+        String prev;
+        do {
+            prev = s;
+            // 1) Reply-Prefix direkt am Anfang: "RE: rest"
+            s = s.replaceFirst("(?i)^" + REPLY_FWD_STRIP_REGEX, "").trim();
+            // 2) Reply-Prefix unmittelbar nach einem Klammer-Tag: "[Ticket#1] RE: rest"
+            //    Ersetze nur den Reply-Prefix, behalte das Klammer-Tag.
+            s = s.replaceFirst(
+                    "(?i)^(" + BRACKET_PREFIX_REGEX + ")" + REPLY_FWD_STRIP_REGEX,
+                    "$1").trim();
+        } while (!s.equals(prev));
+        return s.toLowerCase();
     }
 
     /**

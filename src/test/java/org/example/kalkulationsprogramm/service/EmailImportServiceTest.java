@@ -596,4 +596,95 @@ class EmailImportServiceTest {
             verify(spamFilterService).analyzeAndMarkSpam(email);
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Subject-Normalisierung & Reply-Erkennung
+    // (für Subject-basiertes Thread-Matching im Backfill, wenn
+    //  In-Reply-To/References-Header fehlen)
+    // ═══════════════════════════════════════════════════════════════
+
+    @Nested
+    class SubjectNormalisierung {
+
+        @Test
+        void erkenntKlassischesReplyAmAnfang() {
+            assertThat(service.isReplyOrForward("Re: Transfer")).isTrue();
+            assertThat(service.isReplyOrForward("RE: Transfer")).isTrue();
+            assertThat(service.isReplyOrForward("AW: Transfer")).isTrue();
+            assertThat(service.isReplyOrForward("Fwd: Transfer")).isTrue();
+            assertThat(service.isReplyOrForward("WG: Transfer")).isTrue();
+        }
+
+        @Test
+        void erkenntReplyHinterKlammerTag() {
+            // Bisheriger Bug: "[Ticket#…] RE: …" wurde NICHT als Reply erkannt,
+            // weil isReplyOrForward nur am Stringanfang prüfte.
+            assertThat(service.isReplyOrForward("[Ticket#2026050503034259] RE: Transfer bauschlosserei-mustermann.de"))
+                    .isTrue();
+            assertThat(service.isReplyOrForward("[External] AW: Angebot")).isTrue();
+            assertThat(service.isReplyOrForward("[Bug 123] [SPAM] RE: Hinweis")).isTrue();
+        }
+
+        @Test
+        void erkenntReplyNichtBeiNormalemSubject() {
+            assertThat(service.isReplyOrForward("Transfer bauschlosserei-mustermann.de")).isFalse();
+            assertThat(service.isReplyOrForward("[Ticket#1] Erstmeldung")).isFalse();
+            assertThat(service.isReplyOrForward(null)).isFalse();
+            assertThat(service.isReplyOrForward("")).isFalse();
+        }
+
+        @Test
+        void normalizeEntferntReplyPrefixAmAnfang() {
+            assertThat(service.normalizeSubject("Re: Transfer")).isEqualTo("transfer");
+            assertThat(service.normalizeSubject("AW: Re: Fwd: Transfer")).isEqualTo("transfer");
+        }
+
+        @Test
+        void normalizeEntferntReplyPrefixNachKlammerTagUndBehaeltTag() {
+            // Beide Varianten ergeben dasselbe Normalisat -> matchen denselben Thread.
+            String a = service.normalizeSubject("[Ticket#1] Transfer");
+            String b = service.normalizeSubject("[Ticket#1] RE: Transfer");
+            String c = service.normalizeSubject("RE: [Ticket#1] Transfer");
+            String d = service.normalizeSubject("AW: [Ticket#1] Re: Transfer");
+            assertThat(a).isEqualTo("[ticket#1] transfer");
+            assertThat(b).isEqualTo(a);
+            assertThat(c).isEqualTo(a);
+            assertThat(d).isEqualTo(a);
+        }
+
+        @Test
+        void normalizeTrenntUnterschiedlicheTicketsKorrekt() {
+            // Klammer-Tag bleibt im Normalisat -> verschiedene Tickets bleiben getrennt.
+            String t1 = service.normalizeSubject("[Ticket#1] RE: Transfer");
+            String t2 = service.normalizeSubject("[Ticket#2] RE: Transfer");
+            assertThat(t1).isNotEqualTo(t2);
+        }
+
+        @Test
+        void normalizeHandhabtNullUndLeer() {
+            assertThat(service.normalizeSubject(null)).isEmpty();
+            assertThat(service.normalizeSubject("")).isEmpty();
+            assertThat(service.normalizeSubject("   ")).isEmpty();
+        }
+
+        @Test
+        void erkenntKeinReplyOhneSpaceNachDoppelpunkt() {
+            // Mailclients setzen IMMER ein Space nach "RE:" — exotische
+            // Subjects wie "WG:Foo" oder "FW:Bar" werden bewusst NICHT als
+            // Reply klassifiziert, um false-positives bei seltenen
+            // Abkuerzungen zu vermeiden.
+            assertThat(service.isReplyOrForward("WG:Foo")).isFalse();
+            assertThat(service.isReplyOrForward("FW:Bar")).isFalse();
+        }
+
+        @Test
+        void normalizeNurReplyPrefixWirdLeer() {
+            // Subject = nur Reply-Prefix → leeres Normalisat. Backfill muss
+            // solche Mails skippen, damit sie nicht faelschlich gruppiert
+            // werden (siehe Backfill-isBlank-Check).
+            assertThat(service.normalizeSubject("RE: ")).isEmpty();
+            assertThat(service.normalizeSubject("AW: ")).isEmpty();
+            assertThat(service.normalizeSubject("Fwd: ")).isEmpty();
+        }
+    }
 }
