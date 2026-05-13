@@ -6,6 +6,7 @@ import org.example.kalkulationsprogramm.domain.AbwesenheitsTyp;
 import org.example.kalkulationsprogramm.domain.Arbeitsgang;
 import org.example.kalkulationsprogramm.domain.ArbeitsgangStundensatz;
 import org.example.kalkulationsprogramm.domain.Beleg;
+import org.example.kalkulationsprogramm.domain.BelegKostenstellenAnteil;
 import org.example.kalkulationsprogramm.domain.Beschaeftigungsart;
 import org.example.kalkulationsprogramm.domain.Feiertag;
 import org.example.kalkulationsprogramm.domain.Firmeninformation;
@@ -30,6 +31,7 @@ import org.example.kalkulationsprogramm.repository.AbteilungRepository;
 import org.example.kalkulationsprogramm.repository.AbwesenheitRepository;
 import org.example.kalkulationsprogramm.repository.ArbeitsgangRepository;
 import org.example.kalkulationsprogramm.repository.ArbeitsgangStundensatzRepository;
+import org.example.kalkulationsprogramm.repository.BelegKostenstellenAnteilRepository;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
 import org.example.kalkulationsprogramm.repository.FeiertagRepository;
 import org.example.kalkulationsprogramm.repository.FirmeninformationRepository;
@@ -91,6 +93,7 @@ public class VerrechnungslohnService {
     private final ArbeitsgangRepository arbeitsgangRepository;
     private final ArbeitsgangStundensatzRepository stundensatzRepository;
     private final BelegRepository belegRepository;
+    private final BelegKostenstellenAnteilRepository belegKostenstellenAnteilRepository;
 
     @Transactional(readOnly = true)
     public VerrechnungslohnErgebnisDto berechne(int jahr) {
@@ -521,6 +524,32 @@ public class VerrechnungslohnService {
                 return ka;
             });
             bucketEintrag.setJahresbetrag(bucketEintrag.getJahresbetrag().add(basis));
+        }
+
+        // 3) Beleg-Kostenstellen-Splits (Issue #60): mehrere Kostenstellen pro
+        //    Beleg mit Prozent/Absolut-Verteilung und optionaler Streckung.
+        //    Filter (VALIDIERT, istFixkosten, Streckungs-Jahr) erledigt die
+        //    Repository-Query — kein Java-seitiges findAll mehr noetig.
+        for (BelegKostenstellenAnteil anteil :
+                belegKostenstellenAnteilRepository.findAktiveFixkostenAnteileImJahr(jahr)) {
+            if (anteil.getKostenstelle() == null) continue;
+            BigDecimal jahresAnteil = nz(anteil.getJahresanteil());
+            if (jahresAnteil.signum() <= 0) continue;
+            summe = summe.add(jahresAnteil);
+            final Long ksId = anteil.getKostenstelle().getId();
+            final String bezeichnung = anteil.getKostenstelle().getBezeichnung();
+            KostenstelleAnteil bucketEintrag = proKs.computeIfAbsent(ksId, id -> {
+                KostenstelleAnteil ka = new KostenstelleAnteil();
+                ka.setKostenstelleId(ksId);
+                ka.setBezeichnung(bezeichnung);
+                ka.setJahresbetrag(BigDecimal.ZERO);
+                ka.setGestreckt(false);
+                return ka;
+            });
+            bucketEintrag.setJahresbetrag(bucketEintrag.getJahresbetrag().add(jahresAnteil));
+            if (anteil.getStreckungJahre() != null && anteil.getStreckungJahre() > 1) {
+                bucketEintrag.setGestreckt(true);
+            }
         }
 
         for (KostenstelleAnteil k : proKs.values()) {

@@ -111,6 +111,7 @@ public class BelegeKasseExportPdfService {
             addTitle(doc, ym);
             addKpiSection(doc, imMonat);
             addSachkontoAuswertung(doc, imMonat);
+            addKassenbuchDoppik(doc, imMonat);
             addBelegListe(doc, imMonat);
             addFooter(doc);
 
@@ -361,6 +362,110 @@ public class BelegeKasseExportPdfService {
 
         doc.add(t);
         doc.add(new Paragraph(" "));
+    }
+
+    /**
+     * Kassenbuch im Steuerberater-Standard (Issue #61).
+     *
+     * Klassisches Doppik-Layout: Datum, Beleg-Nr, Verwendungszweck, Soll-Konto,
+     * Haben-Konto, Soll-Betrag, Haben-Betrag, Saldo. KASSE_EINNAHME / PRIVATEINLAGE
+     * fliessen in die Soll-Betrag-Spalte (Kasse wird belastet -> mehr Bargeld),
+     * KASSE_AUSGABE / PRIVATENTNAHME in die Haben-Betrag-Spalte (Kasse wird
+     * entlastet). Saldo ist kumulativ und MUSS am Monatsende mit
+     * {@code KasseSaldoService.berechneAktuellenSaldo()} fuer denselben Zeitraum
+     * uebereinstimmen — ohne diesen Abgleich wuerde der Steuerberater die
+     * Diskrepanz sofort sehen.
+     */
+    private void addKassenbuchDoppik(Document doc, List<Beleg> belege) throws DocumentException {
+        Font sectionFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 13, TEXT_DARK);
+        Paragraph section = new Paragraph("Kassenbuch (Soll / Haben)", sectionFont);
+        section.setSpacingBefore(12f);
+        doc.add(section);
+
+        // Nur Bar-Bewegungen — andere Belege haben keinen Effekt auf den
+        // Kassensaldo und gehoeren nicht in dieses Layout.
+        List<Beleg> kasse = belege.stream()
+                .filter(b -> b.getBelegKategorie() != null
+                        && b.getBelegKategorie().istKassenBewegung())
+                .sorted(Comparator
+                        .comparing(Beleg::getBelegDatum, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(Beleg::getId))
+                .toList();
+
+        if (kasse.isEmpty()) {
+            Font muted = FontFactory.getFont(FontFactory.HELVETICA_OBLIQUE, 10, TEXT_MUTED);
+            Paragraph empty = new Paragraph("Keine Bar-Bewegungen in diesem Monat.", muted);
+            empty.setSpacingBefore(8f);
+            doc.add(empty);
+            return;
+        }
+
+        // Spaltenbreiten — auf A4-quer abgestimmt (8pt+ bleibt lesbar)
+        PdfPTable t = new PdfPTable(new float[]{ 1.1f, 1.3f, 3.5f, 2.4f, 2.4f, 1.5f, 1.5f, 1.5f });
+        t.setWidthPercentage(100);
+        t.setSpacingBefore(4f);
+        addHeader(t, "Datum", "Beleg-Nr.", "Verwendungszweck",
+                "Soll-Konto", "Haben-Konto", "Soll €", "Haben €", "Saldo €");
+
+        BigDecimal saldo = BigDecimal.ZERO;
+        BigDecimal sumSoll = BigDecimal.ZERO;
+        BigDecimal sumHaben = BigDecimal.ZERO;
+        boolean alt = false;
+
+        for (Beleg b : kasse) {
+            Color bg = alt ? ROW_ALT : Color.WHITE;
+            String datum = b.getBelegDatum() != null ? b.getBelegDatum().format(DATE_SHORT) : "–";
+            String nr    = b.getBelegNummer() != null ? b.getBelegNummer() : "–";
+            String zweck = b.getBeschreibung() != null && !b.getBeschreibung().isBlank()
+                    ? b.getBeschreibung()
+                    : kategorieLabel(b.getBelegKategorie());
+
+            BuchungssatzAbleitung.Buchungssatz bs = BuchungssatzAbleitung.ableiten(b);
+            BigDecimal brutto = nullSafe(b.getBetragBrutto());
+            boolean istEingang = !b.getBelegKategorie().istAusgang();
+            String sollBetrag = istEingang ? formatEuro(brutto) : "";
+            String habenBetrag = istEingang ? "" : formatEuro(brutto);
+
+            if (istEingang) {
+                saldo = saldo.add(brutto);
+                sumSoll = sumSoll.add(brutto);
+            } else {
+                saldo = saldo.subtract(brutto);
+                sumHaben = sumHaben.add(brutto);
+            }
+
+            t.addCell(cell(datum, bg, Element.ALIGN_LEFT));
+            t.addCell(cell(nr, bg, Element.ALIGN_LEFT));
+            t.addCell(cell(zweck, bg, Element.ALIGN_LEFT));
+            t.addCell(cell(bs.soll(), bg, Element.ALIGN_LEFT));
+            t.addCell(cell(bs.haben(), bg, Element.ALIGN_LEFT));
+            t.addCell(cell(sollBetrag, bg, Element.ALIGN_RIGHT));
+            t.addCell(cell(habenBetrag, bg, Element.ALIGN_RIGHT));
+            t.addCell(cell(formatEuro(saldo), bg, Element.ALIGN_RIGHT));
+            alt = !alt;
+        }
+
+        // Summenzeile: Soll, Haben, End-Saldo
+        Font sumFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, TEXT_DARK);
+        PdfPCell label = new PdfPCell(new Phrase("Summe", sumFont));
+        label.setColspan(5);
+        label.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        label.setBackgroundColor(SUM_BG);
+        label.setPaddingTop(8f); label.setPaddingBottom(8f); label.setPaddingRight(10f);
+        label.setBorder(Rectangle.NO_BORDER);
+        t.addCell(label);
+
+        for (BigDecimal v : new BigDecimal[]{ sumSoll, sumHaben, saldo }) {
+            PdfPCell c = new PdfPCell(new Phrase(formatEuro(v), sumFont));
+            c.setHorizontalAlignment(Element.ALIGN_RIGHT);
+            c.setBackgroundColor(SUM_BG);
+            c.setPaddingTop(8f); c.setPaddingBottom(8f);
+            c.setPaddingLeft(6f); c.setPaddingRight(6f);
+            c.setBorder(Rectangle.NO_BORDER);
+            t.addCell(c);
+        }
+
+        doc.add(t);
     }
 
     private void addBelegListe(Document doc, List<Beleg> belege) throws DocumentException {

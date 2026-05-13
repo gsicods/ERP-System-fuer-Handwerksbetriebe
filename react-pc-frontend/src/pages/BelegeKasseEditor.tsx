@@ -11,6 +11,8 @@ import { Button } from '../components/ui/button';
 import { Select } from '../components/ui/select-custom';
 import { LieferantSearchModal, type LieferantSuchErgebnis } from '../components/LieferantSearchModal';
 import { SteuerberaterBelegExportModal } from '../components/SteuerberaterBelegExportModal';
+import { KasseShortcuts } from '../components/kasse/KasseShortcuts';
+import { KostenstellenSplitsEditor, type KostenstellenSplit } from '../components/kasse/KostenstellenSplitsEditor';
 
 // ===================== Types =====================
 
@@ -116,6 +118,8 @@ interface Beleg {
     betragFirmaBrutto?: number | null;
     betragFirmaMwst?: number | null;
     positionen?: BelegPosition[] | null;
+    // Issue #60: Kostenstellen-Splits (mehrere Kostenstellen pro Beleg).
+    kostenstellenSplits?: KostenstellenSplit[] | null;
 }
 
 interface KassenBewegung {
@@ -476,10 +480,16 @@ export default function BelegeKasseEditor() {
 
             {/* Content */}
             {activeTab === 'kasse' ? (
-                <KassenbuchView kassenbuch={kassenbuch} loading={kassenLoading} onSelectBeleg={id => {
-                    const b = belege.find(x => x.id === id);
-                    if (b) setEditing(b);
-                }} />
+                <div className="space-y-3">
+                    <KasseShortcuts
+                        sachkonten={sachkonten}
+                        onChanged={() => { loadBelege(); loadKassenbuch(); }}
+                    />
+                    <KassenbuchView kassenbuch={kassenbuch} loading={kassenLoading} onSelectBeleg={id => {
+                        const b = belege.find(x => x.id === id);
+                        if (b) setEditing(b);
+                    }} />
+                </div>
             ) : activeTab === 'auswertung' ? (
                 <AuswertungView
                     auswertung={auswertung}
@@ -1049,14 +1059,78 @@ function BelegDetailModal({ beleg, sachkonten, zahlungsarten, onClose, onSaved, 
         sachkontoId: beleg.sachkontoId ?? null as number | null,
         notiz: beleg.notiz ?? '',
     });
+    const [splits, setSplits] = useState<KostenstellenSplit[]>(beleg.kostenstellenSplits ?? []);
+    // Wenn das Detail nachgeladen wird (TEILWEISE), beziehen wir die Splits
+    // aus dem frischen DTO — die Listen-Query liefert sie ggf. nicht mit.
+    useEffect(() => {
+        if (detailBeleg.kostenstellenSplits) setSplits(detailBeleg.kostenstellenSplits);
+    }, [detailBeleg]);
     const [saving, setSaving] = useState(false);
     const [lieferantPicker, setLieferantPicker] = useState(false);
+    const [saldoInfo, setSaldoInfo] = useState<{ saldo: number; mindestbestand: number } | null>(null);
+    const [konflikt, setKonflikt] = useState<{ projizierterSaldo: number; mindestbestand: number; message: string } | null>(null);
+    // Inline-Validierungs-Hinweis statt blocking alert(), gemäß Toast-Pattern
+    // im restlichen Modul (siehe KasseShortcuts.tsx). Nach 4s ausblenden.
+    const [validationHint, setValidationHint] = useState<string | null>(null);
+    useEffect(() => {
+        if (!validationHint) return;
+        const t = setTimeout(() => setValidationHint(null), 4000);
+        return () => clearTimeout(t);
+    }, [validationHint]);
+
+    // Live-Saldo laden, sobald Modal offen — nur fuer Bar-Belege relevant.
+    useEffect(() => {
+        const barKategorien: BelegKategorie[] = ['KASSE_EINNAHME', 'KASSE_AUSGABE', 'PRIVATENTNAHME', 'PRIVATEINLAGE'];
+        if (!barKategorien.includes(form.belegKategorie)) {
+            setSaldoInfo(null);
+            return;
+        }
+        fetch('/api/buchhaltung/kasse/saldo')
+            .then(r => r.ok ? r.json() : null)
+            .then((s) => s && setSaldoInfo(s))
+            .catch(err => console.error('Saldo laden fehlgeschlagen', err));
+    }, [form.belegKategorie]);
+
+    // Live-Projektion: wie sieht der Saldo nach Validierung dieses Belegs aus?
+    const projektion = useMemo(() => {
+        if (!saldoInfo) return null;
+        const brutto = Number(form.betragBrutto);
+        if (!Number.isFinite(brutto) || brutto <= 0) return null;
+        const alt = beleg.status === 'VALIDIERT' && beleg.betragBrutto != null
+            ? (beleg.belegKategorie === 'KASSE_AUSGABE' || beleg.belegKategorie === 'PRIVATENTNAHME'
+                ? -beleg.betragBrutto : beleg.betragBrutto) : 0;
+        const neu = form.belegKategorie === 'KASSE_AUSGABE' || form.belegKategorie === 'PRIVATENTNAHME'
+            ? -brutto : brutto;
+        return saldoInfo.saldo - alt + neu;
+    }, [saldoInfo, form.belegKategorie, form.betragBrutto, beleg.status, beleg.belegKategorie, beleg.betragBrutto]);
 
     const update = <K extends keyof typeof form>(k: K, v: typeof form[K]) =>
         setForm(f => ({ ...f, [k]: v }));
 
     const save = async (alsValidiert: boolean) => {
+        // Splits-Vorab-Validierung: Summe Prozent <= 100 + jeder Eintrag hat
+        // genau eines von Prozent/Absolut. Verhindert HTTP 400 Round-trip.
+        const prozentSumme = splits.reduce((acc, s) => acc + (s.prozent ?? 0), 0);
+        if (prozentSumme > 100) {
+            setValidationHint(`Summe der Kostenstellen-Prozente ist ${prozentSumme}% — darf nicht über 100% liegen.`);
+            return;
+        }
+        for (const s of splits) {
+            if (!s.kostenstelleId) {
+                setValidationHint('Jeder Split braucht eine Kostenstelle.');
+                return;
+            }
+            const hatProzent = s.prozent != null;
+            const hatAbsolut = s.absoluterBetrag != null;
+            if (hatProzent === hatAbsolut) {
+                setValidationHint('Pro Split-Eintrag genau EINES von Prozent ODER absolutem Betrag setzen.');
+                return;
+            }
+        }
+        setValidationHint(null);
+
         setSaving(true);
+        setKonflikt(null);
         try {
             const body = {
                 belegKategorie: form.belegKategorie,
@@ -1071,6 +1145,14 @@ function BelegDetailModal({ beleg, sachkonten, zahlungsarten, onClose, onSaved, 
                 lieferantId: form.lieferantId,
                 sachkontoId: form.sachkontoId,
                 notiz: form.notiz || null,
+                kostenstellenSplits: splits.map(s => ({
+                    kostenstelleId: s.kostenstelleId,
+                    prozent: s.prozent,
+                    absoluterBetrag: s.absoluterBetrag,
+                    beschreibung: s.beschreibung || null,
+                    streckungJahre: s.streckungJahre,
+                    streckungStartJahr: s.streckungStartJahr,
+                })),
             };
             const res = await fetch(`/api/buchhaltung/belege/${beleg.id}`, {
                 method: 'PUT',
@@ -1080,12 +1162,54 @@ function BelegDetailModal({ beleg, sachkonten, zahlungsarten, onClose, onSaved, 
             if (res.ok) {
                 const updated: Beleg = await res.json();
                 onSaved(updated);
-            } else {
-                alert('Speichern fehlgeschlagen');
+                return;
             }
+            if (res.status === 409) {
+                const body409 = await res.json();
+                setKonflikt({
+                    projizierterSaldo: Number(body409.projizierterSaldo),
+                    mindestbestand: Number(body409.mindestbestand),
+                    message: body409.message ?? 'Kasse würde unter Mindestbestand fallen',
+                });
+                return;
+            }
+            const body400 = await res.json().catch(() => null);
+            alert(body400?.message ?? 'Speichern fehlgeschlagen');
         } catch (e) {
             console.error(e);
             alert('Netzwerkfehler');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    // 1-Klick-Loesung bei 409: vorab eine Privateinlage in der benoetigten
+    // Hoehe buchen und dann nochmal speichern.
+    const loeseUnterdeckung = async () => {
+        if (!konflikt) return;
+        const benoetigt = Math.max(0, konflikt.mindestbestand - konflikt.projizierterSaldo);
+        if (benoetigt <= 0) {
+            setKonflikt(null);
+            return;
+        }
+        setSaving(true);
+        try {
+            const heute = new Date().toISOString().slice(0, 10);
+            const res = await fetch('/api/buchhaltung/kasse/privateinlage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    betrag: benoetigt,
+                    datum: heute,
+                    beschreibung: 'Vorab-Einlage für validierten Beleg',
+                }),
+            });
+            if (!res.ok) {
+                alert('Vorab-Einlage fehlgeschlagen');
+                return;
+            }
+            setKonflikt(null);
+            await save(true);
         } finally {
             setSaving(false);
         }
@@ -1234,22 +1358,70 @@ function BelegDetailModal({ beleg, sachkonten, zahlungsarten, onClose, onSaved, 
                         {detailBeleg.aufteilungsModus === 'TEILWEISE' && (
                             <AufteilungsSektion beleg={detailBeleg} />
                         )}
+
+                        {/* Issue #60: Kostenstellen-Splits — mehrere Kostenstellen pro Beleg */}
+                        <KostenstellenSplitsEditor
+                            splits={splits}
+                            onChange={setSplits}
+                            defaultStartJahr={form.belegDatum
+                                ? new Date(form.belegDatum).getFullYear()
+                                : new Date().getFullYear()}
+                        />
+
+                        {/* Live-Saldo-Vorschau + 409-Konflikt-Dialog */}
+                        {saldoInfo && (
+                            <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded p-2 space-y-0.5">
+                                <div>Kassenstand jetzt: <strong>{formatEuro(saldoInfo.saldo)} €</strong></div>
+                                {projektion != null && (
+                                    <div>
+                                        Nach Validierung: <strong className={projektion < saldoInfo.mindestbestand ? 'text-red-700' : 'text-slate-700'}>
+                                            {formatEuro(projektion)} €
+                                        </strong>
+                                        {saldoInfo.mindestbestand > 0 && (
+                                            <span className="text-slate-500"> (Mindestbestand: {formatEuro(saldoInfo.mindestbestand)} €)</span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        {konflikt && (
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-900">
+                                <div className="flex items-start gap-2">
+                                    <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                                    <div className="flex-1">
+                                        <p className="font-medium">Kasse würde auf {formatEuro(konflikt.projizierterSaldo)} € rutschen.</p>
+                                        <p className="text-xs mt-1">Mindestbestand: {formatEuro(konflikt.mindestbestand)} €</p>
+                                        <Button size="sm" className="mt-2 bg-rose-600 text-white border border-rose-600 hover:bg-rose-700"
+                                            onClick={loeseUnterdeckung} disabled={saving}>
+                                            Privateinlage in Höhe {formatEuro(Math.max(0, konflikt.mindestbestand - konflikt.projizierterSaldo))} € vorab buchen?
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
 
-                <div className="border-t border-slate-200 p-4 flex items-center justify-between gap-3 bg-slate-50">
-                    <Button variant="ghost" onClick={verwerfen} disabled={saving} className="text-red-600 hover:bg-red-50">
-                        <Trash2 className="w-4 h-4 mr-2" /> Verwerfen
-                    </Button>
-                    <div className="flex items-center gap-2">
-                        <Button variant="outline" onClick={() => save(false)} disabled={saving}>
-                            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                            Zwischenspeichern
+                <div className="border-t border-slate-200 p-4 flex flex-col gap-2 bg-slate-50">
+                    {validationHint && (
+                        <div className="text-sm px-3 py-2 rounded-lg border bg-amber-50 border-amber-200 text-amber-900">
+                            {validationHint}
+                        </div>
+                    )}
+                    <div className="flex items-center justify-between gap-3">
+                        <Button variant="ghost" onClick={verwerfen} disabled={saving} className="text-red-600 hover:bg-red-50">
+                            <Trash2 className="w-4 h-4 mr-2" /> Verwerfen
                         </Button>
-                        <Button onClick={() => save(true)} disabled={saving}>
-                            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-                            Prüfen & Übernehmen
-                        </Button>
+                        <div className="flex items-center gap-2">
+                            <Button variant="outline" onClick={() => save(false)} disabled={saving}>
+                                {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                                Zwischenspeichern
+                            </Button>
+                            <Button onClick={() => save(true)} disabled={saving}>
+                                {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                                Prüfen & Übernehmen
+                            </Button>
+                        </div>
                     </div>
                 </div>
             </div>

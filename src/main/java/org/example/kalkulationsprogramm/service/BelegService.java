@@ -6,8 +6,10 @@ import org.example.kalkulationsprogramm.domain.Beleg;
 import org.example.kalkulationsprogramm.domain.BelegAufteilungsModus;
 import org.example.kalkulationsprogramm.domain.BelegKategorie;
 import org.example.kalkulationsprogramm.domain.BelegKiAnalyseStatus;
+import org.example.kalkulationsprogramm.domain.BelegKostenstellenAnteil;
 import org.example.kalkulationsprogramm.domain.BelegPosition;
 import org.example.kalkulationsprogramm.domain.BelegStatus;
+import org.example.kalkulationsprogramm.domain.FrontendUserProfile;
 import org.example.kalkulationsprogramm.domain.Kostenstelle;
 import org.example.kalkulationsprogramm.domain.Lieferanten;
 import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp;
@@ -16,6 +18,7 @@ import org.example.kalkulationsprogramm.domain.Sachkonto;
 import org.example.kalkulationsprogramm.dto.BelegDto;
 import org.example.kalkulationsprogramm.config.FrontendUserPrincipal;
 import org.example.kalkulationsprogramm.repository.AbteilungDokumentBerechtigungRepository;
+import org.example.kalkulationsprogramm.repository.BelegKostenstellenAnteilRepository;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
 import org.example.kalkulationsprogramm.repository.FrontendUserProfileRepository;
 import org.example.kalkulationsprogramm.repository.KostenstelleRepository;
@@ -78,6 +81,7 @@ public class BelegService {
     private final BelegSplitService belegSplitService;
     private final org.example.kalkulationsprogramm.repository.BelegPositionRepository belegPositionRepository;
     private final KasseSaldoService kasseSaldoService;
+    private final BelegKostenstellenAnteilRepository belegKostenstellenAnteilRepository;
 
     @Value("${upload.path:uploads}")
     private String uploadPath;
@@ -372,7 +376,86 @@ public class BelegService {
         assertKasseNichtUnterMindestbestand(alterStatus, alteKategorie, alterBrutto, beleg);
 
         belegRepository.save(beleg);
+
+        // Kostenstellen-Splits (#60): nur verarbeiten, wenn das Feld explizit
+        // gesendet wurde. null = Liste unveraendert lassen (Frontend hat das
+        // Modul nicht geoeffnet). Leere Liste = alle Splits loeschen.
+        if (req.getKostenstellenSplits() != null) {
+            persistiereSplits(beleg, req.getKostenstellenSplits(), validierer);
+        }
+
         return toDto(beleg);
+    }
+
+    /**
+     * Loescht alle bestehenden Splits des Belegs und legt die uebergebenen neu
+     * an. Validiert: Summe der Prozent-Werte &le; 100, jeder Eintrag hat
+     * entweder Prozent ODER absoluten Betrag (nicht beides, nicht keines).
+     * Setzt {@code berechneterBetrag} ueber {@link BelegKostenstellenAnteil#berechneAnteil}.
+     */
+    private void persistiereSplits(Beleg beleg, List<BelegDto.KostenstellenSplitDto> splits,
+                                   Mitarbeiter validierer) {
+        int prozentSumme = 0;
+        for (BelegDto.KostenstellenSplitDto s : splits) {
+            if (s.getKostenstelleId() == null) {
+                throw new IllegalArgumentException("Kostenstelle pro Split-Eintrag ist Pflicht");
+            }
+            boolean hatProzent = s.getProzent() != null;
+            boolean hatAbsolut = s.getAbsoluterBetrag() != null;
+            if (hatProzent == hatAbsolut) {
+                throw new IllegalArgumentException(
+                        "Pro Split-Eintrag genau eines von prozent ODER absoluterBetrag setzen");
+            }
+            if (hatProzent) {
+                if (s.getProzent() < 0 || s.getProzent() > 100) {
+                    throw new IllegalArgumentException("Prozent muss zwischen 0 und 100 liegen");
+                }
+                prozentSumme += s.getProzent();
+            }
+            if (s.getBeschreibung() != null && s.getBeschreibung().length() > 255) {
+                throw new IllegalArgumentException("Split-Beschreibung zu lang (max. 255 Zeichen)");
+            }
+        }
+        if (prozentSumme > 100) {
+            throw new IllegalArgumentException(
+                    "Summe der Prozent-Anteile darf 100% nicht ueberschreiten (aktuell " + prozentSumme + "%)");
+        }
+
+        belegKostenstellenAnteilRepository.deleteByBelegId(beleg.getId());
+
+        // zugeordnetVon ist optional — bei manueller Split-Bearbeitung am PC
+        // haben wir keinen direkten FrontendUserProfile-Lookup pro Mitarbeiter
+        // (Repository unterstuetzt das aktuell nicht und wuerde Audit-Pfad ohne
+        // Mehrwert verkomplizieren). validiertVon am Beleg selbst genuegt fuer
+        // die Nachvollziehbarkeit.
+        FrontendUserProfile profil = null;
+        int defaultStartJahr = beleg.getBelegDatum() != null
+                ? beleg.getBelegDatum().getYear()
+                : LocalDate.now().getYear();
+
+        for (BelegDto.KostenstellenSplitDto s : splits) {
+            Kostenstelle ks = kostenstelleRepository.findById(s.getKostenstelleId()).orElse(null);
+            if (ks == null) {
+                throw new IllegalArgumentException(
+                        "Kostenstelle " + s.getKostenstelleId() + " existiert nicht");
+            }
+            BelegKostenstellenAnteil anteil = new BelegKostenstellenAnteil();
+            anteil.setBeleg(beleg);
+            anteil.setKostenstelle(ks);
+            anteil.setProzent(s.getProzent());
+            anteil.setAbsoluterBetrag(s.getAbsoluterBetrag());
+            anteil.setBeschreibung(s.getBeschreibung());
+            int streckung = (s.getStreckungJahre() != null && s.getStreckungJahre() > 0)
+                    ? s.getStreckungJahre() : 1;
+            anteil.setStreckungJahre(streckung);
+            // streckungStartJahr immer setzen, sonst zaehlt isStreckungAktivFuerJahr
+            // den Anteil in JEDEM Jahr (Bug bei null + streckungJahre<=1).
+            anteil.setStreckungStartJahr(
+                    s.getStreckungStartJahr() != null ? s.getStreckungStartJahr() : defaultStartJahr);
+            anteil.setZugeordnetVon(profil);
+            anteil.berechneAnteil(beleg.getBetragNetto(), beleg.getBetragBrutto());
+            belegKostenstellenAnteilRepository.save(anteil);
+        }
     }
 
     /**
@@ -775,7 +858,35 @@ public class BelegService {
                 .positionen(mitPositionen && b.getAufteilungsModus() == BelegAufteilungsModus.TEILWEISE
                         ? toPositionResponse(belegPositionRepository.findByBelegIdOrderBySortierungAsc(b.getId()))
                         : java.util.Collections.emptyList())
+                // Splits nur fuer Detail-Views laden (N+1-Schutz fuer Listing-
+                // Endpoints). Frontend laedt die Detail-Response separat, wenn
+                // der User einen Beleg oeffnet.
+                .kostenstellenSplits(mitPositionen
+                        ? toSplitsDto(belegKostenstellenAnteilRepository.findByBelegId(b.getId()))
+                        : java.util.Collections.emptyList())
                 .build();
+    }
+
+    private List<BelegDto.KostenstellenSplitDto> toSplitsDto(List<BelegKostenstellenAnteil> anteile) {
+        if (anteile == null || anteile.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        return anteile.stream()
+                .map(a -> BelegDto.KostenstellenSplitDto.builder()
+                        .id(a.getId())
+                        .kostenstelleId(a.getKostenstelle() != null ? a.getKostenstelle().getId() : null)
+                        .kostenstelleBezeichnung(a.getKostenstelle() != null
+                                ? a.getKostenstelle().getBezeichnung() : null)
+                        .kostenstelleIstFixkosten(a.getKostenstelle() != null
+                                ? a.getKostenstelle().isIstFixkosten() : null)
+                        .prozent(a.getProzent())
+                        .absoluterBetrag(a.getAbsoluterBetrag())
+                        .berechneterBetrag(a.getBerechneterBetrag())
+                        .beschreibung(a.getBeschreibung())
+                        .streckungJahre(a.getStreckungJahre())
+                        .streckungStartJahr(a.getStreckungStartJahr())
+                        .build())
+                .toList();
     }
 
     private List<BelegDto.PositionResponse> toPositionResponse(List<BelegPosition> positionen) {

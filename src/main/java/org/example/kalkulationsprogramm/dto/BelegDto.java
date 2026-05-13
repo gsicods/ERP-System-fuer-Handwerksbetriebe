@@ -77,6 +77,34 @@ public class BelegDto {
         private BigDecimal betragFirmaBrutto;
         private BigDecimal betragFirmaMwst;
         private List<PositionResponse> positionen;
+        // Kostenstellen-Splits (#60): mehrere Kostenstellen pro Beleg mit
+        // Prozent/Absolut-Verteilung und optionaler Streckung ueber mehrere
+        // Jahre. Wenn leer, gilt weiterhin die Einzel-Kostenstelle (kostenstelleId).
+        private List<KostenstellenSplitDto> kostenstellenSplits;
+    }
+
+    /**
+     * Ein Kostenstellen-Anteil am Beleg (Issue #60). Beim Speichern reicht
+     * eines von {@code prozent} und {@code absoluterBetrag}; das andere bleibt
+     * null. {@code berechneterBetrag} ist read-only und wird vom Backend
+     * gesetzt. {@code streckungJahre} > 1 streckt den Anteil ueber mehrere
+     * Auswertungsjahre — Default 1 (kein Streck-Effekt).
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class KostenstellenSplitDto {
+        private Long id;
+        private Long kostenstelleId;
+        private String kostenstelleBezeichnung;
+        private Boolean kostenstelleIstFixkosten;
+        private Integer prozent;
+        private BigDecimal absoluterBetrag;
+        private BigDecimal berechneterBetrag;
+        private String beschreibung;
+        private Integer streckungJahre;
+        private Integer streckungStartJahr;
     }
 
     /**
@@ -160,6 +188,9 @@ public class BelegDto {
         // Buchhalter nachtraeglich umschwenkt (z.B. urspruenglich VOLLSTAENDIG
         // gescannt, jetzt doch nur Teile fuer Firma).
         private String aufteilungsModus;
+        // Kostenstellen-Splits (#60). null = "nicht aenderbar" (Liste bleibt
+        // unveraendert), leere Liste = "alle bestehenden Splits loeschen".
+        private List<KostenstellenSplitDto> kostenstellenSplits;
     }
 
     /**

@@ -9,6 +9,7 @@ import org.example.kalkulationsprogramm.domain.FrontendUserProfile;
 import org.example.kalkulationsprogramm.domain.Mitarbeiter;
 import org.example.kalkulationsprogramm.dto.BelegDto;
 import org.example.kalkulationsprogramm.repository.AbteilungDokumentBerechtigungRepository;
+import org.example.kalkulationsprogramm.repository.BelegKostenstellenAnteilRepository;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
 import org.example.kalkulationsprogramm.repository.FrontendUserProfileRepository;
 import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository;
@@ -56,6 +57,7 @@ class BelegServiceTest {
     @Mock private LieferantDokumentRepository lieferantDokumentRepository;
     @Mock private FrontendUserProfileRepository frontendUserProfileRepository;
     @Mock private KasseSaldoService kasseSaldoService;
+    @Mock private BelegKostenstellenAnteilRepository belegKostenstellenAnteilRepository;
 
     @InjectMocks
     private BelegService service;
