@@ -16,11 +16,8 @@ import org.example.kalkulationsprogramm.domain.Beleg;
 import org.example.kalkulationsprogramm.domain.BelegKategorie;
 import org.example.kalkulationsprogramm.domain.BelegStatus;
 import org.example.kalkulationsprogramm.domain.Firmeninformation;
-import org.example.kalkulationsprogramm.domain.Sachkonto;
-import org.example.kalkulationsprogramm.domain.SachkontoTyp;
 import org.example.kalkulationsprogramm.repository.BelegRepository;
 import org.example.kalkulationsprogramm.repository.FirmeninformationRepository;
-import org.example.kalkulationsprogramm.repository.SachkontoRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -41,10 +38,10 @@ import java.util.List;
  * der hochgeladenen Belegfotos).
  *
  * Inhalt:
- *  - Kopf mit Logo, Zeitraum, Erstelldatum
- *  - KPI-Box (Einnahmen, Ausgaben, Privatentnahmen/-einlagen, Saldo Kasse)
- *  - Auswertung pro Sachkonto (analog GET /api/buchhaltung/auswertung)
- *  - Liste aller validierten Belege im Monat
+ *  - Briefkopf mit Logo und Firmenstammdaten
+ *  - Titel und Zeitraum
+ *  - Kassen-Konto im klassischen T-Konto-Layout (Soll | Haben) mit
+ *    Anfangs- und Endsaldo
  *
  * Optisch an {@link ProjektAuswertungPdfService} angelehnt (rose-600 Header,
  * helle Zebra-Streifen, dezente Borders).
@@ -54,7 +51,6 @@ import java.util.List;
 public class BelegeKasseExportPdfService {
 
     private final BelegRepository belegRepository;
-    private final SachkontoRepository sachkontoRepository;
     private final FirmeninformationRepository firmeninformationRepository;
 
     @Value("${upload.path:uploads}")
@@ -68,7 +64,6 @@ public class BelegeKasseExportPdfService {
     private static final Color TEXT_MUTED  = new Color(100, 116, 139); // slate-500
     private static final Color TEXT_CELL   = new Color(55, 65, 81);    // slate-700
     private static final Color FOOTER_GREY = new Color(148, 163, 184); // slate-400
-    private static final Color KPI_BG      = new Color(254, 242, 242); // rose-50
     private static final Color KPI_ACCENT  = new Color(220, 38, 38);
 
     private static final DateTimeFormatter DATE_FMT  = DateTimeFormatter.ofPattern("dd.MM.yyyy");
@@ -109,10 +104,12 @@ public class BelegeKasseExportPdfService {
             addBriefkopf(doc, firma);
 
             addTitle(doc, ym);
-            addKpiSection(doc, imMonat);
-            addSachkontoAuswertung(doc, imMonat);
-            addKassenbuchDoppik(doc, imMonat);
-            addBelegListe(doc, imMonat);
+            // Anfangssaldo: Stand am Vortag des Monatsanfangs (alle validierten
+            // Bar-Bewegungen vor dem Monat). Steuerberater erwartet kontinuierliche
+            // Saldofortschreibung; ohne diesen Wert beginnt das T-Konto irrtuemlich
+            // bei 0,00 EUR und stimmt nicht mit dem Vormonats-PDF ueberein.
+            BigDecimal anfangssaldo = berechneAnfangssaldo(alle, von);
+            addKassenbuchTKonto(doc, imMonat, anfangssaldo);
             addFooter(doc);
 
             doc.close();
@@ -262,128 +259,45 @@ public class BelegeKasseExportPdfService {
         doc.add(new Paragraph(" "));
     }
 
-    private void addKpiSection(Document doc, List<Beleg> belege) throws DocumentException {
-        BigDecimal sumKasseEin = sumKategorie(belege, BelegKategorie.KASSE_EINNAHME);
-        BigDecimal sumKasseAus = sumKategorie(belege, BelegKategorie.KASSE_AUSGABE);
-        BigDecimal sumPrivEnt  = sumKategorie(belege, BelegKategorie.PRIVATENTNAHME);
-        BigDecimal sumPrivEin  = sumKategorie(belege, BelegKategorie.PRIVATEINLAGE);
-        BigDecimal sumBank     = sumKategorie(belege, BelegKategorie.BANK);
-        BigDecimal sumKredit   = sumKategorie(belege, BelegKategorie.KREDITKARTE);
-
-        PdfPTable kpi = new PdfPTable(4);
-        kpi.setWidthPercentage(100);
-        kpi.setSpacingBefore(4f);
-
-        kpi.addCell(kpiCell("Kasse Einnahmen", sumKasseEin));
-        kpi.addCell(kpiCell("Kasse Ausgaben",  sumKasseAus));
-        kpi.addCell(kpiCell("Privatentnahmen", sumPrivEnt));
-        kpi.addCell(kpiCell("Privateinlagen",  sumPrivEin));
-        kpi.addCell(kpiCell("Bank-Belege",     sumBank));
-        kpi.addCell(kpiCell("Kreditkarte",     sumKredit));
-        kpi.addCell(kpiCell("Belege gesamt",   BigDecimal.valueOf(belege.size()), false));
-        kpi.addCell(kpiCell("Saldo Kasse Monat",
-                sumKasseEin.subtract(sumKasseAus).add(sumPrivEin).subtract(sumPrivEnt)));
-
-        doc.add(kpi);
-        doc.add(new Paragraph(" "));
-    }
-
-    private void addSachkontoAuswertung(Document doc, List<Beleg> belege) throws DocumentException {
-        Font sectionFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 13, TEXT_DARK);
-        Paragraph section = new Paragraph("Auswertung nach Sachkonto", sectionFont);
-        section.setSpacingBefore(8f);
-        doc.add(section);
-
-        // Gruppieren wie SachkontoController.auswertung()
-        Map<Long, BigDecimal> summen = new HashMap<>();
-        Map<Long, Integer> counts = new HashMap<>();
-        BigDecimal ohneKonto = BigDecimal.ZERO;
-        int ohneKontoAnzahl = 0;
-
-        for (Beleg b : belege) {
+    /**
+     * Anfangssaldo am Vortag des Monatsanfangs. Summiert ueber alle validierten
+     * Bar-Bewegungen vor dem Stichtag — Eingaenge addiert, Ausgaenge subtrahiert.
+     * Damit beginnt das T-Konto nicht bei 0, sondern setzt den Endsaldo des
+     * Vormonats lueckenlos fort.
+     */
+    private BigDecimal berechneAnfangssaldo(List<Beleg> alleValidiert, LocalDate monatsAnfang) {
+        BigDecimal saldo = BigDecimal.ZERO;
+        for (Beleg b : alleValidiert) {
+            if (b.getBelegDatum() == null || !b.getBelegDatum().isBefore(monatsAnfang)) continue;
+            BelegKategorie k = b.getBelegKategorie();
+            if (k == null || !k.istKassenBewegung()) continue;
             BigDecimal brutto = nullSafe(b.getBetragBrutto());
-            if (b.getSachkonto() == null) {
-                ohneKonto = ohneKonto.add(brutto);
-                ohneKontoAnzahl++;
-            } else {
-                Long key = b.getSachkonto().getId();
-                summen.merge(key, brutto, BigDecimal::add);
-                counts.merge(key, 1, Integer::sum);
-            }
+            saldo = k.istAusgang() ? saldo.subtract(brutto) : saldo.add(brutto);
         }
-
-        PdfPTable t = new PdfPTable(new float[]{ 1f, 5f, 2f, 1.2f, 2f });
-        t.setWidthPercentage(100);
-        t.setSpacingBefore(4f);
-        addHeader(t, "Nr.", "Konto", "Typ", "Belege", "Summe brutto");
-
-        BigDecimal sumAufwand = BigDecimal.ZERO;
-        BigDecimal sumErtrag  = BigDecimal.ZERO;
-        BigDecimal sumPrivat  = BigDecimal.ZERO;
-        BigDecimal sumNeutral = BigDecimal.ZERO;
-
-        boolean alt = false;
-        List<Sachkonto> sortierteKonten = sachkontoRepository.findAllByOrderBySortierungAscBezeichnungAsc();
-        for (Sachkonto sk : sortierteKonten) {
-            BigDecimal s = summen.get(sk.getId());
-            if (s == null) continue;
-            Color bg = alt ? ROW_ALT : Color.WHITE;
-            t.addCell(cell(sk.getNummer() != null ? sk.getNummer() : "–", bg, Element.ALIGN_LEFT));
-            t.addCell(cell(sk.getBezeichnung(), bg, Element.ALIGN_LEFT));
-            t.addCell(cell(typLabel(sk.getKontoTyp()), bg, Element.ALIGN_LEFT));
-            t.addCell(cell(String.valueOf(counts.getOrDefault(sk.getId(), 0)), bg, Element.ALIGN_RIGHT));
-            t.addCell(cell(formatEuro(s) + " €", bg, Element.ALIGN_RIGHT));
-            alt = !alt;
-            switch (sk.getKontoTyp()) {
-                case AUFWAND -> sumAufwand = sumAufwand.add(s);
-                case ERTRAG  -> sumErtrag  = sumErtrag.add(s);
-                case PRIVAT  -> sumPrivat  = sumPrivat.add(s);
-                case NEUTRAL -> sumNeutral = sumNeutral.add(s);
-            }
-        }
-
-        if (ohneKonto.signum() != 0) {
-            Color bg = alt ? ROW_ALT : Color.WHITE;
-            t.addCell(cell("–", bg, Element.ALIGN_LEFT));
-            t.addCell(cell("(Noch keinem Konto zugeordnet)", bg, Element.ALIGN_LEFT));
-            t.addCell(cell("offen", bg, Element.ALIGN_LEFT));
-            t.addCell(cell(String.valueOf(ohneKontoAnzahl), bg, Element.ALIGN_RIGHT));
-            t.addCell(cell(formatEuro(ohneKonto) + " €", bg, Element.ALIGN_RIGHT));
-        }
-
-        // Summenzeilen
-        addSumRow(t, "Summe Erträge",   sumErtrag);
-        addSumRow(t, "Summe Aufwand",   sumAufwand);
-        addSumRow(t, "Summe Privat",    sumPrivat);
-        if (sumNeutral.signum() != 0) {
-            addSumRow(t, "Summe Neutral", sumNeutral);
-        }
-        addTotalRow(t, "Ergebnis (Ertrag - Aufwand)", sumErtrag.subtract(sumAufwand));
-
-        doc.add(t);
-        doc.add(new Paragraph(" "));
+        return saldo;
     }
 
     /**
-     * Kassenbuch im Steuerberater-Standard (Issue #61).
-     *
-     * Klassisches Doppik-Layout: Datum, Beleg-Nr, Verwendungszweck, Soll-Konto,
-     * Haben-Konto, Soll-Betrag, Haben-Betrag, Saldo. KASSE_EINNAHME / PRIVATEINLAGE
-     * fliessen in die Soll-Betrag-Spalte (Kasse wird belastet -> mehr Bargeld),
-     * KASSE_AUSGABE / PRIVATENTNAHME in die Haben-Betrag-Spalte (Kasse wird
-     * entlastet). Saldo ist kumulativ und MUSS am Monatsende mit
-     * {@code KasseSaldoService.berechneAktuellenSaldo()} fuer denselben Zeitraum
-     * uebereinstimmen — ohne diesen Abgleich wuerde der Steuerberater die
-     * Diskrepanz sofort sehen.
+     * Kassen-Konto im klassischen T-Konto-Layout (Steuerberater-Standard):
+     * Linke Spalte = Soll (Eingaenge: KASSE_EINNAHME + PRIVATEINLAGE),
+     * rechte Spalte = Haben (Ausgaenge: KASSE_AUSGABE + PRIVATENTNAHME).
+     * Anfangssaldo wird ueber dem T-Konto angedruckt, Endsaldo darunter.
+     * Endsaldo = Anfangssaldo + Summe Soll − Summe Haben.
      */
-    private void addKassenbuchDoppik(Document doc, List<Beleg> belege) throws DocumentException {
-        Font sectionFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 13, TEXT_DARK);
-        Paragraph section = new Paragraph("Kassenbuch (Soll / Haben)", sectionFont);
-        section.setSpacingBefore(12f);
+    private void addKassenbuchTKonto(Document doc, List<Beleg> belege, BigDecimal anfangssaldo)
+            throws DocumentException {
+        Font sectionFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 14, TEXT_DARK);
+        Paragraph section = new Paragraph("Kasse · Bargeldkonto (T-Konto)", sectionFont);
+        section.setSpacingBefore(10f);
         doc.add(section);
 
-        // Nur Bar-Bewegungen — andere Belege haben keinen Effekt auf den
-        // Kassensaldo und gehoeren nicht in dieses Layout.
+        Font infoFont = FontFactory.getFont(FontFactory.HELVETICA, 10, TEXT_MUTED);
+        Paragraph anfang = new Paragraph(
+                "Anfangssaldo zu Monatsbeginn: " + formatEuro(anfangssaldo) + " €", infoFont);
+        anfang.setSpacingBefore(2f);
+        anfang.setSpacingAfter(6f);
+        doc.add(anfang);
+
         List<Beleg> kasse = belege.stream()
                 .filter(b -> b.getBelegKategorie() != null
                         && b.getBelegKategorie().istKassenBewegung())
@@ -392,161 +306,123 @@ public class BelegeKasseExportPdfService {
                         .thenComparing(Beleg::getId))
                 .toList();
 
-        if (kasse.isEmpty()) {
-            Font muted = FontFactory.getFont(FontFactory.HELVETICA_OBLIQUE, 10, TEXT_MUTED);
-            Paragraph empty = new Paragraph("Keine Bar-Bewegungen in diesem Monat.", muted);
-            empty.setSpacingBefore(8f);
-            doc.add(empty);
-            return;
-        }
+        List<Beleg> soll  = kasse.stream()
+                .filter(b -> !b.getBelegKategorie().istAusgang()).toList();
+        List<Beleg> haben = kasse.stream()
+                .filter(b -> b.getBelegKategorie().istAusgang()).toList();
 
-        // Spaltenbreiten — auf A4-quer abgestimmt (8pt+ bleibt lesbar)
-        PdfPTable t = new PdfPTable(new float[]{ 1.1f, 1.3f, 3.5f, 2.4f, 2.4f, 1.5f, 1.5f, 1.5f });
+        BigDecimal sumSoll  = summeBrutto(soll);
+        BigDecimal sumHaben = summeBrutto(haben);
+        BigDecimal endsaldo = anfangssaldo.add(sumSoll).subtract(sumHaben);
+
+        PdfPTable t = new PdfPTable(2);
         t.setWidthPercentage(100);
         t.setSpacingBefore(4f);
-        addHeader(t, "Datum", "Beleg-Nr.", "Verwendungszweck",
-                "Soll-Konto", "Haben-Konto", "Soll €", "Haben €", "Saldo €");
 
-        BigDecimal saldo = BigDecimal.ZERO;
-        BigDecimal sumSoll = BigDecimal.ZERO;
-        BigDecimal sumHaben = BigDecimal.ZERO;
-        boolean alt = false;
+        t.addCell(seitenHeaderCell("SOLL  ·  Eingang"));
+        t.addCell(seitenHeaderCell("HABEN  ·  Ausgang"));
 
-        for (Beleg b : kasse) {
-            Color bg = alt ? ROW_ALT : Color.WHITE;
-            String datum = b.getBelegDatum() != null ? b.getBelegDatum().format(DATE_SHORT) : "–";
-            String nr    = b.getBelegNummer() != null ? b.getBelegNummer() : "–";
-            String zweck = b.getBeschreibung() != null && !b.getBeschreibung().isBlank()
-                    ? b.getBeschreibung()
-                    : kategorieLabel(b.getBelegKategorie());
+        t.addCell(seitenContainer(buildSeitenTabelle(soll)));
+        t.addCell(seitenContainer(buildSeitenTabelle(haben)));
 
-            BuchungssatzAbleitung.Buchungssatz bs = BuchungssatzAbleitung.ableiten(b);
-            BigDecimal brutto = nullSafe(b.getBetragBrutto());
-            boolean istEingang = !b.getBelegKategorie().istAusgang();
-            String sollBetrag = istEingang ? formatEuro(brutto) : "";
-            String habenBetrag = istEingang ? "" : formatEuro(brutto);
-
-            if (istEingang) {
-                saldo = saldo.add(brutto);
-                sumSoll = sumSoll.add(brutto);
-            } else {
-                saldo = saldo.subtract(brutto);
-                sumHaben = sumHaben.add(brutto);
-            }
-
-            t.addCell(cell(datum, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(nr, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(zweck, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(bs.soll(), bg, Element.ALIGN_LEFT));
-            t.addCell(cell(bs.haben(), bg, Element.ALIGN_LEFT));
-            t.addCell(cell(sollBetrag, bg, Element.ALIGN_RIGHT));
-            t.addCell(cell(habenBetrag, bg, Element.ALIGN_RIGHT));
-            t.addCell(cell(formatEuro(saldo), bg, Element.ALIGN_RIGHT));
-            alt = !alt;
-        }
-
-        // Summenzeile: Soll, Haben, End-Saldo
-        Font sumFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, TEXT_DARK);
-        PdfPCell label = new PdfPCell(new Phrase("Summe", sumFont));
-        label.setColspan(5);
-        label.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        label.setBackgroundColor(SUM_BG);
-        label.setPaddingTop(8f); label.setPaddingBottom(8f); label.setPaddingRight(10f);
-        label.setBorder(Rectangle.NO_BORDER);
-        t.addCell(label);
-
-        for (BigDecimal v : new BigDecimal[]{ sumSoll, sumHaben, saldo }) {
-            PdfPCell c = new PdfPCell(new Phrase(formatEuro(v), sumFont));
-            c.setHorizontalAlignment(Element.ALIGN_RIGHT);
-            c.setBackgroundColor(SUM_BG);
-            c.setPaddingTop(8f); c.setPaddingBottom(8f);
-            c.setPaddingLeft(6f); c.setPaddingRight(6f);
-            c.setBorder(Rectangle.NO_BORDER);
-            t.addCell(c);
-        }
+        t.addCell(seitenSummeCell("Summe Soll:  " + formatEuro(sumSoll) + " €"));
+        t.addCell(seitenSummeCell("Summe Haben: " + formatEuro(sumHaben) + " €"));
 
         doc.add(t);
+
+        Font endFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 13, KPI_ACCENT);
+        Paragraph end = new Paragraph(
+                "Endsaldo (Anfang + Soll − Haben): " + formatEuro(endsaldo) + " €", endFont);
+        end.setAlignment(Element.ALIGN_RIGHT);
+        end.setSpacingBefore(10f);
+        doc.add(end);
     }
 
-    private void addBelegListe(Document doc, List<Beleg> belege) throws DocumentException {
-        Font sectionFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 13, TEXT_DARK);
-        Paragraph section = new Paragraph("Belege im Zeitraum (" + belege.size() + ")", sectionFont);
-        section.setSpacingBefore(12f);
-        doc.add(section);
+    private PdfPTable buildSeitenTabelle(List<Beleg> belege) {
+        PdfPTable inner = new PdfPTable(new float[]{ 1.4f, 1.6f, 4.5f, 2f });
+        inner.setWidthPercentage(100);
 
-        if (belege.isEmpty()) {
-            Font muted = FontFactory.getFont(FontFactory.HELVETICA_OBLIQUE, 10, TEXT_MUTED);
-            Paragraph empty = new Paragraph("Keine validierten Belege in diesem Monat.", muted);
-            empty.setSpacingBefore(8f);
-            doc.add(empty);
-            return;
+        Font subHdr = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8, TEXT_MUTED);
+        String[] heads = { "Datum", "Beleg-Nr.", "Verwendungszweck", "Betrag €" };
+        for (String h : heads) {
+            PdfPCell c = new PdfPCell(new Phrase(h, subHdr));
+            c.setBackgroundColor(SUM_BG);
+            c.setPaddingTop(5f); c.setPaddingBottom(5f);
+            c.setPaddingLeft(6f); c.setPaddingRight(6f);
+            c.setBorder(Rectangle.BOTTOM);
+            c.setBorderColor(BORDER);
+            c.setBorderWidth(0.5f);
+            inner.addCell(c);
         }
 
-        // Spalten: Datum | BelegNr | Kategorie | Lieferant | Sachkonto | Beschreibung | MwSt | Netto | Brutto
-        PdfPTable t = new PdfPTable(new float[]{ 1.1f, 1.4f, 2f, 2.5f, 2.5f, 3.2f, 0.8f, 1.2f, 1.3f });
-        t.setWidthPercentage(100);
-        t.setSpacingBefore(4f);
-        addHeader(t, "Datum", "Beleg-Nr.", "Kategorie", "Lieferant", "Sachkonto",
-                "Beschreibung", "MwSt", "Netto €", "Brutto €");
+        if (belege.isEmpty()) {
+            Font muted = FontFactory.getFont(FontFactory.HELVETICA_OBLIQUE, 9, TEXT_MUTED);
+            PdfPCell empty = new PdfPCell(new Phrase("Keine Buchungen", muted));
+            empty.setColspan(4);
+            empty.setHorizontalAlignment(Element.ALIGN_CENTER);
+            empty.setPaddingTop(10f); empty.setPaddingBottom(10f);
+            empty.setBorder(Rectangle.NO_BORDER);
+            inner.addCell(empty);
+            return inner;
+        }
 
-        BigDecimal sumNetto = BigDecimal.ZERO;
-        BigDecimal sumBrutto = BigDecimal.ZERO;
         boolean alt = false;
         for (Beleg b : belege) {
             Color bg = alt ? ROW_ALT : Color.WHITE;
-            String datum = b.getBelegDatum() != null ? b.getBelegDatum().format(DATE_SHORT) : "–";
-            String nr    = b.getBelegNummer() != null ? b.getBelegNummer() : "–";
-            String kat   = kategorieLabel(b.getBelegKategorie());
-            String lief  = b.getLieferant() != null ? b.getLieferant().getLieferantenname() : "–";
-            String konto = b.getSachkonto() != null
-                    ? (b.getSachkonto().getNummer() != null ? b.getSachkonto().getNummer() + " " : "")
-                            + b.getSachkonto().getBezeichnung()
-                    : "–";
-            String desc  = b.getBeschreibung() != null ? b.getBeschreibung() : "";
-            String mwst  = b.getMwstSatz() != null ? formatEuro(b.getMwstSatz()) + "%" : "–";
-            String netto = b.getBetragNetto() != null ? formatEuro(b.getBetragNetto()) : "–";
-            String brutto = b.getBetragBrutto() != null ? formatEuro(b.getBetragBrutto()) : "–";
+            String datum  = b.getBelegDatum()  != null ? b.getBelegDatum().format(DATE_SHORT) : "–";
+            String nr     = b.getBelegNummer() != null ? b.getBelegNummer() : "–";
+            String zweck  = b.getBeschreibung() != null && !b.getBeschreibung().isBlank()
+                    ? b.getBeschreibung()
+                    : kategorieLabel(b.getBelegKategorie());
+            String betrag = formatEuro(nullSafe(b.getBetragBrutto()));
 
-            t.addCell(cell(datum, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(nr, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(kat, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(lief, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(konto, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(desc, bg, Element.ALIGN_LEFT));
-            t.addCell(cell(mwst, bg, Element.ALIGN_RIGHT));
-            t.addCell(cell(netto, bg, Element.ALIGN_RIGHT));
-            t.addCell(cell(brutto, bg, Element.ALIGN_RIGHT));
+            inner.addCell(cell(datum, bg, Element.ALIGN_LEFT));
+            inner.addCell(cell(nr,    bg, Element.ALIGN_LEFT));
+            inner.addCell(cell(zweck, bg, Element.ALIGN_LEFT));
+            inner.addCell(cell(betrag, bg, Element.ALIGN_RIGHT));
             alt = !alt;
-
-            sumNetto = sumNetto.add(nullSafe(b.getBetragNetto()));
-            sumBrutto = sumBrutto.add(nullSafe(b.getBetragBrutto()));
         }
+        return inner;
+    }
 
-        // Summenzeile
-        Font sumFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, TEXT_DARK);
-        PdfPCell label = new PdfPCell(new Phrase("Summe", sumFont));
-        label.setColspan(7);
-        label.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        label.setBackgroundColor(SUM_BG);
-        label.setPaddingTop(8f); label.setPaddingBottom(8f); label.setPaddingRight(10f);
-        label.setBorder(Rectangle.NO_BORDER);
-        t.addCell(label);
+    private PdfPCell seitenHeaderCell(String text) {
+        Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 10, Color.WHITE);
+        PdfPCell c = new PdfPCell(new Phrase(text, headerFont));
+        c.setBackgroundColor(HEADER_BG);
+        c.setHorizontalAlignment(Element.ALIGN_CENTER);
+        c.setPaddingTop(8f); c.setPaddingBottom(8f);
+        c.setBorder(Rectangle.NO_BORDER);
+        return c;
+    }
 
-        PdfPCell sn = new PdfPCell(new Phrase(formatEuro(sumNetto), sumFont));
-        sn.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        sn.setBackgroundColor(SUM_BG);
-        sn.setPaddingTop(8f); sn.setPaddingBottom(8f); sn.setPaddingRight(6f); sn.setPaddingLeft(6f);
-        sn.setBorder(Rectangle.NO_BORDER);
-        t.addCell(sn);
+    private PdfPCell seitenContainer(PdfPTable inner) {
+        PdfPCell c = new PdfPCell(inner);
+        c.setPadding(0f);
+        c.setBorder(Rectangle.BOX);
+        c.setBorderColor(BORDER);
+        c.setBorderWidth(0.5f);
+        return c;
+    }
 
-        PdfPCell sb = new PdfPCell(new Phrase(formatEuro(sumBrutto), sumFont));
-        sb.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        sb.setBackgroundColor(SUM_BG);
-        sb.setPaddingTop(8f); sb.setPaddingBottom(8f); sb.setPaddingRight(6f); sb.setPaddingLeft(6f);
-        sb.setBorder(Rectangle.NO_BORDER);
-        t.addCell(sb);
+    private PdfPCell seitenSummeCell(String text) {
+        Font sumFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 10, TEXT_DARK);
+        PdfPCell c = new PdfPCell(new Phrase(text, sumFont));
+        c.setBackgroundColor(SUM_BG);
+        c.setHorizontalAlignment(Element.ALIGN_RIGHT);
+        c.setPaddingTop(8f); c.setPaddingBottom(8f);
+        c.setPaddingLeft(10f); c.setPaddingRight(10f);
+        c.setBorderColor(TEXT_DARK);
+        c.setBorderWidthTop(1f);
+        c.setBorderWidthBottom(0f);
+        c.setBorderWidthLeft(0f);
+        c.setBorderWidthRight(0f);
+        return c;
+    }
 
-        doc.add(t);
+    private BigDecimal summeBrutto(List<Beleg> belege) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (Beleg b : belege) sum = sum.add(nullSafe(b.getBetragBrutto()));
+        return sum;
     }
 
     private void addFooter(Document doc) throws DocumentException {
@@ -562,18 +438,6 @@ public class BelegeKasseExportPdfService {
 
     // ===================== Cells & Helpers =====================
 
-    private void addHeader(PdfPTable t, String... headers) {
-        Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, Color.WHITE);
-        for (String h : headers) {
-            PdfPCell c = new PdfPCell(new Phrase(h, headerFont));
-            c.setBackgroundColor(HEADER_BG);
-            c.setPaddingTop(7f); c.setPaddingBottom(7f);
-            c.setPaddingLeft(6f); c.setPaddingRight(6f);
-            c.setBorder(Rectangle.NO_BORDER);
-            t.addCell(c);
-        }
-    }
-
     private PdfPCell cell(String text, Color bg, int alignment) {
         Font cellFont = FontFactory.getFont(FontFactory.HELVETICA, 9, TEXT_CELL);
         PdfPCell c = new PdfPCell(new Phrase(text == null ? "" : text, cellFont));
@@ -587,74 +451,6 @@ public class BelegeKasseExportPdfService {
         return c;
     }
 
-    private PdfPCell kpiCell(String label, BigDecimal value) {
-        return kpiCell(label, value, true);
-    }
-
-    private PdfPCell kpiCell(String label, BigDecimal value, boolean asEuro) {
-        Font lbl = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 7, TEXT_MUTED);
-        Font val = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 13, KPI_ACCENT);
-
-        Paragraph p = new Paragraph();
-        p.add(new Chunk(label.toUpperCase(java.util.Locale.GERMAN) + "\n", lbl));
-        p.add(new Chunk(asEuro ? formatEuro(value) + " €" : value.toPlainString(), val));
-
-        PdfPCell c = new PdfPCell(p);
-        c.setBackgroundColor(KPI_BG);
-        c.setPaddingTop(8f); c.setPaddingBottom(8f);
-        c.setPaddingLeft(10f); c.setPaddingRight(10f);
-        c.setBorder(Rectangle.BOX);
-        c.setBorderColor(BORDER);
-        c.setBorderWidth(0.5f);
-        return c;
-    }
-
-    private void addSumRow(PdfPTable t, String label, BigDecimal value) {
-        Font sumFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, TEXT_DARK);
-        PdfPCell l = new PdfPCell(new Phrase(label, sumFont));
-        l.setColspan(4);
-        l.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        l.setBackgroundColor(SUM_BG);
-        l.setPaddingTop(7f); l.setPaddingBottom(7f); l.setPaddingRight(10f);
-        l.setBorder(Rectangle.NO_BORDER);
-        t.addCell(l);
-
-        PdfPCell v = new PdfPCell(new Phrase(formatEuro(value) + " €", sumFont));
-        v.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        v.setBackgroundColor(SUM_BG);
-        v.setPaddingTop(7f); v.setPaddingBottom(7f); v.setPaddingRight(6f); v.setPaddingLeft(6f);
-        v.setBorder(Rectangle.NO_BORDER);
-        t.addCell(v);
-    }
-
-    private void addTotalRow(PdfPTable t, String label, BigDecimal value) {
-        Font totalFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 11, KPI_ACCENT);
-        PdfPCell l = new PdfPCell(new Phrase(label, totalFont));
-        l.setColspan(4);
-        l.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        l.setBackgroundColor(KPI_BG);
-        l.setPaddingTop(10f); l.setPaddingBottom(10f); l.setPaddingRight(10f);
-        l.setBorder(Rectangle.NO_BORDER);
-        t.addCell(l);
-
-        PdfPCell v = new PdfPCell(new Phrase(formatEuro(value) + " €", totalFont));
-        v.setHorizontalAlignment(Element.ALIGN_RIGHT);
-        v.setBackgroundColor(KPI_BG);
-        v.setPaddingTop(10f); v.setPaddingBottom(10f); v.setPaddingRight(6f); v.setPaddingLeft(6f);
-        v.setBorder(Rectangle.NO_BORDER);
-        t.addCell(v);
-    }
-
-    private BigDecimal sumKategorie(List<Beleg> belege, BelegKategorie kategorie) {
-        BigDecimal sum = BigDecimal.ZERO;
-        for (Beleg b : belege) {
-            if (b.getBelegKategorie() == kategorie) {
-                sum = sum.add(nullSafe(b.getBetragBrutto()));
-            }
-        }
-        return sum;
-    }
-
     private BigDecimal nullSafe(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
     }
@@ -663,16 +459,6 @@ public class BelegeKasseExportPdfService {
         BigDecimal x = v == null ? BigDecimal.ZERO : v.setScale(2, RoundingMode.HALF_UP);
         // Deutsche Formatierung: 1.234,56
         return String.format(java.util.Locale.GERMAN, "%,.2f", x);
-    }
-
-    private String typLabel(SachkontoTyp typ) {
-        if (typ == null) return "–";
-        return switch (typ) {
-            case AUFWAND -> "Aufwand";
-            case ERTRAG  -> "Ertrag";
-            case PRIVAT  -> "Privat";
-            case NEUTRAL -> "Neutral";
-        };
     }
 
     private String kategorieLabel(BelegKategorie k) {

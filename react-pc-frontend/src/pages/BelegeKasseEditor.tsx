@@ -425,11 +425,13 @@ export default function BelegeKasseEditor() {
                         <ArrowRightLeft className="w-4 h-4 mr-2" />
                         Umbuchung anlegen
                     </Button>
-                    <Button variant="outline" onClick={() => setMonatsExportOpen(true)}
-                            title="Monatsexport für den Steuerberater als PDF">
-                        <FileDown className="w-4 h-4 mr-2" />
-                        Monats-Export (PDF)
-                    </Button>
+                    {activeTab === 'kasse' && (
+                        <Button variant="outline" onClick={() => setMonatsExportOpen(true)}
+                                title="Monatsexport für den Steuerberater als PDF">
+                            <FileDown className="w-4 h-4 mr-2" />
+                            Monats-Export (PDF)
+                        </Button>
+                    )}
                     <Button variant="outline" onClick={() => setSteuerberaterEmailOpen(true)}
                             title="Belegaufstellung als HTML-Tabelle per E-Mail an den Steuerberater">
                         <FileText className="w-4 h-4 mr-2" />
@@ -618,9 +620,9 @@ function MonatsExportModal({ onClose }: { onClose: () => void }) {
                     <div className="flex items-center gap-3">
                         <FileDown className="w-5 h-5 text-rose-600" />
                         <div>
-                            <h2 className="font-bold text-slate-900">Monats-Export (Steuerberater)</h2>
+                            <h2 className="font-bold text-slate-900">Kassenbuch-Export (Steuerberater)</h2>
                             <p className="text-xs text-slate-500">
-                                Ein PDF mit allen validierten Belegen des Monats
+                                Kassen-Konto im T-Konto-Format für einen Kalendermonat
                             </p>
                         </div>
                     </div>
@@ -633,8 +635,9 @@ function MonatsExportModal({ onClose }: { onClose: () => void }) {
                     <div className="bg-rose-50/60 border border-rose-100 rounded-lg p-3 text-xs text-slate-600 flex items-start gap-2">
                         <Calendar className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
                         <span>
-                            Das PDF enthält die Sachkonto-Auswertung und alle validierten Belege.
-                            Übergib es zusammen mit dem Ordner der Belegfotos an den Steuerberater.
+                            Das PDF zeigt das Kassen-Konto als T-Konto (Eingang | Ausgang)
+                            mit Anfangs- und Endsaldo. Übergib es zusammen mit dem Ordner
+                            der Belegfotos an den Steuerberater.
                         </span>
                     </div>
 
@@ -966,14 +969,6 @@ function KassenbuchView({ kassenbuch, loading, onSelectBeleg }: {
 
     return (
         <div className="space-y-4">
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                <KpiTile label="Saldo aktuell" value={`${formatEuro(kassenbuch.saldoEnde)} €`} icon={<Wallet className="w-5 h-5" />} highlight />
-                <KpiTile label="Einnahmen" value={`${formatEuro(kassenbuch.summeEinnahmen)} €`} icon={<Banknote className="w-5 h-5 text-emerald-600" />} />
-                <KpiTile label="Ausgaben" value={`${formatEuro(kassenbuch.summeAusgaben)} €`} icon={<CreditCard className="w-5 h-5 text-amber-600" />} />
-                <KpiTile label="Privatentnahmen" value={`${formatEuro(kassenbuch.summePrivatentnahmen)} €`} icon={<Wallet className="w-5 h-5 text-fuchsia-600" />} />
-                <KpiTile label="Privateinlagen" value={`${formatEuro(kassenbuch.summePrivateinlagen)} €`} icon={<Wallet className="w-5 h-5 text-lime-600" />} />
-            </div>
-
             <Card className="overflow-hidden">
                 {/* Konto-Kopf */}
                 <div className="border-b-2 border-slate-800 bg-slate-50/60 px-6 py-3 text-center">
