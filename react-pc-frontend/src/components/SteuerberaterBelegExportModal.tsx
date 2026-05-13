@@ -349,7 +349,7 @@ export function SteuerberaterBelegExportModal({
         const tableHtml = `
 <table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:13px;">
     <thead><tr>${headerHtml}</tr></thead>
-    <tbody>${rows || `<tr><td colspan="${headerCells.length}" style="border:1px solid #dee2e6;padding:12px;text-align:center;color:#6b7280;">Keine validierten Belege im Monat.</td></tr>`}</tbody>
+    <tbody>${rows || `<tr><td colspan="${headerCells.length}" style="border:1px solid #dee2e6;padding:12px;text-align:center;color:#6b7280;">Keine validierten Kassen-Belege im Monat.</td></tr>`}</tbody>
     ${entries.length > 0 ? `<tfoot>${footerHtml}</tfoot>` : ''}
 </table>`;
 
@@ -366,7 +366,7 @@ export function SteuerberaterBelegExportModal({
 
 <p><br></p>
 
-<p>anbei sende ich Ihnen die Aufstellung der validierten Belege für den Monat ${monatName} ${jahr}.</p>
+<p>anbei sende ich Ihnen die Aufstellung der validierten <strong>Kassen-Belege</strong> für den Monat ${monatName} ${jahr} (Bar-Kassenbuch).</p>
 
 <p>Die zugehörigen physischen Belege liegen Ihnen bereits vor – die <strong>Beleg-Nr.</strong> dient als Referenz für die Zuordnung.</p>
 
@@ -429,8 +429,8 @@ ${sig}
             const firmenname = (firma && typeof firma === 'object' && firma.firmenname)
                 ? String(firma.firmenname).trim() : '';
             setSubject(firmenname
-                ? `Belegaufstellung ${monatName} ${jahr} - ${firmenname}`
-                : `Belegaufstellung ${monatName} ${jahr}`);
+                ? `Belegaufstellung Kasse ${monatName} ${jahr} - ${firmenname}`
+                : `Belegaufstellung Kasse ${monatName} ${jahr}`);
             signatureRef.current = sig;
             setSteuerberaterListe(sbListe);
 
@@ -538,9 +538,9 @@ ${sig}
                             <Mail className="w-5 h-5 text-rose-600" />
                         </div>
                         <div>
-                            <h2 className="text-lg font-semibold text-slate-900">Belegaufstellung an Steuerberater</h2>
+                            <h2 className="text-lg font-semibold text-slate-900">Belegaufstellung Kasse an Steuerberater</h2>
                             <p className="text-sm text-slate-500">
-                                {loadingEntries ? 'Belege werden geladen…' : `${entries.length} validierte Belege im Monat`}
+                                {loadingEntries ? 'Belege werden geladen…' : `${entries.length} validierte Kassen-Belege im Monat`}
                             </p>
                         </div>
                     </div>

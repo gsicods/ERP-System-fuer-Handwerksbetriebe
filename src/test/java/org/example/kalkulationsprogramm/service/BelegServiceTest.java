@@ -443,6 +443,33 @@ class BelegServiceTest {
         return new UsernamePasswordAuthenticationToken(p, null, p.getAuthorities());
     }
 
+    // ===================== Steuerberater-Export: Kassen-Filter =====================
+
+    @Test
+    @DisplayName("listeFuerSteuerberaterExport: nur Kassen-Bewegungen, keine BANK/KREDITKARTE/SONSTIGER")
+    void listeFuerSteuerberaterExport_filtertNichtKassenBewegungen() {
+        LocalDate von = LocalDate.of(2026, 5, 1);
+        LocalDate bis = LocalDate.of(2026, 5, 31);
+
+        Beleg kasseEinnahme  = belegMit(1L, BelegKategorie.KASSE_EINNAHME,  LocalDate.of(2026, 5, 2),  new BigDecimal("100.00"));
+        Beleg kasseAusgabe   = belegMit(2L, BelegKategorie.KASSE_AUSGABE,   LocalDate.of(2026, 5, 5),  new BigDecimal("25.00"));
+        Beleg privatentnahme = belegMit(3L, BelegKategorie.PRIVATENTNAHME,  LocalDate.of(2026, 5, 7),  new BigDecimal("50.00"));
+        Beleg privateinlage  = belegMit(4L, BelegKategorie.PRIVATEINLAGE,   LocalDate.of(2026, 5, 10), new BigDecimal("200.00"));
+        Beleg bank           = belegMit(5L, BelegKategorie.BANK,            LocalDate.of(2026, 5, 12), new BigDecimal("500.00"));
+        Beleg kreditkarte    = belegMit(6L, BelegKategorie.KREDITKARTE,     LocalDate.of(2026, 5, 15), new BigDecimal("80.00"));
+        Beleg sonstiger      = belegMit(7L, BelegKategorie.SONSTIGER_BELEG, LocalDate.of(2026, 5, 18), new BigDecimal("30.00"));
+        Beleg ohneKategorie  = belegMit(8L, null,                            LocalDate.of(2026, 5, 20), new BigDecimal("10.00"));
+
+        given(belegRepository.findValidierteImZeitraumFuerExport(von, bis))
+                .willReturn(List.of(kasseEinnahme, kasseAusgabe, privatentnahme, privateinlage,
+                                     bank, kreditkarte, sonstiger, ohneKategorie));
+
+        List<BelegDto.SteuerberaterExportEntry> result = service.listeFuerSteuerberaterExport(von, bis);
+
+        assertThat(result).extracting(BelegDto.SteuerberaterExportEntry::getBelegId)
+                .containsExactly(1L, 2L, 3L, 4L);
+    }
+
     // ===================== Test-Helfer =====================
 
     private static Mitarbeiter mitarbeiter(Long id, Set<Abteilung> abteilungen) {

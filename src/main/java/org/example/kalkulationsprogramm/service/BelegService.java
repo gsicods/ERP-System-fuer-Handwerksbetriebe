@@ -684,10 +684,16 @@ public class BelegService {
      * gebucht. Die Original-Gesamt-Bruttosumme + ein Kurztext mit den
      * gewaehlten Positionen gehen als Erlaeuterung mit, damit der
      * Steuerberater den Beleg dem physisch vorliegenden Original zuordnen kann.
+     * <p>
+     * Filter: Nur Belege des <b>Kassenkontos</b> (Bar-Kassenbuch). BANK,
+     * KREDITKARTE und SONSTIGER_BELEG werden ausgeschlossen — diese kommen
+     * ueber separate Kanaele zum Steuerberater (Bankauszug, KK-Abrechnung).
      */
     @Transactional(readOnly = true)
     public List<BelegDto.SteuerberaterExportEntry> listeFuerSteuerberaterExport(LocalDate von, LocalDate bis) {
-        List<Beleg> belege = belegRepository.findValidierteImZeitraumFuerExport(von, bis);
+        List<Beleg> belege = belegRepository.findValidierteImZeitraumFuerExport(von, bis).stream()
+                .filter(b -> b.getBelegKategorie() != null && b.getBelegKategorie().istKassenBewegung())
+                .toList();
         List<BelegDto.SteuerberaterExportEntry> result = new ArrayList<>(belege.size());
         for (Beleg b : belege) {
             boolean teilweise = b.getAufteilungsModus() == BelegAufteilungsModus.TEILWEISE

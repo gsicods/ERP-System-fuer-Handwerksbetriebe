@@ -30,7 +30,9 @@ class BestellungPdfServiceTest {
 
         SchnittbilderRepository schnittbilderRepository = Mockito.mock(SchnittbilderRepository.class);
         DateiSpeicherService dateiSpeicherService = Mockito.mock(DateiSpeicherService.class);
-        BestellungPdfService service = new BestellungPdfService(bestellungService, schnittbilderRepository, dateiSpeicherService);
+        FirmeninformationService firmeninformationService = Mockito.mock(FirmeninformationService.class);
+        Mockito.when(firmeninformationService.loadLogoImage()).thenReturn(null);
+        BestellungPdfService service = new BestellungPdfService(bestellungService, schnittbilderRepository, dateiSpeicherService, firmeninformationService);
         Path pdf = service.generatePdfForLieferant(1L);
         assertTrue(Files.size(pdf) > 0);
         String content = Files.readString(pdf, StandardCharsets.ISO_8859_1);
@@ -55,7 +57,9 @@ class BestellungPdfServiceTest {
 
         SchnittbilderRepository schnittbilderRepository = Mockito.mock(SchnittbilderRepository.class);
         DateiSpeicherService dateiSpeicherService = Mockito.mock(DateiSpeicherService.class);
-        BestellungPdfService service = new BestellungPdfService(bestellungService, schnittbilderRepository, dateiSpeicherService);
+        FirmeninformationService firmeninformationService = Mockito.mock(FirmeninformationService.class);
+        Mockito.when(firmeninformationService.loadLogoImage()).thenReturn(null);
+        BestellungPdfService service = new BestellungPdfService(bestellungService, schnittbilderRepository, dateiSpeicherService, firmeninformationService);
         Path pdf = service.generatePdfForLieferant(null);
         assertTrue(Files.size(pdf) > 0);
         Files.deleteIfExists(pdf);
@@ -78,7 +82,9 @@ class BestellungPdfServiceTest {
 
         SchnittbilderRepository schnittbilderRepository = Mockito.mock(SchnittbilderRepository.class);
         DateiSpeicherService dateiSpeicherService = Mockito.mock(DateiSpeicherService.class);
-        BestellungPdfService service = new BestellungPdfService(bestellungService, schnittbilderRepository, dateiSpeicherService);
+        FirmeninformationService firmeninformationService = Mockito.mock(FirmeninformationService.class);
+        Mockito.when(firmeninformationService.loadLogoImage()).thenReturn(null);
+        BestellungPdfService service = new BestellungPdfService(bestellungService, schnittbilderRepository, dateiSpeicherService, firmeninformationService);
         Path pdf = service.generatePdfForProjekt(7L);
         assertTrue(Files.size(pdf) > 0);
         Files.deleteIfExists(pdf);
