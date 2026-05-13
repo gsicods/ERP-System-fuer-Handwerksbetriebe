@@ -255,6 +255,11 @@ public class BelegController {
         try {
             Beleg b = belegService.createUmbuchung(req, caller);
             return ResponseEntity.ok(belegService.toDto(b));
+        } catch (org.example.kalkulationsprogramm.service.KasseUnterdeckungException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "message", e.getMessage(),
+                    "projizierterSaldo", e.getProjizierterSaldo(),
+                    "mindestbestand", e.getMindestbestand()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
@@ -356,8 +361,17 @@ public class BelegController {
         if (caller == null || !belegService.darfScannen(caller)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
-        BelegDto.Response r = belegService.updateBeleg(id, req, caller);
-        return r == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(r);
+        try {
+            BelegDto.Response r = belegService.updateBeleg(id, req, caller);
+            return r == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(r);
+        } catch (org.example.kalkulationsprogramm.service.KasseUnterdeckungException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "message", e.getMessage(),
+                    "projizierterSaldo", e.getProjizierterSaldo(),
+                    "mindestbestand", e.getMindestbestand()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
     }
 
     @DeleteMapping("/belege/{id}")

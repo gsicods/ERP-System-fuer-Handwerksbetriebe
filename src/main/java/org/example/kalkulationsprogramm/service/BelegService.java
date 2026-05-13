@@ -77,6 +77,7 @@ public class BelegService {
     private final FrontendUserProfileRepository frontendUserProfileRepository;
     private final BelegSplitService belegSplitService;
     private final org.example.kalkulationsprogramm.repository.BelegPositionRepository belegPositionRepository;
+    private final KasseSaldoService kasseSaldoService;
 
     @Value("${upload.path:uploads}")
     private String uploadPath;
@@ -296,6 +297,13 @@ public class BelegService {
             return null;
         }
 
+        // Snapshot fuer die Kasse-Mindestbestand-Pruefung am Ende. Ohne diese
+        // Werte koennten wir nicht zwischen "Erstvalidierung" und "Update an
+        // bereits validiertem Beleg" unterscheiden.
+        BelegStatus alterStatus = beleg.getStatus();
+        BelegKategorie alteKategorie = beleg.getBelegKategorie();
+        BigDecimal alterBrutto = beleg.getBetragBrutto();
+
         if (req.getBelegKategorie() != null) {
             try {
                 beleg.setBelegKategorie(BelegKategorie.valueOf(req.getBelegKategorie()));
@@ -357,6 +365,11 @@ public class BelegService {
                 beleg.setKostenstelle(ks);
             }
         }
+
+        // Kasse-Mindestbestand-Pruefung: nur wenn der Beleg nach dem Update
+        // VALIDIERT ist UND eine Bar-Kategorie hat. Wir vergleichen den
+        // projizierten Saldo gegen den konfigurierten Mindestbestand.
+        assertKasseNichtUnterMindestbestand(alterStatus, alteKategorie, alterBrutto, beleg);
 
         belegRepository.save(beleg);
         return toDto(beleg);
@@ -454,7 +467,52 @@ public class BelegService {
             sachkontoRepository.findById(req.getSachkontoId()).ifPresent(beleg::setSachkonto);
         }
 
+        // Vor dem Save pruefen: Umbuchung wird sofort validiert, also darf
+        // ihr Effekt den Bar-Saldo nicht unter den Mindestbestand druecken.
+        // Beim Neuanlegen gibt es keinen "alten" Beitrag → null/null.
+        if (kategorie.istKassenBewegung()) {
+            BigDecimal projiziert = kasseSaldoService.projiziereSaldo(
+                    null, null, kategorie, req.getBetragBrutto());
+            kasseSaldoService.assertSaldoMindestensMindestbestand(projiziert);
+        }
+
         return belegRepository.save(beleg);
+    }
+
+    /**
+     * Stellt sicher, dass eine Beleg-Update-Operation den Bar-Saldo nicht unter
+     * den konfigurierten Mindestbestand fallen laesst. Greift nur, wenn der
+     * Beleg nach der Aenderung VALIDIERT ist UND eine Bar-Kategorie hat. Belege
+     * im Status NEU duerfen vorlaeufig "negativ" sein — sie zaehlen erst beim
+     * Validieren ins Kassenbuch.
+     *
+     * Der "alte" Beitrag (vom Vorgaenger-Stand) wird nur abgezogen, wenn der
+     * Beleg vorher schon VALIDIERT war — andernfalls war er nicht im Saldo
+     * enthalten.
+     */
+    private void assertKasseNichtUnterMindestbestand(BelegStatus alterStatus,
+                                                     BelegKategorie alteKategorie,
+                                                     BigDecimal alterBrutto,
+                                                     Beleg beleg) {
+        if (beleg.getStatus() != BelegStatus.VALIDIERT) {
+            return;
+        }
+        BelegKategorie neueKategorie = beleg.getBelegKategorie();
+        if (neueKategorie == null || !neueKategorie.istKassenBewegung()) {
+            // Wechsel auf Nicht-Bar-Kategorie: trotzdem pruefen, weil der alte
+            // Beitrag aus dem Saldo verschwindet — das kann den Saldo aber nur
+            // erhoehen, nicht senken. Daher safe-by-default: nichts zu tun.
+            return;
+        }
+        BelegKategorie effektivAlteKategorie =
+                (alterStatus == BelegStatus.VALIDIERT) ? alteKategorie : null;
+        BigDecimal effektivAlterBrutto =
+                (alterStatus == BelegStatus.VALIDIERT) ? alterBrutto : null;
+
+        BigDecimal projiziert = kasseSaldoService.projiziereSaldo(
+                effektivAlteKategorie, effektivAlterBrutto,
+                neueKategorie, beleg.getBetragBrutto());
+        kasseSaldoService.assertSaldoMindestensMindestbestand(projiziert);
     }
 
     // ===================== Kassenbuch =====================

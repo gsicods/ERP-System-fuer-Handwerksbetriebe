@@ -55,6 +55,7 @@ class BelegServiceTest {
     @Mock private BelegKiAnalyseService kiAnalyseService;
     @Mock private LieferantDokumentRepository lieferantDokumentRepository;
     @Mock private FrontendUserProfileRepository frontendUserProfileRepository;
+    @Mock private KasseSaldoService kasseSaldoService;
 
     @InjectMocks
     private BelegService service;
