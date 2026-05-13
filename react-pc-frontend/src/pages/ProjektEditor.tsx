@@ -37,6 +37,7 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { cn } from "../lib/utils";
 import type { Projekt, ProjektDetail, AusgangsGeschaeftsDokument, AusgangsGeschaeftsDokumentTyp, AbrechnungsverlaufDto, AbrechnungspositionDto, Artikel } from "../types";
+import { canCreateEinfacheRechnung } from "../lib/abrechnungsverlauf";
 import { AUSGANGS_GESCHAEFTSDOKUMENT_TYPEN } from "../types";
 import { DetailLayout } from "../components/DetailLayout";
 import { ProjektErstellenModal } from "../components/ProjektErstellenModal";
@@ -2364,8 +2365,8 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                                             );
                                         })()}
 
-                                        {/* Einfache Rechnung (bei erstem Mal) */}
-                                        {abrechnungsverlauf && abrechnungsverlauf.positionen.length === 0 && (
+                                        {/* Einfache Rechnung – beim ersten Mal sowie nach Storno aller bisherigen Rechnungen */}
+                                        {canCreateEinfacheRechnung(abrechnungsverlauf) && (
                                             <button
                                                 onClick={() => setRechnungTyp('RECHNUNG')}
                                                 className={cn(
