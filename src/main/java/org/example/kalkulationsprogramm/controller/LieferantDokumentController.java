@@ -728,6 +728,23 @@ public class LieferantDokumentController {
 
         Long lieferantId = dokument.getLieferant() != null ? dokument.getLieferant().getId() : null;
 
+        // 0. Mobile-Beleg (via BelegScanner hochgeladen, dann zu LieferantDokument
+        //    promotet): gespeicherterDateiname enthaelt das Praefix "belege/<file>"
+        //    und liegt physisch unter <uploadDir>/belege/. Ohne diesen Lookup wuerde
+        //    die Datei nirgendwo gefunden, weil die uebrigen Pfade nach
+        //    <uploadDir>/lieferanten/{id}/ suchen.
+        //    Defense-in-Depth: dateiname enthaelt per Design einen Slash, also wird
+        //    der aufgeloeste Pfad gegen die uploadDir-Basis containment-geprueft —
+        //    falls je ein anderer Schreiber den DB-Wert ohne Sanitisierung setzt,
+        //    bleibt LFI ausgeschlossen.
+        {
+            Path uploadBase = Path.of(uploadDir).toAbsolutePath().normalize();
+            Path pfad = uploadBase.resolve(dateiname).normalize();
+            if (pfad.startsWith(uploadBase) && Files.exists(pfad)) {
+                return pfad;
+            }
+        }
+
         // 1. E-Mail-Attachments im Lieferant-Ordner
         if (lieferantId != null) {
             Path pfad = Path.of(mailAttachmentDir)

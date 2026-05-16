@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -27,8 +28,11 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -51,6 +55,9 @@ class LieferantDokumentControllerTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private LieferantDokumentController controller;
 
     @MockBean
     private LieferantDokumentRepository dokumentRepository;
@@ -331,6 +338,62 @@ class LieferantDokumentControllerTest {
             given(dokumentRepository.findById(1L)).willReturn(Optional.of(dokument));
 
             mockMvc.perform(get("/api/lieferant-dokumente/1/download"))
+                    .andExpect(status().isNotFound());
+        }
+
+        /**
+         * Happy-Path fuer den Bugfix: Mobile-Belege (vom BelegScanner) werden
+         * mit gespeicherterDateiname="belege/<file>" als LieferantDokument
+         * promotet. Die Stufe-0-Aufloesung muss diese Datei aus
+         * <uploadDir>/belege/ ausliefern.
+         */
+        @Test
+        @DisplayName("Mobile-Beleg (gespeicherterDateiname='belege/...') wird aus uploadDir/belege ausgeliefert")
+        void mobileBelegWirdAusgeliefert(@TempDir Path workDir) throws Exception {
+            Path uploadDir = workDir.resolve("uploads");
+            Path belegeDir = uploadDir.resolve("belege");
+            Files.createDirectories(belegeDir);
+            Files.write(belegeDir.resolve("scan.pdf"), "%PDF-1.4 stub".getBytes());
+
+            ReflectionTestUtils.setField(controller, "uploadDir", uploadDir.toString());
+
+            LieferantDokument dokument = new LieferantDokument();
+            dokument.setId(5L);
+            dokument.setOriginalDateiname("scan.pdf");
+            dokument.setGespeicherterDateiname("belege/scan.pdf");
+            given(dokumentRepository.findById(5L)).willReturn(Optional.of(dokument));
+
+            mockMvc.perform(get("/api/lieferant-dokumente/5/download"))
+                    .andExpect(status().isOk());
+        }
+
+        /**
+         * Defense-in-Depth: ein boesartig gesetzter gespeicherterDateiname mit
+         * ../-Traversal darf die Datei NICHT ausserhalb von uploadDir
+         * ausliefern. Ohne die startsWith(uploadBase)-Pruefung wuerde Stufe 0
+         * `<uploadDir>/../secret.txt` aufloesen und Files.exists() haette
+         * Treffer → LFI. Mit Containment-Check muss Stufe 0 die Datei
+         * verwerfen.
+         */
+        @Test
+        @DisplayName("Path-Traversal in gespeicherterDateiname wird durch Containment-Check blockiert")
+        void pathTraversalWirdBlockiert(@TempDir Path workDir) throws Exception {
+            // uploadDir ist Subdir, secret.txt liegt als Geschwister im selben
+            // workDir → mit "../secret.txt" wuerde Stufe 0 ohne Haertung den
+            // aufgeloesten Pfad treffen.
+            Path uploadDir = workDir.resolve("uploads");
+            Files.createDirectories(uploadDir);
+            Path secret = workDir.resolve("secret.txt");
+            Files.writeString(secret, "geheim");
+
+            ReflectionTestUtils.setField(controller, "uploadDir", uploadDir.toString());
+
+            LieferantDokument dokument = new LieferantDokument();
+            dokument.setId(6L);
+            dokument.setGespeicherterDateiname("../secret.txt");
+            given(dokumentRepository.findById(6L)).willReturn(Optional.of(dokument));
+
+            mockMvc.perform(get("/api/lieferant-dokumente/6/download"))
                     .andExpect(status().isNotFound());
         }
     }

@@ -13,16 +13,21 @@ import org.example.kalkulationsprogramm.service.LieferantDokumentService;
 import org.example.kalkulationsprogramm.service.LieferantEmailResolver;
 import org.example.kalkulationsprogramm.repository.LieferantNotizRepository;
 
+import org.example.kalkulationsprogramm.domain.LieferantDokument;
 import org.example.kalkulationsprogramm.service.LieferantenDetailService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 
@@ -81,6 +86,9 @@ class LieferantenControllerTest {
   @MockBean
   private org.example.kalkulationsprogramm.service.LieferantStandardKostenstelleAutoAssigner standardKostenstelleAutoAssigner;
 
+  @Autowired
+  private LieferantenController controller;
+
   @Test
   void returnsAllEmails() throws Exception {
     Lieferanten l1 = new Lieferanten();
@@ -123,5 +131,56 @@ class LieferantenControllerTest {
         .content(payload))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.lieferantenname").value("Neu"));
+  }
+
+  /**
+   * Happy-Path fuer den Mobile-Beleg-Bugfix: ein zu LieferantDokument promoteter
+   * Mobile-Beleg traegt gespeicherterDateiname="belege/<file>" und liegt physisch
+   * unter <uploadDir>/belege/. Die neue Stufe-0-Aufloesung in resolveDokumentPath
+   * muss diese Datei finden — vorher 404 (Bug), jetzt 200.
+   */
+  @Test
+  void mobileBelegWirdAusgeliefert(@TempDir Path workDir) throws Exception {
+    Path uploadDir = workDir.resolve("uploads");
+    Path belegeDir = uploadDir.resolve("belege");
+    Files.createDirectories(belegeDir);
+    Files.write(belegeDir.resolve("scan.pdf"), "%PDF-1.4 stub".getBytes());
+
+    ReflectionTestUtils.setField(controller, "uploadDir", uploadDir.toString());
+
+    LieferantDokument dokument = new LieferantDokument();
+    dokument.setId(7L);
+    dokument.setOriginalDateiname("scan.pdf");
+    dokument.setGespeicherterDateiname("belege/scan.pdf");
+    when(lieferantDokumentService.findById(7L)).thenReturn(dokument);
+
+    mockMvc.perform(get("/api/lieferanten/42/dokumente/7/download"))
+        .andExpect(status().isOk());
+  }
+
+  /**
+   * Defense-in-Depth: ein boesartig gesetzter gespeicherterDateiname mit
+   * ../-Traversal darf die Datei NICHT ausserhalb von uploadDir ausliefern.
+   * Ohne die startsWith(uploadBase)-Pruefung in Stufe 0 wuerde Files.exists()
+   * fuer "<uploadDir>/../secret.txt" Treffer melden → LFI. Mit Containment-
+   * Check muss Stufe 0 die Datei verwerfen, und die uebrigen Stufen finden
+   * den relativen Pfad im cwd nicht.
+   */
+  @Test
+  void pathTraversalWirdBlockiert(@TempDir Path workDir) throws Exception {
+    Path uploadDir = workDir.resolve("uploads");
+    Files.createDirectories(uploadDir);
+    Path secret = workDir.resolve("secret.txt");
+    Files.writeString(secret, "geheim");
+
+    ReflectionTestUtils.setField(controller, "uploadDir", uploadDir.toString());
+
+    LieferantDokument dokument = new LieferantDokument();
+    dokument.setId(8L);
+    dokument.setGespeicherterDateiname("../secret.txt");
+    when(lieferantDokumentService.findById(8L)).thenReturn(dokument);
+
+    mockMvc.perform(get("/api/lieferanten/42/dokumente/8/download"))
+        .andExpect(status().isNotFound());
   }
 }
