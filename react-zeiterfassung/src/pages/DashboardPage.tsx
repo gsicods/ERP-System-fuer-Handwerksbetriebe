@@ -449,11 +449,16 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
                 localStorage.setItem('zeiterfassung_active_session', JSON.stringify(pauseSession))
                 setActiveSession(pauseSession)
             } else {
-                const errorData = await res.json()
-                console.error('Pause Fehler:', errorData.error)
+                // 4xx vom Server: NICHT stumm schlucken. Sonst sieht der
+                // Handwerker beim Tap auf "Pause" gar nichts (Bug-Symptom:
+                // "Pause anstechen hat nicht funktioniert"). Wir werfen
+                // und lassen den Offline-/Reparatur-Pfad uebernehmen:
+                // optimistisches UI + addPendingEntryWithOperationId; ein
+                // dauerhaft abgelehnter Eintrag landet in der Reparatur-Liste.
+                throw new Error('Server error')
             }
         } catch {
-            console.log('Offline - speichere Pause-Event lokal')
+            console.log('Offline (oder Server-Fehler) - speichere Pause-Event lokal')
             await OfflineService.addPendingEntryWithOperationId('pause', { token }, pauseTime, pauseOperationId, workDurationMinutes)
             // Optimistic UI update for offline pause
             const pauseSession: Session = {
@@ -466,6 +471,14 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
                 startTime: new Date().toISOString(),
                 typ: 'PAUSE',
             }
+            // Cooldown setzen, damit ein nachfolgendes loadActiveSession() die
+            // optimistische Pause nicht durch eine vom Server weiterhin aktive
+            // Arbeitsbuchung ueberschreibt - z.B. wenn das Pause-Event spaeter
+            // in den failed-Store wandert (pendingCount=0) und der Server die
+            // alte Buchung noch liefert. Reuse vom Start-Cooldown-Key, der im
+            // loadActiveSession exakt diese "behalte lokale Session"-Semantik
+            // umsetzt (siehe Zeile 222-231).
+            localStorage.setItem('zeiterfassung_start_synced_at', Date.now().toString())
             localStorage.setItem('zeiterfassung_active_session', JSON.stringify(pauseSession))
             setActiveSession(pauseSession)
         }
