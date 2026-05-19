@@ -115,12 +115,10 @@ Das ist kein „ERP mit netten Features" – es ist ein **integriertes Business-
 | 11 | **Sammel-Container für Anfragen** – Eingangs-Mails und Fotos zur Anfrage sammeln, bevor sie zum Projekt werden |
 | 12 | **Block-basierter Dokumenteditor** mit Live-PDF, GAEB-Import, 7 Dokumenttypen aus einem Editor |
 | 13 | **Digitale Angebots-Freigabe per Snapshot-Hash** – revisionssicher, GoBD-konform |
-| 14 | **Verrechnungslohn-BAB** – Profitabilität pro Mitarbeiter, nicht nur pro Projekt |
-| 15 | **Eingangsrechnung → Multi-Projekt/Kostenstellen-Split** prozentual oder absolut, mit Auto-Restbetrag |
-| 16 | **Live-Vorkalkulation im Projekt** – Plan-Stunden und Plan-Material direkt aus dem Angebot |
-| 17 | **Live-Nachkalkulation aus 4 Quellen** – Gewinn wird rot, sobald er negativ wird |
-| 18 | **Bautagebuch + Anfrage-Tagebuch** – durchgehend ab der Anfrage, Auto-Transfer ins Projekt |
-| 19 | **Website-Anfrage-Funnel End-to-End** – Cloudflare-Tunnel → Spam-Filter → Kunden-Dedup → Push → Auto-Mail |
+| 14 | **Eingangsrechnung → Multi-Projekt/Kostenstellen-Split** prozentual oder absolut, mit Auto-Restbetrag |
+| 15 | **Live-Nachkalkulation aus 4 Quellen** – Gewinn wird rot, sobald er negativ wird |
+| 16 | **Bautagebuch + Anfrage-Tagebuch** – durchgehend ab der Anfrage, Auto-Transfer ins Projekt |
+| 17 | **Website-Anfrage-Funnel End-to-End** – Cloudflare-Tunnel → Spam-Filter → Kunden-Dedup → Push → Auto-Mail |
 
 ---
 
