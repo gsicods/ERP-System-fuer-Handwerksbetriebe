@@ -8,6 +8,7 @@ import type { ZeitprognoseDto } from '../../types';
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { KategorieAnalyseModal } from '../KategorieAnalyseModal';
+import { AddBelowButton } from './TextBlock';
 
 interface ServiceBlockProps {
     block: DocBlock;
@@ -21,6 +22,8 @@ interface ServiceBlockProps {
     onToggleOptional: (id: string, current: boolean | undefined) => void;
     onFocus: (blockId: string) => void;
     onEditorFocus: (editor: EditorInstance | null) => void;
+    /** Optional: oeffnet den AddTypeDialog mit dieser Karte als Anker (Insert direkt darunter). */
+    onAddBelow?: (anchorId: string) => void;
 }
 
 export function ServiceBlock({
@@ -35,6 +38,7 @@ export function ServiceBlock({
     onToggleOptional,
     onFocus,
     onEditorFocus,
+    onAddBelow,
 }: ServiceBlockProps) {
     const total = serviceLineTotal(block);
     const hasDiscount = (block.discount ?? 0) > 0;
@@ -73,7 +77,7 @@ export function ServiceBlock({
     }, [block.leistungId, block.quantity]);
 
     return (
-        <>
+        <div className="group/card">
         {showAnalyse && zeitprognose?.kategorieId && createPortal(
             <KategorieAnalyseModal
                 kategorie={{
@@ -274,6 +278,9 @@ export function ServiceBlock({
                 )}
             </div>
         </div>
-        </>
+        {!isLocked && onAddBelow && (
+            <AddBelowButton onClick={() => onAddBelow(block.id)} />
+        )}
+        </div>
     );
 }

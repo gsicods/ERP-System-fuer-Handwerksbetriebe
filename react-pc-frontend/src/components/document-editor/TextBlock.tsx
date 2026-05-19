@@ -1,4 +1,4 @@
-import { FileText, Trash2 } from 'lucide-react';
+import { FileText, Trash2, Plus } from 'lucide-react';
 import { Button } from '../ui/button';
 import { TiptapEditor } from '../TiptapEditor';
 import { cn } from '../../lib/utils';
@@ -15,6 +15,8 @@ interface TextBlockProps {
     onFocus: (blockId: string) => void;
     onEditorFocus: (editor: EditorInstance | null) => void;
     replacePlaceholders: (text: string) => string;
+    /** Optional: oeffnet den AddTypeDialog mit dieser Karte als Anker (Insert direkt darunter). */
+    onAddBelow?: (anchorId: string) => void;
 }
 
 export function TextBlock({
@@ -28,8 +30,10 @@ export function TextBlock({
     onFocus,
     onEditorFocus,
     replacePlaceholders,
+    onAddBelow,
 }: TextBlockProps) {
     return (
+        <div className="group/card">
         <div
             className={cn(
                 "bg-white rounded-xl border-l-[3px] border transition-all duration-200",
@@ -77,6 +81,32 @@ export function TextBlock({
                     />
                 </div>
             </div>
+        </div>
+        {/* "+"-Button: fuegt direkt unter diesem Textbaustein ein neues Element ein. */}
+        {!isLocked && onAddBelow && (
+            <AddBelowButton onClick={() => onAddBelow(block.id)} />
+        )}
+        </div>
+    );
+}
+
+/**
+ * Schmale "+"-Pille unter einer Karte, oeffnet den AddTypeDialog.
+ * Sichtbar bei Hover ueber die Karte (Wrapper mit group/card-Klasse) oder
+ * wenn ein Kind den Fokus haelt.
+ */
+export function AddBelowButton({ onClick }: { onClick: () => void }) {
+    return (
+        <div className="flex justify-center -mt-1 mb-1 opacity-0 group-hover/card:opacity-100 focus-within:opacity-100 transition-opacity">
+            <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onClick(); }}
+                title="Direkt darunter Leistung, Stundensatz oder Textbaustein einfügen"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-dashed border-rose-300 bg-white text-rose-600 text-[11px] font-medium hover:bg-rose-50 hover:border-rose-500 hover:shadow-sm transition-all"
+            >
+                <Plus className="w-3 h-3" />
+                Hier einfügen
+            </button>
         </div>
     );
 }

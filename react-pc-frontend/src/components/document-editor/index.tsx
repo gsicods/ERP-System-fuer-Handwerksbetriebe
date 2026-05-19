@@ -36,9 +36,36 @@ import {
     CLOSURE_BLOCK_ID,
     syncClosureBlock,
     insertAtAnchor,
+    insertBeforeNachtexte,
+    insertIntoSection,
     insertBlocksBeforeClosure,
     validateRootReorder,
 } from './blockOps';
+
+/**
+ * Zielposition fuer das Einfuegen eines neuen Blocks. Wird vor dem Oeffnen
+ * eines Pickers gesetzt; nach dem Insert auf den Default zurueckgesetzt.
+ *  - 'between-nach': zwischen Vor- und Nachtexte (Standard fuer Header-Icons)
+ *  - 'after':        direkt unterhalb des angegebenen Anker-Blocks
+ *  - 'in-section':   als letztes Kind im angegebenen Bauabschnitt
+ */
+type InsertAnchor =
+    | { kind: 'between-nach' }
+    | { kind: 'after'; id: string }
+    | { kind: 'in-section'; sectionId: string };
+
+const DEFAULT_ANCHOR: InsertAnchor = { kind: 'between-nach' };
+
+function applyInsert(prev: DocBlock[], block: DocBlock, anchor: InsertAnchor): DocBlock[] {
+    switch (anchor.kind) {
+        case 'between-nach':
+            return insertBeforeNachtexte(prev, block);
+        case 'after':
+            return insertAtAnchor(prev, block, anchor.id);
+        case 'in-section':
+            return insertIntoSection(prev, block, anchor.sectionId);
+    }
+}
 import { buildAdresse, buildAdresseFromAnfrage, blocksToHtml, calculateNetto, extractFontSizeFromHtml, extractBoldFromHtml, unitMap, getAllServiceBlocks, findBlockContainer, flattenBlocksForPdf, buildPositionMap, computeClosureSummary } from './helpers';
 import { DocumentEditorHeader } from './DocumentEditorHeader';
 import { ServiceBlock } from './ServiceBlock';
@@ -49,7 +76,7 @@ import { SectionHeaderBlock } from './SectionHeaderBlock';
 import { SortableBlock } from './SortableBlock';
 import { SummenFooter } from './SummenFooter';
 import { LivePreviewPanel } from './LivePreviewPanel';
-import { ExportWarningModal, UnsavedChangesModal, PrintOptionsModal, TextbausteinPickerModal, LeistungPickerModal, StundensatzPickerModal } from './Modals';
+import { ExportWarningModal, UnsavedChangesModal, PrintOptionsModal, TextbausteinPickerModal, LeistungPickerModal, StundensatzPickerModal, AddTypeDialog } from './Modals';
 import { RabattDialog } from './RabattDialog';
 import { KategorieBestaetigenDialog } from './KategorieBestaetigenDialog';
 import { EmailComposeModal } from '../EmailComposeModal';
@@ -222,6 +249,13 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     const [showTextbausteinPicker, setShowTextbausteinPicker] = useState(false);
     const [showLeistungPicker, setShowLeistungPicker] = useState(false);
     const [showStundensatzPicker, setShowStundensatzPicker] = useState(false);
+    // Auswahl-Dialog "Was hinzufuegen?" (Leistung / Stundensatz / Textbaustein),
+    // ausgeloest ueber das "+"-Symbol unter einer Karte oder im Bauabschnitt.
+    const [showAddTypeDialog, setShowAddTypeDialog] = useState(false);
+    // Position fuer den naechsten Insert. Wird ueberschrieben, sobald ein "+"
+    // (Karte/Section) den Picker bzw. AddTypeDialog oeffnet. Header-Icons
+    // resetten bewusst auf 'between-nach'.
+    const pendingAnchorRef = useRef<InsertAnchor>(DEFAULT_ANCHOR);
 
     // Global Toolbar State
     const [activeEditor, setActiveEditor] = useState<ReturnType<typeof useEditor> | null>(null);
@@ -241,8 +275,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         leistungName: string;
         kategorieId: number;
         kategoriePfad: string;
-        /** Anker-Block-ID zum Zeitpunkt des Picker-Klicks (fuer "nach Anker einfuegen"). */
-        anchorId: string | null;
+        /** Anker-Position zum Zeitpunkt des Picker-Klicks. */
+        anchor: InsertAnchor;
     } | null>(null);
 
     // Abrechnungsverlauf: already-billed amount by other invoices (for Schlussrechnung etc.)
@@ -726,10 +760,13 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     }, []);
 
     // --- Auto-Load Standard-Textbausteine je Dokumenttyp ---
-    // Beim Anlegen eines neuen Dokuments oder beim Umwandeln (z.B. Angebot -> AB)
-    // werden die in der Vorlage konfigurierten Vor-/Nachtexte automatisch als TEXT-Bloecke
-    // vor bzw. nach den Leistungen eingefuegt bzw. ausgetauscht. Manuell hinzugefuegte
-    // Texte (textbausteinRolle == undefined) bleiben dabei erhalten.
+    // Vor-/Nachtexte werden NUR beim erstmaligen Anlegen eines Dokuments aus der
+    // Formular-Vorlage geladen (dokumentId noch nicht gesetzt). Sobald ein
+    // Dokument einmal gespeichert wurde, ist der User Herr ueber den Inhalt:
+    // nichts wird beim erneuten Oeffnen automatisch hinzugefuegt oder ersetzt –
+    // selbst wenn der User Vor-/Nachtexte komplett geloescht hat. Konvertierungen
+    // (z.B. Angebot -> AB) liefern das neue Dokument bereits aus dem Backend
+    // mit den dort konfigurierten Defaults.
     const lastAppliedDefaultsTypRef = useRef<string | null>(null);
     useEffect(() => {
         if (loading) return;
@@ -746,30 +783,23 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
 
         if (lastAppliedDefaultsTypRef.current === dokumentTyp) return;
 
-        // Bestehendes Dokument: nur ersetzen, wenn die vorhandenen Default-Textbausteine
-        // explizit zu einem anderen Dokumenttyp gehoeren (Umwandlungs-Fall) oder gar
-        // nicht vorhanden sind und das Dokument aus einem Vorgaenger entstanden ist
-        // (Backend hat beim Umwandeln die alten Textbausteine entfernt).
-        // Legacy-Bausteine ohne Typ-Marker bleiben unangetastet, da sie user-editiert
-        // sein koennten.
+        // Bestehendes Dokument (bereits gespeichert): keine automatischen Defaults
+        // nachladen – auch nicht beim Umschalten des Dokumenttyps oder bei
+        // Konvertierungen. Der ref-Marker wird gesetzt, damit der Effekt bei
+        // erneuten Renders sofort no-op bleibt.
         if (dokumentId) {
-            const vorOrNach = blocks.filter(b => b.textbausteinRolle != null);
-            const hasMatchingTyp = vorOrNach.some(b => b.textbausteinDokumenttyp === dokumentTyp);
-            if (hasMatchingTyp) return;
-
-            if (vorOrNach.length === 0) {
-                // Nur fuer umgewandelte Dokumente nachgenerieren.
-                if (!dokument?.vorgaengerId) return;
-            } else {
-                const hasStaleTyp = vorOrNach.some(
-                    b => b.textbausteinDokumenttyp != null && b.textbausteinDokumenttyp !== dokumentTyp,
-                );
-                // Nur bei explizit anderem Typ-Marker ersetzen.
-                if (!hasStaleTyp) return;
-            }
+            lastAppliedDefaultsTypRef.current = dokumentTyp;
+            return;
         }
 
         const typLabel = AUSGANGS_GESCHAEFTSDOKUMENT_TYPEN.find(t => t.value === dokumentTyp)?.label || dokumentTyp;
+
+        // Optimistisch markieren: verhindert, dass der Effekt bei einem
+        // Render mit unveraendertem dokumentTyp waehrend des Fetches erneut
+        // feuert. Wird unten beim Abort revertiert, damit eine spaetere
+        // Kontextaenderung das Laden noch nachholen kann.
+        const previousMarker = lastAppliedDefaultsTypRef.current;
+        lastAppliedDefaultsTypRef.current = dokumentTyp;
 
         let aborted = false;
         (async () => {
@@ -809,8 +839,6 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                 const vorBlocks = data.vortexte.map(v => buildBlock(v, 'VOR'));
                 const nachBlocks = data.nachtexte.map(n => buildBlock(n, 'NACH'));
 
-                lastAppliedDefaultsTypRef.current = dokumentTyp;
-
                 setBlocks(prev => {
                     // Vorhandene Default-Bloecke entfernen, manuell eingefuegte Texte bleiben
                     const cleaned = prev.filter(b => b.textbausteinRolle == null);
@@ -830,13 +858,15 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     ];
                 });
             } catch {
-                // Stumm: fehlende Defaults sind kein Fehler.
+                // Stumm: fehlende Defaults sind kein Fehler. Marker zuruecksetzen,
+                // damit ein spaeterer Re-Render (z.B. nach Reconnect) das Laden
+                // erneut versuchen kann.
+                if (lastAppliedDefaultsTypRef.current === dokumentTyp) {
+                    lastAppliedDefaultsTypRef.current = previousMarker;
+                }
             }
         })();
         return () => { aborted = true; };
-        // blocks bewusst NICHT in den Deps (sonst Re-Run bei jedem Tastendruck);
-        // der Closure-Wert aus dem Render nach loadDokument reicht aus.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loading, dokumentId, dokumentTyp, replacePlaceholders, kontextDaten, projektId, anfrageId, dokument]);
 
     const syncDocumentIdInUrl = useCallback((savedDocumentId?: number) => {
@@ -1096,7 +1126,51 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         setShowTextbausteinPicker(false);
         setShowLeistungPicker(false);
         setShowStundensatzPicker(false);
+        setShowAddTypeDialog(false);
+        // Defense-in-Depth: bei Lock-Uebernahme alle UI-Anker zuruecksetzen,
+        // damit beim Entsperren kein stale Anker aus einem abgebrochenen
+        // Picker-Flow im Ref haengen bleibt.
+        pendingAnchorRef.current = DEFAULT_ANCHOR;
     }, [isLocked]);
+
+    /**
+     * Oeffnet das "+"-Auswahl-Dialog (Was hinzufuegen?) mit der angegebenen
+     * Zielposition. Wird vom Plus-Symbol unter Karten und im Bauabschnitt
+     * verwendet.
+     */
+    const openAddTypeDialogAt = useCallback((anchor: InsertAnchor) => {
+        if (isLocked) return;
+        pendingAnchorRef.current = anchor;
+        setShowAddTypeDialog(true);
+    }, [isLocked]);
+
+    /** Schliesst das AddType-Dialog und setzt den Anker zurueck. */
+    const closeAddTypeDialog = useCallback(() => {
+        pendingAnchorRef.current = DEFAULT_ANCHOR;
+        setShowAddTypeDialog(false);
+    }, []);
+
+    /**
+     * Wechselt vom AddType-Dialog zum konkreten Picker, ohne den vorher
+     * gesetzten pendingAnchorRef zu verlieren. Wichtig: Wir resetten den
+     * Anker NICHT in closeAddTypeDialog, weil der Picker ihn noch braucht.
+     */
+    const openPickerForType = useCallback((picker: 'TEXTBAUSTEIN' | 'LEISTUNG' | 'STUNDENSATZ') => {
+        setShowAddTypeDialog(false);
+        if (picker === 'TEXTBAUSTEIN') setShowTextbausteinPicker(true);
+        else if (picker === 'LEISTUNG') setShowLeistungPicker(true);
+        else setShowStundensatzPicker(true);
+    }, []);
+
+    /** Plus-Symbol unter einer Karte (Textbaustein/Leistung) auf Root oder im Bauabschnitt. */
+    const handleAddBelow = useCallback((anchorId: string) => {
+        openAddTypeDialogAt({ kind: 'after', id: anchorId });
+    }, [openAddTypeDialogAt]);
+
+    /** Plus-Symbol auf dem Bauabschnitt selbst (fuegt am Ende der Section ein). */
+    const handleAddIntoSection = useCallback((sectionId: string) => {
+        openAddTypeDialogAt({ kind: 'in-section', sectionId });
+    }, [openAddTypeDialogAt]);
 
     // --- DnD ---
     const [activeDragId, setActiveDragId] = useState<string | null>(null);
@@ -1335,10 +1409,15 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
             fontSize: rawBlock.fontSize ?? 10,
         };
 
-        // Anker fuer die Einfuegeposition: aktuell fokussierter Editor (Text-/Service-/
-        // Section-Block). Damit landet ein neu hinzugefuegtes Item direkt unterhalb
-        // des Blocks, mit dem der User zuletzt interagiert hat – statt am Ende.
-        const anchorId = activeEditorId;
+        // Anker fuer die Einfuegeposition. Wird vom Aufrufer ueber
+        // pendingAnchorRef gesetzt:
+        //  - Header-Icons:          { kind: 'between-nach' }
+        //  - Karten-Plus-Button:    { kind: 'after', id }
+        //  - Bauabschnitt-Plus:     { kind: 'in-section', sectionId }
+        const anchor = pendingAnchorRef.current;
+        // Nach dem Lesen sofort zuruecksetzen, damit der naechste Aufruf
+        // (z.B. Header-Icon ohne expliziten Set) wieder den Default trifft.
+        pendingAnchorRef.current = DEFAULT_ANCHOR;
 
         // Wenn eine Leistung mit Produktkategorie in ein Projekt eingefügt wird,
         // den User fragen ob die Kategorie dem Projekt zugeordnet werden soll
@@ -1349,19 +1428,19 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                 leistungName: leistung?.name || newBlock.title || 'Leistung',
                 kategorieId: newBlock.kategorieId,
                 kategoriePfad: leistung?.kategoriePfad || `Kategorie #${newBlock.kategorieId}`,
-                anchorId,
+                anchor,
             });
             return;
         }
 
-        setBlocks(prev => insertAtAnchor(prev, newBlock, anchorId));
+        setBlocks(prev => applyInsert(prev, newBlock, anchor));
     };
 
     const handleKategorieBestaetigt = async (kategorieId: number) => {
         if (!pendingLeistungInsert || !projektId) return;
         const finalBlock = { ...pendingLeistungInsert.block, kategorieId };
-        const anchorId = pendingLeistungInsert.anchorId;
-        setBlocks(prev => insertAtAnchor(prev, finalBlock, anchorId));
+        const anchor = pendingLeistungInsert.anchor;
+        setBlocks(prev => applyInsert(prev, finalBlock, anchor));
         setPendingLeistungInsert(null);
         try {
             const res = await fetch(`/api/projekte/${projektId}/produktkategorien`, {
@@ -1386,8 +1465,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     const handleKategorieUeberspringen = () => {
         if (!pendingLeistungInsert) return;
         const name = pendingLeistungInsert.leistungName;
-        const anchorId = pendingLeistungInsert.anchorId;
-        setBlocks(prev => insertAtAnchor(prev, pendingLeistungInsert.block, anchorId));
+        const anchor = pendingLeistungInsert.anchor;
+        setBlocks(prev => applyInsert(prev, pendingLeistungInsert.block, anchor));
         setPendingLeistungInsert(null);
         toast.info(`Leistung „${name}“ ohne Kategorie eingefügt`);
     };
@@ -2241,11 +2320,26 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                 emailLoading={emailLoading}
                 onClose={handleClose}
                 onSave={handleSave}
-                onOpenTextbausteinPicker={() => setShowTextbausteinPicker(true)}
-                onOpenLeistungPicker={() => setShowLeistungPicker(true)}
-                onOpenStundensatzPicker={() => setShowStundensatzPicker(true)}
-                onAddSeparator={() => addBlock('SEPARATOR')}
-                onAddSectionHeader={() => addBlock('SECTION_HEADER')}
+                onOpenTextbausteinPicker={() => {
+                    pendingAnchorRef.current = DEFAULT_ANCHOR;
+                    setShowTextbausteinPicker(true);
+                }}
+                onOpenLeistungPicker={() => {
+                    pendingAnchorRef.current = DEFAULT_ANCHOR;
+                    setShowLeistungPicker(true);
+                }}
+                onOpenStundensatzPicker={() => {
+                    pendingAnchorRef.current = DEFAULT_ANCHOR;
+                    setShowStundensatzPicker(true);
+                }}
+                onAddSeparator={() => {
+                    pendingAnchorRef.current = DEFAULT_ANCHOR;
+                    addBlock('SEPARATOR');
+                }}
+                onAddSectionHeader={() => {
+                    pendingAnchorRef.current = DEFAULT_ANCHOR;
+                    addBlock('SECTION_HEADER');
+                }}
                 onOpenRabattDialog={() => setShowRabattDialog(true)}
                 onExport={handleExport}
                 onPrint={handlePrint}
@@ -2315,6 +2409,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                                                     onEditorFocus={(editor) => setActiveEditor(isLocked ? null : editor)}
                                                     getPositionString={getPositionString}
                                                     sectionPosition={getPositionString(block)}
+                                                    onAddBelow={handleAddBelow}
+                                                    onAddIntoSection={handleAddIntoSection}
                                                 />
                                             )}
                                             {block.type === 'TEXT' && (
@@ -2329,6 +2425,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                                                     onFocus={(id) => setActiveEditorId(id)}
                                                     onEditorFocus={(editor) => setActiveEditor(isLocked ? null : editor)}
                                                     replacePlaceholders={replacePlaceholders}
+                                                    onAddBelow={handleAddBelow}
                                                 />
                                             )}
                                             {block.type === 'SERVICE' && (
@@ -2344,6 +2441,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                                                     onToggleOptional={toggleOptional}
                                                     onFocus={(id) => setActiveEditorId(id)}
                                                     onEditorFocus={(editor) => setActiveEditor(isLocked ? null : editor)}
+                                                    onAddBelow={handleAddBelow}
                                                 />
                                             )}
                                             {block.type === 'CLOSURE' && closureSummary.gesamtNetto > 0 && (
@@ -2497,6 +2595,12 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     }}
                 />
             )}
+            {showAddTypeDialog && (
+                <AddTypeDialog
+                    onPick={openPickerForType}
+                    onClose={closeAddTypeDialog}
+                />
+            )}
             {showTextbausteinPicker && (
                 <TextbausteinPickerModal
                     textbausteine={textbausteine}
@@ -2512,7 +2616,10 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         setShowTextbausteinPicker(false);
                         toast.success(`Textbaustein „${tb.name}“ eingefügt`);
                     }}
-                    onClose={() => setShowTextbausteinPicker(false)}
+                    onClose={() => {
+                        pendingAnchorRef.current = DEFAULT_ANCHOR;
+                        setShowTextbausteinPicker(false);
+                    }}
                 />
             )}
             {showLeistungPicker && (
@@ -2537,7 +2644,10 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                             toast.success(`Leistung „${l.name}“ eingefügt`);
                         }
                     }}
-                    onClose={() => setShowLeistungPicker(false)}
+                    onClose={() => {
+                        pendingAnchorRef.current = DEFAULT_ANCHOR;
+                        setShowLeistungPicker(false);
+                    }}
                 />
             )}
             {showStundensatzPicker && (
@@ -2557,7 +2667,10 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         setShowStundensatzPicker(false);
                         toast.success(`Stundensatz „${az.bezeichnung}“ eingefügt`);
                     }}
-                    onClose={() => setShowStundensatzPicker(false)}
+                    onClose={() => {
+                        pendingAnchorRef.current = DEFAULT_ANCHOR;
+                        setShowStundensatzPicker(false);
+                    }}
                 />
             )}
             {showRabattDialog && (

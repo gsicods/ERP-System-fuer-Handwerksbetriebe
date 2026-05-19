@@ -15,6 +15,7 @@ import {
     syncClosureBlock,
     insertBeforeNachtexte,
     insertAtAnchor,
+    insertIntoSection,
     insertBlocksBeforeClosure,
     validateRootReorder,
 } from './blockOps';
@@ -198,10 +199,14 @@ describe('insertAtAnchor', () => {
         expect(sec.children?.map(c => c.id)).toEqual(['c1', 'new', 'c2']);
     });
 
-    it('fuegt TEXT auf Root direkt nach der Section ein wenn Anker ein child ist', () => {
+    it('fuegt TEXT in dieselbe Section nach einem child-Anker ein', () => {
+        // Geaendert 2026-05: Damit das "+"-Symbol unter einer Service-Karte im
+        // Bauabschnitt einen Textbaustein direkt darunter (in derselben Section)
+        // einfuegt, wandert TEXT bei child-Anker NICHT mehr auf Root.
         const blocks: DocBlock[] = [section('sec1', [service('c1')]), closure];
         const result = insertAtAnchor(blocks, text('new'), 'c1');
-        expect(result.map(b => b.id)).toEqual(['sec1', 'new', CLOSURE_BLOCK_ID]);
+        expect(result.map(b => b.id)).toEqual(['sec1', CLOSURE_BLOCK_ID]);
+        expect(result[0].children?.map(c => c.id)).toEqual(['c1', 'new']);
     });
 
     it('clampt SECTION_HEADER vor CLOSURE wenn child-Anker in einer Section nach CLOSURE liegt', () => {
@@ -236,6 +241,51 @@ describe('insertAtAnchor', () => {
         ];
         const result = insertAtAnchor(blocks, text('new'), 'ghost-id');
         expect(result.map(b => b.id)).toEqual(['sec1', 'sec2', 'new', 'nach']);
+    });
+});
+
+// ─── insertIntoSection ──────────────────────────────────────────────────────
+describe('insertIntoSection', () => {
+    it('haengt SERVICE als letztes Kind in die Section an', () => {
+        const blocks: DocBlock[] = [
+            section('sec1', [service('c1'), service('c2')]),
+            closure,
+        ];
+        const result = insertIntoSection(blocks, service('new'), 'sec1');
+        const sec = result.find(b => b.id === 'sec1');
+        expect(sec?.children?.map(c => c.id)).toEqual(['c1', 'c2', 'new']);
+        // Root-Order bleibt unveraendert
+        expect(result.map(b => b.id)).toEqual(['sec1', CLOSURE_BLOCK_ID]);
+    });
+
+    it('legt children-Array an, wenn die Section noch keines hat', () => {
+        const blocks: DocBlock[] = [sectionEmpty('sec1')];
+        const result = insertIntoSection(blocks, service('new'), 'sec1');
+        const sec = result.find(b => b.id === 'sec1');
+        expect(sec?.children?.map(c => c.id)).toEqual(['new']);
+    });
+
+    it('haengt TEXT als letztes Kind in die Section an', () => {
+        const blocks: DocBlock[] = [section('sec1', [service('c1')])];
+        const result = insertIntoSection(blocks, text('hinweis'), 'sec1');
+        const sec = result.find(b => b.id === 'sec1');
+        expect(sec?.children?.map(c => c.id)).toEqual(['c1', 'hinweis']);
+    });
+
+    it('fuellt SECTION_HEADER nicht verschachtelt ein – Fallback auf Root', () => {
+        const blocks: DocBlock[] = [section('sec1', [service('c1')])];
+        const result = insertIntoSection(blocks, section('new'), 'sec1');
+        // Verschachtelung untersagt -> landet auf Root vor (nicht-existentem) NACH
+        expect(result.map(b => b.id)).toEqual(['sec1', 'new']);
+        // Section-Children bleiben unangetastet
+        expect(result[0].children?.map(c => c.id)).toEqual(['c1']);
+    });
+
+    it('fallbackt auf insertBeforeNachtexte, wenn sectionId nicht existiert', () => {
+        // SERVICE ohne CLOSURE: insertBeforeNachtexte haengt ans Ende an (Limit=-1).
+        const blocks: DocBlock[] = [service('s1'), text('nach', 'NACH')];
+        const result = insertIntoSection(blocks, service('new'), 'ghost-sec');
+        expect(result.map(b => b.id)).toEqual(['s1', 'nach', 'new']);
     });
 });
 

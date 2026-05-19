@@ -91,9 +91,10 @@ export function insertBeforeNachtexte(prev: DocBlock[], block: DocBlock): DocBlo
  * und SECTION_HEADER duerfen nie nach CLOSURE_BLOCK_ID landen.
  *
  * Sonderfaelle:
- *  - Anker liegt innerhalb einer SECTION (als child): ein neuer SERVICE wird
- *    in dieselbe Section hinter dem Anker einsortiert; andere Block-Typen
- *    landen auf Root-Ebene direkt nach der Section.
+ *  - Anker liegt innerhalb einer SECTION (als child): SERVICE- und TEXT-Bloecke
+ *    werden in dieselbe Section hinter dem Anker einsortiert; SECTION_HEADER
+ *    und andere Container-Typen landen auf Root-Ebene direkt nach der Section
+ *    (Sections duerfen nicht verschachtelt werden).
  *  - Anker ist null, leer oder selbst der CLOSURE-Marker -> Fallback.
  */
 export function insertAtAnchor(
@@ -121,7 +122,7 @@ export function insertAtAnchor(
         if (b.type === 'SECTION_HEADER' && b.children) {
             const childIdx = b.children.findIndex(c => c.id === anchorId);
             if (childIdx !== -1) {
-                if (block.type === 'SERVICE') {
+                if (block.type === 'SERVICE' || block.type === 'TEXT') {
                     const newChildren = [...b.children];
                     newChildren.splice(childIdx + 1, 0, block);
                     return prev.map(x => x.id === b.id ? { ...x, children: newChildren } : x);
@@ -187,6 +188,40 @@ export function validateRootReorder(newOrder: DocBlock[], activeId: string): Mov
     }
 
     return { ok: true };
+}
+
+/**
+ * Fuegt einen Block als letztes Kind in einen Bauabschnitt (SECTION_HEADER) ein.
+ *
+ * Anwendungsfall: Das "+"-Symbol direkt im Bauabschnitt-Header. Damit kann der
+ * User Leistungen, Stundensaetze oder Textbausteine gezielt INNERHALB der
+ * Section einfuegen, statt auf Root-Ebene.
+ *
+ * Verhalten:
+ *  - Findet die Section per sectionId und haengt block ans Ende von children an.
+ *  - Wenn die Section nicht existiert: Fallback auf insertBeforeNachtexte.
+ *  - Block-Typen, die in einer Section nicht sinnvoll sind (SECTION_HEADER,
+ *    SEPARATOR, SUBTOTAL, CLOSURE), werden ebenfalls auf Root-Ebene
+ *    eingefuegt – Sections duerfen nicht verschachtelt werden.
+ */
+export function insertIntoSection(
+    prev: DocBlock[],
+    block: DocBlock,
+    sectionId: string,
+): DocBlock[] {
+    const isChildCompatible = block.type === 'SERVICE' || block.type === 'TEXT';
+    if (!isChildCompatible) {
+        return insertBeforeNachtexte(prev, block);
+    }
+    const sectionIdx = prev.findIndex(b => b.id === sectionId && b.type === 'SECTION_HEADER');
+    if (sectionIdx === -1) {
+        return insertBeforeNachtexte(prev, block);
+    }
+    return prev.map((b, i) => {
+        if (i !== sectionIdx) return b;
+        const children = b.children ?? [];
+        return { ...b, children: [...children, block] };
+    });
 }
 
 /**

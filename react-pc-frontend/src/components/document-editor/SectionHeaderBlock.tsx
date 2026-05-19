@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Trash2, FolderOpen, ChevronDown, ChevronUp, ArrowUpFromLine, FileText } from 'lucide-react';
+import { Trash2, FolderOpen, ChevronDown, ChevronUp, ArrowUpFromLine, FileText, Plus } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
@@ -23,6 +23,10 @@ interface SectionHeaderBlockProps {
     onEditorFocus: (editor: EditorInstance | null) => void;
     getPositionString: (block: DocBlock) => string;
     sectionPosition: string;
+    /** Oeffnet den AddTypeDialog mit dem angegebenen Anker (Leistung-Karte unterhalb). */
+    onAddBelow?: (anchorId: string) => void;
+    /** Oeffnet den AddTypeDialog mit "in diesen Bauabschnitt einfuegen" als Ziel. */
+    onAddIntoSection?: (sectionId: string) => void;
 }
 
 export function SectionHeaderBlock({
@@ -41,6 +45,8 @@ export function SectionHeaderBlock({
     onEditorFocus,
     getPositionString,
     sectionPosition,
+    onAddBelow,
+    onAddIntoSection,
 }: SectionHeaderBlockProps) {
     const [editing, setEditing] = useState(false);
     const [localLabel, setLocalLabel] = useState(block.sectionLabel || '');
@@ -121,6 +127,17 @@ export function SectionHeaderBlock({
                             {children.length} Pos.
                         </span>
                     )}
+                    {!isLocked && onAddIntoSection && (
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => { e.stopPropagation(); onAddIntoSection(block.id); }}
+                            className="h-7 w-7 p-0 text-slate-300 hover:text-rose-300 hover:bg-slate-700 rounded-md"
+                            title="In diesen Bauabschnitt einfügen (Leistung, Stundensatz oder Textbaustein)"
+                        >
+                            <Plus className="w-3.5 h-3.5" />
+                        </Button>
+                    )}
                     <Button
                         variant="ghost"
                         size="sm"
@@ -160,9 +177,10 @@ export function SectionHeaderBlock({
                     {children.length > 0 && (
                         <div className="px-3 pt-3 space-y-2">
                             {children.map(child => (
-                                <div key={child.id} className="relative group/child">
+                                <div key={child.id} className="relative group/child group/card">
                                     {child.type === 'TEXT' ? (
                                         /* Inline TEXT (Remark) block within section */
+                                        <>
                                         <div className="bg-white rounded-lg border border-slate-200 p-3">
                                             <div className="flex items-center gap-2 mb-1">
                                                 <FileText className="w-3 h-3 text-slate-400" />
@@ -173,6 +191,20 @@ export function SectionHeaderBlock({
                                                 dangerouslySetInnerHTML={{ __html: child.content || '' }}
                                             />
                                         </div>
+                                        {!isLocked && onAddBelow && (
+                                            <div className="flex justify-center -mt-1 mb-1 opacity-0 group-hover/card:opacity-100 transition-opacity">
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => { e.stopPropagation(); onAddBelow(child.id); }}
+                                                    title="Direkt darunter einfügen"
+                                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border border-dashed border-rose-300 bg-white text-rose-600 text-[11px] font-medium hover:bg-rose-50 hover:border-rose-500 hover:shadow-sm transition-all"
+                                                >
+                                                    <Plus className="w-3 h-3" />
+                                                    Hier einfügen
+                                                </button>
+                                            </div>
+                                        )}
+                                        </>
                                     ) : (
                                         <ServiceBlock
                                             block={child}
@@ -186,6 +218,7 @@ export function SectionHeaderBlock({
                                             onToggleOptional={(id, current) => onToggleChildOptional(block.id, id, current)}
                                             onFocus={onFocus}
                                             onEditorFocus={onEditorFocus}
+                                            onAddBelow={onAddBelow}
                                         />
                                     )}
                                     {/* Eject button */}
@@ -206,19 +239,37 @@ export function SectionHeaderBlock({
                         </div>
                     )}
 
-                    {/* Drop Zone */}
+                    {/* Drop Zone + "+"-Button */}
                     {!isLocked && (
                         <div className={cn(
-                            "mx-3 my-3 py-4 border-2 border-dashed rounded-lg text-center transition-all duration-200",
+                            "mx-3 my-3 py-3 border-2 border-dashed rounded-lg flex items-center justify-center gap-3 transition-all duration-200",
                             isOver
                                 ? "border-rose-400 bg-rose-50 text-rose-600"
                                 : children.length === 0
                                     ? "border-slate-300 text-slate-400"
-                                    : "border-transparent text-transparent hover:border-slate-200 hover:text-slate-400"
+                                    : "border-slate-200 text-slate-400 hover:border-slate-300"
                         )}>
-                            <p className="text-xs font-medium">
-                                {isOver ? '↓ Hier ablegen' : children.length === 0 ? 'Leistungen hierher ziehen' : '+ Weitere Leistung hierher ziehen'}
-                            </p>
+                            {isOver ? (
+                                <p className="text-xs font-medium">↓ Hier ablegen</p>
+                            ) : (
+                                <>
+                                    <p className="text-xs">
+                                        {children.length === 0 ? 'Bauabschnitt befüllen:' : 'Weitere Position hinzufügen:'}
+                                    </p>
+                                    {onAddIntoSection && (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); onAddIntoSection(block.id); }}
+                                            className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 shadow-sm transition-colors"
+                                            title="Leistung, Stundensatz oder Textbaustein einfügen"
+                                        >
+                                            <Plus className="w-3.5 h-3.5" />
+                                            Einfügen
+                                        </button>
+                                    )}
+                                    <span className="text-[10px] text-slate-400">oder per Drag &amp; Drop</span>
+                                </>
+                            )}
                         </div>
                     )}
 
