@@ -9,6 +9,48 @@ Rechtsgrundlagen:
 - **§ 257 HGB** – Aufbewahrung von Unterlagen
 - **§ 147 AO** – Ordnungsvorschriften für die Aufbewahrung von Unterlagen
 - **§ 146 AO** – Ordnungsvorschriften für die Buchführung
+- **§§ 140–148 AO** – Aufzeichnungspflichten und Ordnungsvorschriften
+- **§ 238 ff. HGB** – Buchführungspflicht
+
+> **Hinweis zum Geltungsbereich der GoBD:** Die GoBD gelten **nicht nur für die Finanzbuchhaltung**, sondern für **alle steuerlich relevanten Daten** – also auch Angebote, Auftragsbestätigungen, Lieferscheine, Stammdatenänderungen, Preislisten, Lagerbewegungen, Audit Trails und E-Mails mit Preisverhandlungen. Maßgeblich ist nicht der Name des Dokuments, sondern seine **steuerliche Relevanz**. Wer hier lückenhaft arbeitet, riskiert die Verwerfung der Buchführung und eine Schätzung nach § 162 AO.
+
+---
+
+## 0. Geltungsbereich & Abgrenzung
+
+Dieses ERP ist **ein Vorsystem für Ausgangsbelege im Lead-to-Cash-Prozess**, kein Komplettsystem mit eigener Finanzbuchhaltung oder Kasse. Die GoBD-Verantwortung ist arbeitsteilig organisiert, damit das System nicht in den Zuständigkeitsbereich zertifizierungspflichtiger Software (Buchhaltung, Kasse) hineingreift.
+
+### 0.1 Was dieses System abdeckt
+
+| Bereich | GoBD-Umsetzung im System |
+|---|---|
+| **Angebote** | Versionierung, Vorgänger-Nachfolger-Kette, Audit-Trail mit Hash-Kette |
+| **Auftragsbestätigungen** | Audit-Trail mit Hash-Kette, Vorgänger-Referenz |
+| **Lieferscheine** | Vorgänger-Kette zu Projekt/AB, Versanddatum-Sperre |
+| **Ausgangsrechnungen** (alle Typen) | Lückenlose Nummerierung, Buchungssperre, Storno-Verfahren, Hash-Kette, Z3-Export |
+| **Mahnungen** | Audit-Trail mit Hash-Kette |
+| **Zeitbuchungen & Zeitkonto-Korrekturen** | Versionierte Audit-Snapshots, Begründungspflicht, Erfassungsquelle |
+| **Eingangsbelege (Lieferantenrechnungen, Quittungen)** | Belegfoto-Pflicht, KI-gestützte Vorerfassung als **Vorsortierung für den Steuerberater** |
+| **Projekt-/Auftragsdaten** | Lückenlose Kette Angebot → AB → Lieferschein → Rechnung |
+
+### 0.2 Was dieses System bewusst NICHT abdeckt
+
+| Bereich | Wo es stattdessen läuft | Begründung |
+|---|---|---|
+| **Finanzbuchhaltung (DATEV, Bilanz, USt-Voranmeldung)** | Steuerberater mit zertifizierter Software | Trennung von Vorsystem und Buchungssystem ist gewollt – das Vorsystem liefert die Belege, der Steuerberater bucht. |
+| **Barkasse mit TSE / DSFinV-K** | Separates Kassenprogramm mit zertifizierter Technischer Sicherheitseinrichtung (TSE) | Kassenführung mit Bargeld erfordert seit 2020 eine TSE (§ 146a AO). Diese Pflicht wird durch ein dediziertes Kassenprogramm erfüllt, das ebenfalls an den Steuerberater übergibt. |
+| **Lagerbuchführung / Inventur** | Manueller Prozess bzw. nicht abgebildet | Für reine Auftragsfertigung (Handwerk) nicht zwingend; bei Lagerhaltung über Bagatellgrenze wäre ein separates Modul nötig. |
+| **Lohnbuchhaltung** | Steuerberater | Personalstammdaten und Zeitbuchungen werden im ERP geführt, aber die Lohnabrechnung erfolgt extern. |
+
+### 0.3 Konsequenz für die GoBD-Prüfung
+
+Bei einer Außenprüfung sind drei Datenquellen relevant:
+
+1. **Dieses ERP** liefert per Z3-Export alle Ausgangsbelege inklusive Audit-Trail und Hash-Kette.
+2. **Das Kassenprogramm** liefert die DSFinV-K-Daten der Barkasse.
+3. **Der Steuerberater** liefert die Buchhaltungs-Exporte (DATEV).
+
+Diese Aufteilung ist eine bewusste Architekturentscheidung: Sie verhindert, dass eine selbstgebaute Software in den zertifizierungspflichtigen Bereich Kasse/Buchhaltung hineingreift, ohne die dafür nötigen Nachweise (Verfahrensdokumentation, TSE-Zertifizierung, Buchhaltungs-Testat) erbringen zu müssen.
 
 ---
 
@@ -369,7 +411,76 @@ Der Endpoint `GET /api/ausgangs-dokumente/audit/z3-paket?von=YYYY-MM-DD&bis=YYYY
 
 ---
 
-## 11. Zusammenfassung der technischen Maßnahmen
+## 11. Eingangsbelege & Lieferantendokumente
+
+### 11.1 Erfassung mit Belegfoto-Pflicht
+
+Eingangsbelege (Lieferantenrechnungen, Quittungen, Bons) werden in der Entity `Beleg` geführt. Eine **harte DB-Invariante** stellt sicher, dass jeder Beleg eine Bildkopie hat:
+
+- `gespeicherterDateiname` ist **NOT NULL** für alle echten Belege
+- Nur reine Umbuchungen (`istUmbuchung = true`) dürfen ohne Bilddatei existieren
+- Original-Dateien werden im konfigurierten Upload-Verzeichnis archiviert
+
+### 11.2 KI-gestützte Vorerfassung (Status: Vorsortierung, nicht Buchung)
+
+Eingangsbelege durchlaufen einen KI-Analyse-Workflow (`BelegKiAnalyseStatus`), der Vorschläge für Lieferant, Kategorie und Aufteilung auf Kostenstellen liefert. **Wichtige Einordnung im Sinne der GoBD:**
+
+- Die KI-Klassifizierung ist eine **Vorsortierung als Komfort-Feature**, keine steuerliche Buchung.
+- Die endgültige Kontierung erfolgt beim Steuerberater in zertifizierter Buchhaltungssoftware.
+- Der Beleg selbst (Bild + Stammdaten) bleibt unverändert; nur Metadaten werden ergänzt.
+
+### 11.3 Monatsexport für den Steuerberater
+
+Der `BelegeKasseExportPdfService` erzeugt einen Monatsexport aller Eingangsbelege als PDF-Bündel, das an den Steuerberater übergeben wird. Dies entspricht dem Lieferweg „Vorsystem → Buchhaltung" und ist die GoBD-relevante Übergabestelle.
+
+---
+
+## 12. Bekannte Lücken & Roadmap
+
+Dieser Abschnitt dokumentiert offene Punkte transparent, weil GoBD-Compliance nur dann belastbar ist, wenn Lücken benannt statt verschwiegen werden.
+
+### 12.1 Stammdaten-Änderungshistorie (geplant)
+
+**Aktueller Stand:** Stammdaten (Kunde, Lieferant, eigene Firmendaten) werden bei Änderung überschrieben, ohne dass eine Historie der Vorgängerwerte erhalten bleibt. Auf Rechnungen ist die zum Versandzeitpunkt gültige Adresse über das archivierte PDF rekonstruierbar, aber nicht direkt im Datenmodell abgreifbar.
+
+**Geplante Umsetzung:** Eine generische Tabelle `stammdaten_aenderung` mit JSON-Snapshots (Vorher/Nachher), Benutzer, Zeitpunkt und geänderten Feldern. Scope:
+
+| Entity | Audit-relevante Felder |
+|---|---|
+| `Kunde` | Name, Adresse, USt-ID, Steuernummer |
+| `Lieferanten` | Name, Adresse, USt-ID, Bankverbindung |
+| `Firma` (eigene Stammdaten) | Name, Adresse, USt-ID, Bankverbindung, Steuernummer |
+
+**Nicht im Scope:** Artikelstammdaten, Sachkonten, Mitarbeiterstammdaten – diese sind entweder nicht direkt steuerrelevant für Ausgangsbelege oder werden beim Steuerberater geführt.
+
+### 12.2 Automatisierte Aufbewahrungsverwaltung
+
+**Aktueller Stand:** Alle Dokumente bleiben dauerhaft erhalten; es gibt keinen Automatismus, der nach Ablauf der 10-Jahres-Frist Belege archiviert oder zur Löschung freigibt. Manuelle Bereinigung nur in Abstimmung mit dem Steuerberater.
+
+**Bewertung:** Dauerhaftes Aufbewahren ist GoBD-konform und in der Praxis bei einem Datenvolumen, wie es ein Handwerksbetrieb erzeugt, unkritisch. Eine Automatisierung ist daher nicht priorisiert.
+
+### 12.3 Verfahrensdokumentation
+
+**Aktueller Stand:** Dieses Dokument (`GOBD_COMPLIANCE.md`) zusammen mit `DOKUMENTEN_LIFECYCLE.md`, `RECHNUNGSWESEN.md` und `KASSE_BUCHHALTUNG.md` ist die technische Verfahrensdokumentation des Vorsystems.
+
+**Empfehlung:** Betriebe sollten zusätzlich eine **betriebliche Verfahrensdokumentation** führen, die beschreibt:
+
+- Welche Belege wo entstehen (ERP / Kassenprogramm / E-Mail-Postfach)
+- Wer Belege erfasst und freigibt
+- Wann die Übergabe an den Steuerberater erfolgt
+- Wie das Backup organisiert ist
+
+Diese betriebliche Verfahrensdokumentation ist nicht Teil der Software, sondern ein organisatorisches Dokument des Betriebs.
+
+### 12.4 Manuelle Backup-Strategie
+
+**Aktueller Stand:** Datenbank-Backups und Belegarchiv liegen in der Verantwortung des Betreibers (siehe `INSTALLATION.md`). Das System protokolliert keine Backup-Läufe.
+
+**Empfehlung:** Tägliches Backup der PostgreSQL-Datenbank **und** des Upload-Verzeichnisses an einen externen Ort. Ohne Backup verlieren die hier beschriebenen GoBD-Maßnahmen ihre Schutzwirkung bei Hardware-Defekt.
+
+---
+
+## 13. Zusammenfassung der technischen Maßnahmen
 
 | GoBD-Anforderung | Technische Umsetzung | Entity/Service |
 |---|---|---|
