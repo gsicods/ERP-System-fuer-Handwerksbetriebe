@@ -2145,13 +2145,15 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
             unit: b.unit || 'Stk',
             price: b.price || 0,
             description: replacePlaceholders(b.description || ''),
-            // TEXT blocks: Always use base defaults (10pt, not bold).
+            // TEXT and SERVICE blocks: Always use neutral defaults (10pt, not bold).
             // All formatting (bold, italic, font-size, colors) is embedded as inline
             // HTML from TiptapEditor and parsed by the backend HTML parser.
-            // Using extractBoldFromHtml/extractFontSizeFromHtml as defaults was wrong
-            // because it would make ALL text bold/large if ANY part was bold/large.
-            fontSize: b.type === 'TEXT' ? 10 : (b.fontSize || 10),
-            fett: b.type === 'TEXT' ? false : (b.fett || false),
+            // Using extractBoldFromHtml/extractFontSizeFromHtml as block-level defaults
+            // is wrong because it would make the ENTIRE block bold/large if ANY single
+            // word was bold/large (the backend uses defaultBold/defaultFontSize for every
+            // text chunk outside of explicit <strong>/<span> tags).
+            fontSize: b.type === 'TEXT' || b.type === 'SERVICE' ? 10 : (b.fontSize || 10),
+            fett: b.type === 'TEXT' || b.type === 'SERVICE' ? false : (b.fett || false),
             optional: b.optional || false,
             sectionLabel: b.sectionLabel || '',
             discount: b.discount || 0
