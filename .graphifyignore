@@ -1,0 +1,40 @@
+# Build-Output
+target/
+build/
+dist/
+out/
+
+# Node
+node_modules/
+react-pc-frontend/node_modules/
+react-zeiterfassung/node_modules/
+react-pc-frontend/dist/
+react-zeiterfassung/dist/
+
+# Graphify selbst
+graphify-out/
+
+# Logs & Uploads
+logs/
+uploads/
+*.log
+
+# Zertifikate & Secrets
+certs/
+*.key
+*.pem
+*.p12
+
+# Assets & Anhänge
+assets/
+attachments/
+
+# IDE & OS
+.idea/
+.vscode/
+.claude/
+**/.DS_Store
+**/Thumbs.db
+
+# Docs (kein Code)
+docs/
