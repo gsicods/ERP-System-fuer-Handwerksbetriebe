@@ -68,12 +68,13 @@ package-lock.json
 .claude/scheduled_tasks.lock
 .claude/reviews/
 
-# Graphify
-graphify-out/cache/
-graphify-out/manifest.json
-graphify-out/.graphify_*
-
-# Graphify
-graphify-out/cache/
-graphify-out/manifest.json
-graphify-out/.graphify_*
+# Graphify — Cache und interne Marker werden überall ignoriert (Root + Sub-Projects).
+# Persistente Wissens-Repräsentationen wie graph.json / GRAPH_REPORT.md im Root
+# bleiben getrackt, weil sie geräteübergreifend nutzbar sein müssen.
+**/graphify-out/cache/
+**/graphify-out/manifest.json
+**/graphify-out/.graphify_*
+# Sub-Project-Graphen (z.B. in react-pc-frontend/, react-zeiterfassung/) werden
+# komplett ignoriert — Quelle der Wahrheit ist der Root-Graph.
+react-pc-frontend/graphify-out/
+react-zeiterfassung/graphify-out/
