@@ -179,19 +179,41 @@ type FreigabeAuditData = {
 
 // ==================== DETAIL VIEW ====================
 
+type ProjektDetailTab = 'zeiten' | 'materialkosten' | 'emails' | 'geschaeftsdokumente' | 'dokumente' | 'beschreibung' | 'notizen';
+const ALLOWED_PROJEKT_TABS: ReadonlyArray<ProjektDetailTab> =
+    ['zeiten', 'materialkosten', 'emails', 'geschaeftsdokumente', 'dokumente', 'beschreibung', 'notizen'];
+function parseProjektTab(raw: string | null): ProjektDetailTab | undefined {
+    return raw && (ALLOWED_PROJEKT_TABS as readonly string[]).includes(raw)
+        ? raw as ProjektDetailTab
+        : undefined;
+}
+
 interface ProjektDetailViewProps {
     projekt: ProjektDetail;
     onBack: () => void;
     onEdit: () => void;
     onRefresh: () => Promise<void>;
-    initialTab?: 'zeiten' | 'materialkosten' | 'emails' | 'geschaeftsdokumente' | 'dokumente' | 'beschreibung' | 'notizen';
+    initialTab?: ProjektDetailTab;
 }
 
 const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, onEdit, onRefresh, initialTab }) => {
     const toast = useToast();
     const confirmDialog = useConfirm();
     const navigate = useNavigate();
-    const [activeTab, setActiveTab] = useState<'zeiten' | 'materialkosten' | 'emails' | 'geschaeftsdokumente' | 'dokumente' | 'beschreibung' | 'notizen'>(initialTab || 'zeiten');
+    const [, setSearchParams] = useSearchParams();
+    const [activeTab, setActiveTabState] = useState<ProjektDetailTab>(initialTab || 'zeiten');
+    // Wrapper: hält den aktiven Tab als ?tab= in der URL, damit das Notification-Center
+    // gezielt deeplinken kann und der Tab beim Reload erhalten bleibt.
+    // Functional-Updater liest immer den aktuellsten Param-Snapshot, sodass diese
+    // Callback-Identität stabil bleibt und nicht bei jedem URL-Change neu erzeugt wird.
+    const setActiveTab = useCallback((tab: ProjektDetailTab) => {
+        setActiveTabState(tab);
+        setSearchParams(prev => {
+            const next = new URLSearchParams(prev);
+            next.set('tab', tab);
+            return next;
+        }, { replace: true });
+    }, [setSearchParams]);
     const [kurzbeschreibung, setKurzbeschreibung] = useState(projekt.kurzbeschreibung || '');
     const [savingDesc, setSavingDesc] = useState(false);
 
@@ -3470,11 +3492,13 @@ export default function ProjektEditor() {
     }, [loadProjekte, viewMode]);
 
     // Deep-link: auto-open project from URL param ?projektId=123&tab=notizen
-    const [deepLinkTab, setDeepLinkTab] = useState<ProjektDetailViewProps['initialTab']>(undefined);
+    const [deepLinkTab, setDeepLinkTab] = useState<ProjektDetailTab | undefined>(undefined);
     const lastProcessedProjektId = useRef<string | null>(null);
     useEffect(() => {
         const projektIdParam = searchParams.get('projektId');
-        const tabParam = searchParams.get('tab') as ProjektDetailViewProps['initialTab'];
+        // Whitelist-Validierung statt unchecked `as`-Cast: unbekannte tab-Werte
+        // ignorieren wir, sonst rendert die Detail-View ohne sichtbares Pane.
+        const tabParam = parseProjektTab(searchParams.get('tab'));
         if (!projektIdParam && !tabParam) return;
         // Skip if we already processed this exact projektId
         if (projektIdParam && lastProcessedProjektId.current === projektIdParam) return;

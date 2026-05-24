@@ -37,6 +37,15 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"c:\\dev\\ERP-System-fuer-Handwerksbetriebe\\.claude\\hooks\\mark-graphify-used.ps1\""
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {

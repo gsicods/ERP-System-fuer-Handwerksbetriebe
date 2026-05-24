@@ -12,7 +12,7 @@ import {
 // kann und Vites Fast-Refresh-Regel hier nicht bricht.
 
 import type { CategoryDto, RecentItemDto, NotificationSummary } from './notification-helpers';
-import { dismissItem, dismissCategory, filterDismissed } from './notification-helpers';
+import { dismissItem, dismissCategory, filterDismissed, gcOrphanedDismissals } from './notification-helpers';
 
 // ── Icon map ─────────────────────────────────────────────────────────────
 
@@ -171,6 +171,10 @@ export function NotificationBell() {
             if (signal.aborted) return;
 
             setRawData(summary);
+            // Aufräumen vor dem Filter: dismissed Keys, die das Backend nicht
+            // mehr ausliefert, fliegen aus dem localStorage. filterDismissed
+            // selbst bleibt pure.
+            gcOrphanedDismissals(summary.recentItems);
             const filtered = filterDismissed(summary);
             // Animate if count increased (but not on the very first load)
             if (filtered.totalCount > prevCountRef.current && prevCountRef.current > 0) {
@@ -282,7 +286,7 @@ export function NotificationBell() {
     const handleMarkColumnRead = (e: React.MouseEvent, groupItems: RecentItemDto[], groupCats: CategoryDto[]) => {
         e.stopPropagation();
         groupItems.forEach(item => {
-            dismissItem(item.type, item.title);
+            dismissItem(item);
             if (item.type === 'EMAIL') {
                 const match = item.link.match(/\/emails\/\w+\/(\d+)/);
                 if (match) {
@@ -300,7 +304,7 @@ export function NotificationBell() {
     };
 
     const handleItemClick = (item: RecentItemDto) => {
-        dismissItem(item.type, item.title);
+        dismissItem(item);
         // Immediately update local display
         if (rawData) setData(filterDismissed(rawData));
         handleNavigate(item.link, item.type);

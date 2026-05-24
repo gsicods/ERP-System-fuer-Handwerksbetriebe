@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
     ArrowLeft,
@@ -49,6 +49,15 @@ import { useToast } from '../components/ui/toast';
 import { useConfirm } from '../components/ui/confirm-dialog';
 import { onDokumentChanged } from '../lib/dokumentChannel';
 import { appendBildToNotiz, removeBildFromNotiz } from '../lib/optimisticUploads';
+
+type AnfrageDetailTab = 'emails' | 'geschaeftsdokumente' | 'dokumente' | 'beschreibung' | 'notizen';
+const ALLOWED_ANFRAGE_TABS: ReadonlyArray<AnfrageDetailTab> =
+    ['emails', 'geschaeftsdokumente', 'dokumente', 'beschreibung', 'notizen'];
+function parseTab(raw: string | null): AnfrageDetailTab | undefined {
+    return raw && (ALLOWED_ANFRAGE_TABS as readonly string[]).includes(raw)
+        ? raw as AnfrageDetailTab
+        : undefined;
+}
 
 // Notizen Interfaces
 interface AnfrageNotizBild {
@@ -664,12 +673,26 @@ interface AnfrageDetailViewProps {
     onEdit: () => void;
     onRefresh: () => void;
     onDeleted?: () => void;
+    initialTab?: AnfrageDetailTab;
 }
 
-const AnfrageDetailView: React.FC<AnfrageDetailViewProps> = ({ anfrage, onBack, onEdit, onRefresh, onDeleted }) => {
+const AnfrageDetailView: React.FC<AnfrageDetailViewProps> = ({ anfrage, onBack, onEdit, onRefresh, onDeleted, initialTab }) => {
     const toast = useToast();
     const confirmDialog = useConfirm();
-    const [activeTab, setActiveTab] = useState<'emails' | 'geschaeftsdokumente' | 'dokumente' | 'beschreibung' | 'notizen'>('emails');
+    const [, setSearchParams] = useSearchParams();
+    const [activeTab, setActiveTabState] = useState<AnfrageDetailTab>(initialTab ?? 'emails');
+    // Wrapper: hält den aktiven Tab als ?tab= in der URL, damit das Notification-Center
+    // gezielt deeplinken kann und der Tab beim Reload erhalten bleibt.
+    // Functional-Updater liest immer den aktuellsten Param-Snapshot, sodass diese
+    // Callback-Identität stabil bleibt und nicht bei jedem URL-Change neu erzeugt wird.
+    const setActiveTab = useCallback((tab: AnfrageDetailTab) => {
+        setActiveTabState(tab);
+        setSearchParams(prev => {
+            const next = new URLSearchParams(prev);
+            next.set('tab', tab);
+            return next;
+        }, { replace: true });
+    }, [setSearchParams]);
     const [kurzbeschreibung, setKurzbeschreibung] = useState(anfrage.kurzbeschreibung || '');
     const [savingDesc, setSavingDesc] = useState(false);
 
@@ -1471,6 +1494,10 @@ export default function AnfrageEditor() {
     const [page, setPage] = useState(0);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
+    // Tab aus URL (Notification-Center kann ?tab=emails / ?tab=geschaeftsdokumente
+    // schicken). Wird einmal beim Mount übernommen – danach hält die Detail-View
+    // den eigenen State und schreibt selbst in die URL.
+    const [deepLinkTab] = useState<AnfrageDetailTab | undefined>(() => parseTab(searchParams.get('tab')));
 
     // Deep-link: restore detail view from URL param ?anfrageId=123
     const deepLinkProcessed = useRef(false);
@@ -1740,6 +1767,7 @@ export default function AnfrageEditor() {
             <>
                 <AnfrageDetailView
                     anfrage={selectedAnfrage}
+                    initialTab={deepLinkTab}
                     onBack={() => {
                         setSelectedAnfrage(null);
                         setViewMode('list');
