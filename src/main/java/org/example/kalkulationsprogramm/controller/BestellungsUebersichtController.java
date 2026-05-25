@@ -3,11 +3,15 @@ package org.example.kalkulationsprogramm.controller;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
+import org.example.kalkulationsprogramm.config.FrontendUserPrincipal;
 import lombok.RequiredArgsConstructor;
 import org.example.kalkulationsprogramm.domain.*;
 import org.example.kalkulationsprogramm.repository.*;
+import org.example.kalkulationsprogramm.service.BelegService;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -41,6 +45,9 @@ public class BestellungsUebersichtController {
     private final LieferantDokumentProjektAnteilRepository projektAnteilRepository;
     private final KostenstelleRepository kostenstelleRepository;
     private final FrontendUserProfileRepository frontendUserProfileRepository;
+    private final BelegRepository belegRepository;
+    private final BelegKostenstellenAnteilRepository belegKostenstellenAnteilRepository;
+    private final BelegService belegService;
 
     @Value("${file.upload-dir}")
     private String uploadDir;
@@ -246,6 +253,188 @@ public class BestellungsUebersichtController {
     }
 
     /**
+     * Belege aus Belege & Kasse, die nicht aus dem E-Mail-Import stammen und noch
+     * keine Kostenstellen-Zuordnung haben. Diese Liste liegt fachlich im Einkauf:
+     * hier werden Kosten Projekten/Kostenstellen vorsortiert; Buchhaltung bucht
+     * anschliessend nur noch Konten/Sachkonten.
+     */
+    @GetMapping("/belege-offen")
+    public ResponseEntity<List<BelegZuordnungDto>> getOffeneBelegeZurKostenstellenZuordnung(
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+        if (!darfBelegeSehen(token, auth)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        return ResponseEntity.ok(belegRepository.findNichtEmailImportierteOhneKostenstellenZuordnung().stream()
+                .map(this::toBelegZuordnungDto)
+                .toList());
+    }
+
+    @GetMapping("/belegdaten/{belegId}")
+    public ResponseEntity<GeschaeftsdatenDto> getBelegdaten(
+            @PathVariable Long belegId,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+        if (!darfBelegeSehen(token, auth)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        Beleg beleg = belegRepository.findById(belegId).orElse(null);
+        if (beleg == null) {
+            return ResponseEntity.notFound().build();
+        }
+        GeschaeftsdatenDto dto = new GeschaeftsdatenDto();
+        dto.id = beleg.getId();
+        dto.dokumentNummer = beleg.getBelegNummer();
+        dto.dokumentDatum = beleg.getBelegDatum();
+        dto.betragNetto = effektiverBelegNettoBetrag(beleg);
+        dto.betragBrutto = effektiverBelegBruttoBetrag(beleg);
+        dto.mwstSatz = beleg.getMwstSatz();
+        if (beleg.getLieferant() != null) {
+            dto.lieferantId = beleg.getLieferant().getId();
+            dto.lieferantName = beleg.getLieferant().getLieferantenname();
+        }
+        return ResponseEntity.ok(dto);
+    }
+
+    @GetMapping("/beleg-zuordnungen/{belegId}")
+    public ResponseEntity<List<ZuordnungDto>> getBelegZuordnungen(
+            @PathVariable Long belegId,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+        if (!darfBelegeSehen(token, auth)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        Beleg beleg = belegRepository.findById(belegId).orElse(null);
+        if (beleg == null) {
+            return ResponseEntity.ok(Collections.emptyList());
+        }
+
+        List<BelegKostenstellenAnteil> splits = belegKostenstellenAnteilRepository.findByBelegId(belegId);
+        if (!splits.isEmpty()) {
+            return ResponseEntity.ok(splits.stream().map(this::toZuordnungDto).toList());
+        }
+
+        if (beleg.getKostenstelle() == null) {
+            return ResponseEntity.ok(Collections.emptyList());
+        }
+
+        return ResponseEntity.ok(List.of(toDirekteBelegZuordnungDto(beleg)));
+    }
+
+    @PostMapping("/beleg-zuordnen")
+    @Transactional
+    public ResponseEntity<?> zuordnenBelegKostenstellen(
+            @RequestBody(required = false) BelegZuordnungRequest request,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+        Mitarbeiter caller = belegService.findCaller(token, auth);
+        if (caller == null || !belegService.darfScannen(caller)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        if (request == null || request.belegId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Beleg-ID fehlt"));
+        }
+        Beleg beleg = belegRepository.findById(request.belegId).orElse(null);
+        if (beleg == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Beleg nicht gefunden"));
+        }
+        if (dokumentRepository.findByBelegId(beleg.getId()).isPresent()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Dieser Beleg ist bereits als Lieferanten-Dokument erfasst"));
+        }
+        if (request.projektAnteile == null || request.projektAnteile.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Keine Kostenstellen-Zuordnung angegeben"));
+        }
+
+        FrontendUserProfile zugeordnetVon = resolveZugeordnetVon(caller, auth);
+
+        BigDecimal nettoBetrag = effektiverBelegNettoBetrag(beleg);
+        BigDecimal bruttoBetrag = effektiverBelegBruttoBetrag(beleg);
+        List<VorbereiteteBelegZuordnung> vorbereiteteZuordnungen = new ArrayList<>();
+        BigDecimal prozentSumme = BigDecimal.ZERO;
+        BigDecimal betragSumme = BigDecimal.ZERO;
+        for (ProjektAnteil anteil : request.projektAnteile) {
+            if (anteil.projektId != null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Belege ohne E-Mail-Import koennen nur Kostenstellen zugeordnet werden"));
+            }
+            if (anteil.kostenstelleId == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Kostenstelle fehlt"));
+            }
+            Kostenstelle ks = kostenstelleRepository.findById(anteil.kostenstelleId).orElse(null);
+            if (ks == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Kostenstelle nicht gefunden: " + anteil.kostenstelleId));
+            }
+            if (anteil.prozentanteil != null && anteil.betrag != null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Nur Prozent oder Betrag angeben"));
+            }
+            if (anteil.prozentanteil != null) {
+                if (anteil.prozentanteil.compareTo(BigDecimal.ZERO) < 0
+                        || anteil.prozentanteil.compareTo(BigDecimal.valueOf(100)) > 0) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "Prozent muss zwischen 0 und 100 liegen"));
+                }
+                prozentSumme = prozentSumme.add(anteil.prozentanteil);
+            } else if (anteil.betrag == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Prozent oder Betrag fehlt"));
+            } else {
+                if (anteil.betrag.compareTo(BigDecimal.ZERO) <= 0) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "Betrag muss groesser als 0 sein"));
+                }
+                betragSumme = betragSumme.add(anteil.betrag);
+            }
+            vorbereiteteZuordnungen.add(new VorbereiteteBelegZuordnung(ks, anteil.prozentanteil, anteil.betrag, anteil.beschreibung));
+        }
+        if (vorbereiteteZuordnungen.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Keine gueltige Kostenstellen-Zuordnung angegeben"));
+        }
+        if (prozentSumme.compareTo(BigDecimal.valueOf(100)) > 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Summe der Prozent-Anteile darf 100% nicht ueberschreiten"));
+        }
+        if (nettoBetrag != null && betragSumme.compareTo(nettoBetrag) > 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Summe der Betraege darf den Belegbetrag nicht ueberschreiten"));
+        }
+
+        belegKostenstellenAnteilRepository.deleteByBelegId(beleg.getId());
+
+        VorbereiteteBelegZuordnung ersteZuordnung = vorbereiteteZuordnungen.get(0);
+        boolean istVollstaendigeEinzelzuordnung = vorbereiteteZuordnungen.size() == 1
+                && ((ersteZuordnung.prozentanteil() != null
+                        && ersteZuordnung.prozentanteil().compareTo(BigDecimal.valueOf(100)) == 0)
+                    || (ersteZuordnung.prozentanteil() == null
+                        && nettoBetrag != null
+                        && ersteZuordnung.betrag() != null
+                        && ersteZuordnung.betrag().compareTo(nettoBetrag) == 0));
+        if (istVollstaendigeEinzelzuordnung) {
+            beleg.setKostenstelle(ersteZuordnung.kostenstelle());
+            belegRepository.save(beleg);
+            return ResponseEntity.ok(Map.of("success", true, "zuordnungen", 1));
+        }
+
+        beleg.setKostenstelle(null);
+        List<BelegKostenstellenAnteil> neueAnteile = new ArrayList<>();
+        int defaultStartJahr = beleg.getBelegDatum() != null ? beleg.getBelegDatum().getYear() : LocalDate.now().getYear();
+        for (VorbereiteteBelegZuordnung zuordnung : vorbereiteteZuordnungen) {
+            BelegKostenstellenAnteil split = new BelegKostenstellenAnteil();
+            split.setBeleg(beleg);
+            split.setKostenstelle(zuordnung.kostenstelle());
+            split.setBeschreibung(zuordnung.beschreibung());
+            split.setZugeordnetVon(zugeordnetVon);
+            split.setStreckungStartJahr(defaultStartJahr);
+            split.setStreckungJahre(1);
+            if (zuordnung.prozentanteil() != null) {
+                split.setProzent(zuordnung.prozentanteil().intValue());
+            } else {
+                split.setAbsoluterBetrag(zuordnung.betrag());
+            }
+            split.berechneAnteil(nettoBetrag, bruttoBetrag);
+            neueAnteile.add(split);
+        }
+
+        belegRepository.save(beleg);
+        belegKostenstellenAnteilRepository.saveAll(neueAnteile);
+        return ResponseEntity.ok(Map.of("success", true, "zuordnungen", neueAnteile.size()));
+    }
+
+    /**
      * Ordnet eine Rechnung anteilig Projekten zu.
      * - Erstellt BestellungProjektZuordnung für die Bestellungsübersicht
      * - Erstellt LieferantDokumentProjektAnteil für Materialkosten/Nachkalkulation
@@ -253,7 +442,10 @@ public class BestellungsUebersichtController {
      */
     @PostMapping("/zuordnen")
     @Transactional
-    public ResponseEntity<?> zuordnenZuProjekten(@RequestBody ZuordnungRequest request) {
+    public ResponseEntity<?> zuordnenZuProjekten(
+            @RequestBody ZuordnungRequest request,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
         // Geschäftsdokument laden
         var gd = geschaeftsdokumentRepository.findById(request.geschaeftsdokumentId).orElse(null);
         if (gd == null) {
@@ -267,9 +459,33 @@ public class BestellungsUebersichtController {
         }
 
         // Frontend-User laden (wer ordnet zu?)
-        FrontendUserProfile zugeordnetVon = null;
-        if (request.frontendUserProfileId != null) {
-            zugeordnetVon = frontendUserProfileRepository.findById(request.frontendUserProfileId).orElse(null);
+        FrontendUserProfile zugeordnetVon = resolveZugeordnetVon(belegService.findCaller(token, auth), auth);
+
+        BigDecimal absolutSumme = BigDecimal.ZERO;
+        BigDecimal prozentSumme = BigDecimal.ZERO;
+        BigDecimal maximalbetrag = gd.getBetragBrutto() != null ? gd.getBetragBrutto() : gd.getBetragNetto();
+        for (ProjektAnteil anteil : request.projektAnteile) {
+            if (anteil.prozentanteil != null && anteil.betrag != null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Nur Prozent oder Betrag angeben"));
+            }
+            if (anteil.prozentanteil != null) {
+                if (anteil.prozentanteil.compareTo(BigDecimal.ZERO) < 0
+                        || anteil.prozentanteil.compareTo(BigDecimal.valueOf(100)) > 0) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "Prozent muss zwischen 0 und 100 liegen"));
+                }
+                prozentSumme = prozentSumme.add(anteil.prozentanteil);
+            } else if (anteil.betrag != null) {
+                if (anteil.betrag.compareTo(BigDecimal.ZERO) <= 0) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "Betrag muss groesser als 0 sein"));
+                }
+                absolutSumme = absolutSumme.add(anteil.betrag);
+            }
+        }
+        if (prozentSumme.compareTo(BigDecimal.valueOf(100)) > 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Summe der Prozent-Anteile darf 100% nicht ueberschreiten"));
+        }
+        if (maximalbetrag != null && absolutSumme.compareTo(maximalbetrag) > 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Summe der Betraege darf den Rechnungsbetrag nicht ueberschreiten"));
         }
 
         // Lösche alte LieferantDokumentProjektAnteil für dieses Dokument
@@ -307,7 +523,11 @@ public class BestellungsUebersichtController {
             // Speichere Prozent als BigDecimal im "prozent"-Integer Feld? 
             // Nein, Anteil-Entity hat Integer für Prozent und BigDecimal für Absolut.
             // Der Request hat BigDecimal für beides.
-            projektAnteil.setProzent(anteil.prozentanteil != null ? anteil.prozentanteil.intValue() : 100);
+            if (anteil.prozentanteil != null) {
+                projektAnteil.setProzent(anteil.prozentanteil.intValue());
+            } else {
+                projektAnteil.setAbsoluterBetrag(anteil.betrag);
+            }
             projektAnteil.setBeschreibung(anteil.beschreibung);
             
             // Betrag berechnen: Kostenstellen-Anteile werden netto verrechnet
@@ -316,8 +536,6 @@ public class BestellungsUebersichtController {
             // Zuordnung — Projekt-Anteile bleiben brutto.
             if (gd.getBetragNetto() != null || gd.getBetragBrutto() != null) {
                 projektAnteil.berechneAnteil(gd.getBetragNetto(), gd.getBetragBrutto());
-            } else if (anteil.betrag != null) {
-                projektAnteil.setBerechneterBetrag(anteil.betrag);
             }
             neueProjektAnteile.add(projektAnteil);
             projektAnteil.setZugeordnetVon(zugeordnetVon);
@@ -492,40 +710,165 @@ public class BestellungsUebersichtController {
      * Gibt alle Zuordnungen für eine Kostenstelle zurück (aus beiden Quellen).
      */
     @GetMapping("/zuordnungen/kostenstelle/{kostenstelleId}")
-    public ResponseEntity<List<ZuordnungDto>> getZuordnungenForKostenstelle(@PathVariable Long kostenstelleId) {
+    public ResponseEntity<List<ZuordnungDto>> getZuordnungenForKostenstelle(
+            @PathVariable Long kostenstelleId,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
         
         // Quelle: LieferantDokumentProjektAnteil (Dokumentenverwaltung)
         var dokumentAnteile = projektAnteilRepository.findByKostenstelleId(kostenstelleId);
 
-        List<ZuordnungDto> dtos = dokumentAnteile.stream().map(a -> {
-            ZuordnungDto dto = new ZuordnungDto();
-            dto.id = a.getId();
-            dto.kostenstelleId = a.getKostenstelle().getId();
-            dto.kostenstelleName = a.getKostenstelle().getBezeichnung();
-            dto.betrag = a.getBerechneterBetrag();
-            dto.prozentanteil = a.getProzent() != null ? BigDecimal.valueOf(a.getProzent()) : null;
-            dto.beschreibung = a.getBeschreibung();
-            
-            // Datum kann vom UploadDatum kommen, wenn nicht anders gesetzt
-            if (a.getZugeordnetAm() != null) {
-                dto.zugeordnetAm = a.getZugeordnetAm();
-            } else if (a.getDokument().getUploadDatum() != null) {
-                dto.zugeordnetAm = a.getDokument().getUploadDatum();
-            }
+        List<ZuordnungDto> dtos = dokumentAnteile.stream()
+                .map(this::toZuordnungDto)
+                .collect(Collectors.toList());
 
-            if (a.getDokument().getLieferant() != null) {
-                dto.lieferantName = a.getDokument().getLieferant().getLieferantenname();
-            }
-            
-            if (a.getDokument().getGeschaeftsdaten() != null) {
-                dto.geschaeftsdokumentId = a.getDokument().getGeschaeftsdaten().getId();
-                dto.bestellnummer = a.getDokument().getGeschaeftsdaten().getBestellnummer();
-                dto.dokumentDatum = a.getDokument().getGeschaeftsdaten().getDokumentDatum();
-            }
-            return dto;
-        }).collect(Collectors.toList());
+        if (darfBelegeSehen(token, auth)) {
+            belegKostenstellenAnteilRepository.findByKostenstelleIdEager(kostenstelleId).stream()
+                    .map(this::toZuordnungDto)
+                    .forEach(dtos::add);
+
+            belegRepository.findDirektZugeordneteByKostenstelleOhneSplits(kostenstelleId).stream()
+                    .map(this::toDirekteBelegZuordnungDto)
+                    .forEach(dtos::add);
+        }
+
+        dtos.sort(Comparator
+                .comparing((ZuordnungDto z) -> z.dokumentDatum, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(z -> z.zugeordnetAm, Comparator.nullsLast(Comparator.reverseOrder())));
 
         return ResponseEntity.ok(dtos);
+    }
+
+    private ZuordnungDto toZuordnungDto(LieferantDokumentProjektAnteil a) {
+        ZuordnungDto dto = new ZuordnungDto();
+        dto.id = a.getId();
+        dto.quelle = "LIEFERANT_DOKUMENT";
+        if (a.getProjekt() != null) {
+            dto.projektId = a.getProjekt().getId();
+            dto.projektName = a.getProjekt().getBauvorhaben();
+        }
+        if (a.getKostenstelle() != null) {
+            dto.kostenstelleId = a.getKostenstelle().getId();
+            dto.kostenstelleName = a.getKostenstelle().getBezeichnung();
+        }
+        dto.betrag = a.getBerechneterBetrag();
+        dto.prozentanteil = a.getProzent() != null ? BigDecimal.valueOf(a.getProzent()) : null;
+        dto.beschreibung = a.getBeschreibung();
+        if (a.getZugeordnetAm() != null) {
+            dto.zugeordnetAm = a.getZugeordnetAm();
+        } else if (a.getDokument().getUploadDatum() != null) {
+            dto.zugeordnetAm = a.getDokument().getUploadDatum();
+        }
+        if (a.getZugeordnetVon() != null) {
+            dto.zugeordnetVonName = a.getZugeordnetVon().getDisplayName();
+        }
+        if (a.getDokument().getLieferant() != null) {
+            dto.lieferantName = a.getDokument().getLieferant().getLieferantenname();
+        }
+        if (a.getDokument().getGeschaeftsdaten() != null) {
+            dto.geschaeftsdokumentId = a.getDokument().getGeschaeftsdaten().getId();
+            dto.bestellnummer = a.getDokument().getGeschaeftsdaten().getBestellnummer();
+            dto.dokumentDatum = a.getDokument().getGeschaeftsdaten().getDokumentDatum();
+        }
+        dto.dokumentId = a.getDokument().getId();
+        return dto;
+    }
+
+    private ZuordnungDto toZuordnungDto(BelegKostenstellenAnteil a) {
+        ZuordnungDto dto = new ZuordnungDto();
+        dto.id = a.getId();
+        dto.quelle = "BELEG_SPLIT";
+        dto.belegId = a.getBeleg().getId();
+        dto.kostenstelleId = a.getKostenstelle().getId();
+        dto.kostenstelleName = a.getKostenstelle().getBezeichnung();
+        dto.betrag = a.getBerechneterBetrag();
+        dto.prozentanteil = a.getProzent() != null ? BigDecimal.valueOf(a.getProzent()) : null;
+        dto.beschreibung = a.getBeschreibung();
+        dto.zugeordnetAm = a.getZugeordnetAm();
+        if (a.getZugeordnetVon() != null) {
+            dto.zugeordnetVonName = a.getZugeordnetVon().getDisplayName();
+        }
+        Beleg beleg = a.getBeleg();
+        dto.lieferantName = beleg.getLieferant() != null ? beleg.getLieferant().getLieferantenname() : null;
+        dto.bestellnummer = beleg.getBelegNummer();
+        dto.dokumentDatum = beleg.getBelegDatum();
+        return dto;
+    }
+
+    private ZuordnungDto toDirekteBelegZuordnungDto(Beleg beleg) {
+        ZuordnungDto dto = new ZuordnungDto();
+        dto.id = beleg.getId();
+        dto.quelle = "BELEG_DIREKT";
+        dto.belegId = beleg.getId();
+        dto.kostenstelleId = beleg.getKostenstelle().getId();
+        dto.kostenstelleName = beleg.getKostenstelle().getBezeichnung();
+        dto.betrag = effektiverBelegNettoBetrag(beleg);
+        dto.prozentanteil = BigDecimal.valueOf(100);
+        dto.beschreibung = beleg.getBeschreibung();
+        dto.zugeordnetAm = beleg.getValidiertAm() != null ? beleg.getValidiertAm() : beleg.getUploadDatum();
+        dto.lieferantName = beleg.getLieferant() != null ? beleg.getLieferant().getLieferantenname() : null;
+        dto.bestellnummer = beleg.getBelegNummer();
+        dto.dokumentDatum = beleg.getBelegDatum();
+        return dto;
+    }
+
+    private BelegZuordnungDto toBelegZuordnungDto(Beleg beleg) {
+        BelegZuordnungDto dto = new BelegZuordnungDto();
+        dto.id = beleg.getId();
+        dto.belegNummer = beleg.getBelegNummer();
+        dto.belegDatum = beleg.getBelegDatum();
+        dto.beschreibung = beleg.getBeschreibung();
+        dto.betragNetto = effektiverBelegNettoBetrag(beleg);
+        dto.betragBrutto = effektiverBelegBruttoBetrag(beleg);
+        dto.lieferantName = beleg.getLieferant() != null ? beleg.getLieferant().getLieferantenname() : null;
+        dto.originalDateiname = beleg.getOriginalDateiname();
+        dto.mimeType = beleg.getMimeType();
+        dto.pdfUrl = "/api/buchhaltung/belege/" + beleg.getId() + "/datei";
+        return dto;
+    }
+
+    private BigDecimal effektiverBelegNettoBetrag(Beleg beleg) {
+        if (beleg.getBetragFirmaNetto() != null) return beleg.getBetragFirmaNetto();
+        if (beleg.getBetragNetto() != null) return beleg.getBetragNetto();
+        return beleg.getBetragBrutto();
+    }
+
+    private BigDecimal effektiverBelegBruttoBetrag(Beleg beleg) {
+        if (beleg.getBetragFirmaBrutto() != null) return beleg.getBetragFirmaBrutto();
+        return beleg.getBetragBrutto();
+    }
+
+    private boolean darfBelegeSehen(String token, Authentication auth) {
+        Mitarbeiter caller = belegService.findCaller(token, auth);
+        return caller != null && belegService.darfSehen(caller);
+    }
+
+    private boolean darfBelegeBearbeiten(String token, Authentication auth) {
+        Mitarbeiter caller = belegService.findCaller(token, auth);
+        return caller != null && belegService.darfScannen(caller);
+    }
+
+    private FrontendUserProfile resolveZugeordnetVon(Mitarbeiter caller, Authentication auth) {
+        if (auth != null && auth.getPrincipal() instanceof FrontendUserPrincipal principal && principal.getId() != null) {
+            FrontendUserProfile sessionProfile = frontendUserProfileRepository.findById(principal.getId()).orElse(null);
+            if (sessionProfile != null && sessionProfile.isActive()) {
+                if (caller == null || sessionProfile.getMitarbeiter() == null
+                        || Objects.equals(sessionProfile.getMitarbeiter().getId(), caller.getId())) {
+                    return sessionProfile;
+                }
+            }
+        }
+        if (caller != null && caller.getId() != null) {
+            return frontendUserProfileRepository.findByMitarbeiterIdAndActiveTrue(caller.getId()).orElse(null);
+        }
+        return null;
+    }
+
+    private record VorbereiteteBelegZuordnung(
+            Kostenstelle kostenstelle,
+            BigDecimal prozentanteil,
+            BigDecimal betrag,
+            String beschreibung) {
     }
 
     /**
@@ -705,6 +1048,12 @@ public class BestellungsUebersichtController {
         public List<ProjektAnteil> projektAnteile;
     }
 
+    public static class BelegZuordnungRequest {
+        public Long belegId;
+        public Long frontendUserProfileId;
+        public List<ProjektAnteil> projektAnteile;
+    }
+
     public static class ProjektAnteil {
         public Long projektId;
         public Long kostenstelleId; // Optional
@@ -715,6 +1064,7 @@ public class BestellungsUebersichtController {
 
     public static class ZuordnungDto {
         public Long id;
+        public String quelle;
         public Long projektId;
         public String projektName;
         public Long kostenstelleId;
@@ -730,6 +1080,21 @@ public class BestellungsUebersichtController {
         public String bestellnummer;
         public LocalDate dokumentDatum;
         public Long geschaeftsdokumentId;
+        public Long dokumentId;
+        public Long belegId;
+    }
+
+    public static class BelegZuordnungDto {
+        public Long id;
+        public String belegNummer;
+        public LocalDate belegDatum;
+        public String beschreibung;
+        public BigDecimal betragNetto;
+        public BigDecimal betragBrutto;
+        public String lieferantName;
+        public String originalDateiname;
+        public String mimeType;
+        public String pdfUrl;
     }
 
     public record KostenstelleDto(Long id, String bezeichnung, String typ, String beschreibung) {}

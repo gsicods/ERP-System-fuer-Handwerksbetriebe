@@ -14,6 +14,8 @@ public interface FrontendUserProfileRepository extends JpaRepository<FrontendUse
 
     Optional<FrontendUserProfile> findByUsernameIgnoreCase(String username);
 
+    Optional<FrontendUserProfile> findByMitarbeiterIdAndActiveTrue(Long mitarbeiterId);
+
     boolean existsByUsernameIgnoreCase(String username);
 
     long countByUsernameIsNotNull();

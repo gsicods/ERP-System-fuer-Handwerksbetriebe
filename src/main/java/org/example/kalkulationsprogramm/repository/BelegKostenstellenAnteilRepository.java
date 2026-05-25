@@ -13,6 +13,16 @@ public interface BelegKostenstellenAnteilRepository extends JpaRepository<BelegK
     @Query("SELECT a FROM BelegKostenstellenAnteil a WHERE a.beleg.id = :belegId ORDER BY a.id ASC")
     List<BelegKostenstellenAnteil> findByBelegId(@Param("belegId") Long belegId);
 
+    @Query("SELECT a FROM BelegKostenstellenAnteil a "
+            + "JOIN FETCH a.beleg b "
+            + "JOIN FETCH a.kostenstelle ks "
+            + "LEFT JOIN FETCH a.zugeordnetVon "
+            + "WHERE ks.id = :kostenstelleId "
+            + "AND b.status <> org.example.kalkulationsprogramm.domain.BelegStatus.VERWORFEN "
+            + "AND NOT EXISTS (SELECT d.id FROM LieferantDokument d WHERE d.beleg = b) "
+            + "ORDER BY b.belegDatum DESC, b.uploadDatum DESC, a.id DESC")
+    List<BelegKostenstellenAnteil> findByKostenstelleIdEager(@Param("kostenstelleId") Long kostenstelleId);
+
     @Modifying
     @Query("DELETE FROM BelegKostenstellenAnteil a WHERE a.beleg.id = :belegId")
     void deleteByBelegId(@Param("belegId") Long belegId);

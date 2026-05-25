@@ -5,6 +5,7 @@ import { Card } from '../ui/card';
 
 interface ZuordnungDto {
     id: number;
+    quelle?: string;
     projektId?: number;
     projektName?: string;
     kostenstelleId: number;
@@ -19,6 +20,8 @@ interface ZuordnungDto {
     bestellnummer?: string;
     dokumentDatum?: string;
     geschaeftsdokumentId?: number;
+    dokumentId?: number;
+    belegId?: number;
 }
 
 interface Kostenstelle {
@@ -61,9 +64,14 @@ export function KostenstelleDetailView({ kostenstelle, onBack }: KostenstelleDet
     const formatCurrency = (val: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(val);
     const formatDate = (val?: string) => val ? new Date(val).toLocaleDateString('de-DE') : '-';
 
-    const handleViewPdf = (docId?: number) => {
-        if (!docId) return;
-        window.open(`/api/bestellungen-uebersicht/document/${docId}`, '_blank');
+    const handleViewPdf = (assignment: ZuordnungDto) => {
+        if (assignment.belegId) {
+            window.open(`/api/buchhaltung/belege/${assignment.belegId}/datei`, '_blank');
+            return;
+        }
+        if (assignment.dokumentId) {
+            window.open(`/api/lieferant-dokumente/${assignment.dokumentId}/download`, '_blank');
+        }
     };
 
     return (
@@ -105,13 +113,18 @@ export function KostenstelleDetailView({ kostenstelle, onBack }: KostenstelleDet
                 ) : (
                     <div className="divide-y divide-slate-100">
                         {assignments.map((a) => (
-                            <div key={a.id} className="p-4 hover:bg-slate-50 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
+                            <div key={`${a.quelle || 'ZUORDNUNG'}-${a.id}`} className="p-4 hover:bg-slate-50 flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
                                 <div className="flex-1">
                                     <div className="flex items-center gap-2 mb-1">
                                         <FileText className="w-4 h-4 text-slate-400" />
                                         <span className="font-medium text-slate-900">
-                                            {a.lieferantName || 'Unbekannter Lieferant'}
+                                            {a.lieferantName || (a.belegId ? 'Beleg ohne Lieferant' : 'Unbekannter Lieferant')}
                                         </span>
+                                        {a.belegId && (
+                                            <span className="text-xs bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded">
+                                                Beleg & Kasse
+                                            </span>
+                                        )}
                                         {a.bestellnummer && (
                                             <span className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">
                                                 {a.bestellnummer}
@@ -137,11 +150,11 @@ export function KostenstelleDetailView({ kostenstelle, onBack }: KostenstelleDet
                                         </span>
                                         <span className="text-xs text-slate-400">Netto</span>
                                     </div>
-                                    {a.geschaeftsdokumentId && (
+                                    {(a.dokumentId || a.belegId) && (
                                         <Button
                                             variant="outline"
                                             size="sm"
-                                            onClick={() => handleViewPdf(a.geschaeftsdokumentId)}
+                                            onClick={() => handleViewPdf(a)}
                                             className="text-slate-600 hover:text-rose-600"
                                             title="PDF öffnen"
                                         >

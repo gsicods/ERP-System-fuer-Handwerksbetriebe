@@ -20,6 +20,26 @@ public interface BelegRepository extends JpaRepository<Beleg, Long> {
 
     List<Beleg> findAllByOrderByUploadDatumDesc();
 
+    @Query("SELECT b FROM Beleg b "
+           + "LEFT JOIN FETCH b.lieferant "
+           + "LEFT JOIN FETCH b.kostenstelle "
+           + "WHERE b.status <> org.example.kalkulationsprogramm.domain.BelegStatus.VERWORFEN "
+           + "  AND b.kostenstelle IS NULL "
+           + "  AND NOT EXISTS (SELECT a.id FROM BelegKostenstellenAnteil a WHERE a.beleg = b) "
+           + "  AND NOT EXISTS (SELECT d.id FROM LieferantDokument d WHERE d.beleg = b) "
+           + "ORDER BY b.belegDatum DESC, b.uploadDatum DESC")
+    List<Beleg> findNichtEmailImportierteOhneKostenstellenZuordnung();
+
+    @Query("SELECT b FROM Beleg b "
+           + "LEFT JOIN FETCH b.lieferant "
+           + "LEFT JOIN FETCH b.kostenstelle "
+           + "WHERE b.kostenstelle.id = :kostenstelleId "
+           + "  AND b.status <> org.example.kalkulationsprogramm.domain.BelegStatus.VERWORFEN "
+           + "  AND NOT EXISTS (SELECT a.id FROM BelegKostenstellenAnteil a WHERE a.beleg = b) "
+           + "  AND NOT EXISTS (SELECT d.id FROM LieferantDokument d WHERE d.beleg = b) "
+           + "ORDER BY b.belegDatum DESC, b.uploadDatum DESC")
+    List<Beleg> findDirektZugeordneteByKostenstelleOhneSplits(@Param("kostenstelleId") Long kostenstelleId);
+
     /**
      * Liefert die zuletzt vom angegebenen Mitarbeiter hochgeladenen Belege.
      * Wird vom Mobile-Endpoint {@code GET /api/buchhaltung/mobile/belege}
