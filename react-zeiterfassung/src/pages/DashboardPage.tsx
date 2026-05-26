@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Play, FolderOpen, Users, Clock, Loader2, ChevronRight, ArrowRightLeft, LogOut, Plane, AlertTriangle, Calendar, Hammer, Receipt, Wrench } from 'lucide-react'
 import { buildBookingRequestPayload, createOperationId, OfflineService, type FailedEntry } from '../services/OfflineService'
@@ -66,6 +66,8 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
     const [showArbeitsgangSwitch, setShowArbeitsgangSwitch] = useState(false)
     const [arbeitsgaenge, setArbeitsgaenge] = useState<Arbeitsgang[]>([])
     const [switching, setSwitching] = useState(false)
+    const actionLockRef = useRef(false)
+    const [actionInProgress, setActionInProgress] = useState(false)
     const [heuteStunden, setHeuteStunden] = useState(0)
     const [heuteMinuten, setHeuteMinuten] = useState(0)
 
@@ -353,9 +355,22 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
         return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
     }
 
+    const beginAction = () => {
+        if (actionLockRef.current) return false
+        actionLockRef.current = true
+        setActionInProgress(true)
+        return true
+    }
+
+    const endAction = () => {
+        actionLockRef.current = false
+        setActionInProgress(false)
+    }
+
     // Stop current session (Pause/Buchung beenden)
     const handleStopSession = async () => {
         if (!activeSession) return
+        if (!beginAction()) return
 
         const token = localStorage.getItem('zeiterfassung_token')
         const stopTime = new Date().toISOString()
@@ -368,47 +383,56 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
         const isWorkSession = !isAbwesenheitOderPause(activeSession.typ)
 
         try {
-            const controller = new AbortController()
-            const timeoutId = setTimeout(() => controller.abort(), 3000)
+            try {
+                const controller = new AbortController()
+                const timeoutId = setTimeout(() => controller.abort(), 3000)
 
-            const res = await fetch('/api/zeiterfassung/stop', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(buildBookingRequestPayload({ token }, stopTime, stopOperationId)),
-                signal: controller.signal
-            })
-            clearTimeout(timeoutId)
+                const res = await fetch('/api/zeiterfassung/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(buildBookingRequestPayload({ token }, stopTime, stopOperationId)),
+                    signal: controller.signal
+                })
+                clearTimeout(timeoutId)
 
-            if (res.ok) {
-                const data = await res.json()
-                console.log('Buchung gestoppt:', data.stunden, 'Stunden')
-            } else {
-                throw new Error('Server error');
+                if (res.ok) {
+                    const data = await res.json()
+                    console.log('Buchung gestoppt:', data.stunden, 'Stunden')
+                } else {
+                    throw new Error('Server error');
+                }
+            } catch {
+                console.log('Offline (oder Timeout) - speichere Stop-Event lokal')
+                // durationMinutes wird im pending-Entry mitgespeichert, damit
+                // "heute gearbeitet" die Minuten weiterhin korrekt zeigt - auch
+                // wenn der Server diesen Eintrag später ablehnt (Reparatur-Liste).
+                const stopDuration = isWorkSession && elapsedMinutes > 0 ? elapsedMinutes : undefined
+                await OfflineService.addPendingEntryWithOperationId('stop', { token }, stopTime, stopOperationId, stopDuration)
             }
-        } catch {
-            console.log('Offline (oder Timeout) - speichere Stop-Event lokal')
-            // durationMinutes wird im pending-Entry mitgespeichert, damit
-            // "heute gearbeitet" die Minuten weiterhin korrekt zeigt - auch
-            // wenn der Server diesen Eintrag später ablehnt (Reparatur-Liste).
-            const stopDuration = isWorkSession && elapsedMinutes > 0 ? elapsedMinutes : undefined
-            await OfflineService.addPendingEntryWithOperationId('stop', { token }, stopTime, stopOperationId, stopDuration)
-        }
 
-        // Stop-Cooldown setzen, damit ein nachfolgendes loadActiveSession()
-        // die alte Session NICHT vom Server wiederherstellt (z.B. wegen
-        // verzögerter Server-Transaction oder Idempotency-Replay).
-        localStorage.setItem('zeiterfassung_stopped_at', Date.now().toString())
-        localStorage.removeItem('zeiterfassung_active_session')
-        setActiveSession(null)
-        setElapsedTime('00:00:00')
-        // Reload today's hours
-        loadHeuteGearbeitet()
+            // Stop-Cooldown setzen, damit ein nachfolgendes loadActiveSession()
+            // die alte Session NICHT vom Server wiederherstellt (z.B. wegen
+            // verzögerter Server-Transaction oder Idempotency-Replay).
+            localStorage.setItem('zeiterfassung_stopped_at', Date.now().toString())
+            localStorage.removeItem('zeiterfassung_active_session')
+            setActiveSession(null)
+            setElapsedTime('00:00:00')
+            // Reload today's hours
+            loadHeuteGearbeitet()
+        } finally {
+            endAction()
+        }
     }
 
     // Start pause (stop current work, start pause booking)
     const handlePause = async () => {
+        if (!beginAction()) return
+
         const token = localStorage.getItem('zeiterfassung_token')
-        if (!token) return
+        if (!token) {
+            endAction()
+            return
+        }
         const pauseTime = new Date().toISOString()
         const pauseOperationId = createOperationId()
 
@@ -421,21 +445,47 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
         }
 
         try {
-            const controller = new AbortController()
-            const timeoutId = setTimeout(() => controller.abort(), 3000)
+            try {
+                const controller = new AbortController()
+                const timeoutId = setTimeout(() => controller.abort(), 3000)
 
-            const res = await fetch('/api/zeiterfassung/pause', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(buildBookingRequestPayload({ token }, pauseTime, pauseOperationId)),
-                signal: controller.signal
-            })
-            clearTimeout(timeoutId)
+                const res = await fetch('/api/zeiterfassung/pause', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(buildBookingRequestPayload({ token }, pauseTime, pauseOperationId)),
+                    signal: controller.signal
+                })
+                clearTimeout(timeoutId)
 
-            if (res.ok) {
-                const data = await res.json()
-                console.log('Pause gestartet:', data)
-                // Update session to show pause
+                if (res.ok) {
+                    const data = await res.json()
+                    console.log('Pause gestartet:', data)
+                    // Update session to show pause
+                    const pauseSession: Session = {
+                        projektId: null,
+                        projektName: null,
+                        kundenName: null,
+                        auftragsnummer: null,
+                        arbeitsgangId: null,
+                        arbeitsgangName: null,
+                        startTime: data.startZeit,
+                        typ: 'PAUSE',
+                    }
+                    localStorage.setItem('zeiterfassung_active_session', JSON.stringify(pauseSession))
+                    setActiveSession(pauseSession)
+                } else {
+                    // 4xx vom Server: NICHT stumm schlucken. Sonst sieht der
+                    // Handwerker beim Tap auf "Pause" gar nichts (Bug-Symptom:
+                    // "Pause anstechen hat nicht funktioniert"). Wir werfen
+                    // und lassen den Offline-/Reparatur-Pfad uebernehmen:
+                    // optimistisches UI + addPendingEntryWithOperationId; ein
+                    // dauerhaft abgelehnter Eintrag landet in der Reparatur-Liste.
+                    throw new Error('Server error')
+                }
+            } catch {
+                console.log('Offline (oder Server-Fehler) - speichere Pause-Event lokal')
+                await OfflineService.addPendingEntryWithOperationId('pause', { token }, pauseTime, pauseOperationId, workDurationMinutes)
+                // Optimistic UI update for offline pause
                 const pauseSession: Session = {
                     projektId: null,
                     projektName: null,
@@ -443,81 +493,66 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
                     auftragsnummer: null,
                     arbeitsgangId: null,
                     arbeitsgangName: null,
-                    startTime: data.startZeit,
+                    startTime: pauseTime,
                     typ: 'PAUSE',
                 }
+                // Cooldown setzen, damit ein nachfolgendes loadActiveSession() die
+                // optimistische Pause nicht durch eine vom Server weiterhin aktive
+                // Arbeitsbuchung ueberschreibt - z.B. wenn das Pause-Event spaeter
+                // in den failed-Store wandert (pendingCount=0) und der Server die
+                // alte Buchung noch liefert. Reuse vom Start-Cooldown-Key, der im
+                // loadActiveSession exakt diese "behalte lokale Session"-Semantik
+                // umsetzt (siehe Zeile 222-231).
+                localStorage.setItem('zeiterfassung_start_synced_at', Date.now().toString())
                 localStorage.setItem('zeiterfassung_active_session', JSON.stringify(pauseSession))
                 setActiveSession(pauseSession)
-            } else {
-                // 4xx vom Server: NICHT stumm schlucken. Sonst sieht der
-                // Handwerker beim Tap auf "Pause" gar nichts (Bug-Symptom:
-                // "Pause anstechen hat nicht funktioniert"). Wir werfen
-                // und lassen den Offline-/Reparatur-Pfad uebernehmen:
-                // optimistisches UI + addPendingEntryWithOperationId; ein
-                // dauerhaft abgelehnter Eintrag landet in der Reparatur-Liste.
-                throw new Error('Server error')
             }
-        } catch {
-            console.log('Offline (oder Server-Fehler) - speichere Pause-Event lokal')
-            await OfflineService.addPendingEntryWithOperationId('pause', { token }, pauseTime, pauseOperationId, workDurationMinutes)
-            // Optimistic UI update for offline pause
-            const pauseSession: Session = {
-                projektId: null,
-                projektName: null,
-                kundenName: null,
-                auftragsnummer: null,
-                arbeitsgangId: null,
-                arbeitsgangName: null,
-                startTime: new Date().toISOString(),
-                typ: 'PAUSE',
-            }
-            // Cooldown setzen, damit ein nachfolgendes loadActiveSession() die
-            // optimistische Pause nicht durch eine vom Server weiterhin aktive
-            // Arbeitsbuchung ueberschreibt - z.B. wenn das Pause-Event spaeter
-            // in den failed-Store wandert (pendingCount=0) und der Server die
-            // alte Buchung noch liefert. Reuse vom Start-Cooldown-Key, der im
-            // loadActiveSession exakt diese "behalte lokale Session"-Semantik
-            // umsetzt (siehe Zeile 222-231).
-            localStorage.setItem('zeiterfassung_start_synced_at', Date.now().toString())
-            localStorage.setItem('zeiterfassung_active_session', JSON.stringify(pauseSession))
-            setActiveSession(pauseSession)
+            loadHeuteGearbeitet()
+        } finally {
+            endAction()
         }
     }
 
     // Resume from pause - stop the active PAUSE booking, then navigate to start work
     const handleResumeFromPause = async () => {
+        if (!beginAction()) return
+
         const token = localStorage.getItem('zeiterfassung_token')
         const stopTime = new Date().toISOString()
         const stopOperationId = createOperationId()
 
         try {
-            const controller = new AbortController()
-            const timeoutId = setTimeout(() => controller.abort(), 3000)
+            try {
+                const controller = new AbortController()
+                const timeoutId = setTimeout(() => controller.abort(), 3000)
 
-            const res = await fetch('/api/zeiterfassung/stop', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(buildBookingRequestPayload({ token }, stopTime, stopOperationId)),
-                signal: controller.signal
-            })
-            clearTimeout(timeoutId)
+                const res = await fetch('/api/zeiterfassung/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(buildBookingRequestPayload({ token }, stopTime, stopOperationId)),
+                    signal: controller.signal
+                })
+                clearTimeout(timeoutId)
 
-            if (!res.ok) {
-                console.warn('Stop-Aufruf nicht erfolgreich, speichere für später')
+                if (!res.ok) {
+                    console.warn('Stop-Aufruf nicht erfolgreich, speichere für später')
+                    await OfflineService.addPendingEntryWithOperationId('stop', { token }, stopTime, stopOperationId)
+                }
+            } catch {
+                console.log('Offline - speichere Stop-Event für Pause lokal')
                 await OfflineService.addPendingEntryWithOperationId('stop', { token }, stopTime, stopOperationId)
             }
-        } catch {
-            console.log('Offline - speichere Stop-Event für Pause lokal')
-            await OfflineService.addPendingEntryWithOperationId('stop', { token }, stopTime, stopOperationId)
-        }
 
-        // Stop-Cooldown setzen (analog zu handleStopSession), damit der Server
-        // die beendete Pause-Session nicht versehentlich zurückbringt.
-        localStorage.setItem('zeiterfassung_stopped_at', Date.now().toString())
-        // Clear local pause session and navigate to time tracking
-        localStorage.removeItem('zeiterfassung_active_session')
-        setActiveSession(null)
-        navigate('/zeiterfassung')
+            // Stop-Cooldown setzen (analog zu handleStopSession), damit der Server
+            // die beendete Pause-Session nicht versehentlich zurückbringt.
+            localStorage.setItem('zeiterfassung_stopped_at', Date.now().toString())
+            // Clear local pause session and navigate to time tracking
+            localStorage.removeItem('zeiterfassung_active_session')
+            setActiveSession(null)
+            navigate('/zeiterfassung')
+        } finally {
+            endAction()
+        }
     }
 
     // Switch to a different project - DON'T stop yet, navigate to selection first
@@ -899,7 +934,8 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
                                 <>
                                     <button
                                         onClick={handleResumeFromPause}
-                                        className="bg-green-100 hover:bg-green-200 text-green-700 font-medium py-3 rounded-xl flex items-center justify-center gap-2 transition-colors col-span-2"
+                                        disabled={actionInProgress}
+                                        className="bg-rose-600 hover:bg-rose-700 text-white font-medium py-3 rounded-xl flex items-center justify-center gap-2 transition-colors col-span-2 disabled:opacity-60 disabled:pointer-events-none"
                                     >
                                         <Play className="w-4 h-4" />
                                         Arbeit fortsetzen
@@ -916,14 +952,14 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
                                     </button>
                                     <button
                                         onClick={handleSwitchProjekt}
-                                        className="bg-blue-100 hover:bg-blue-200 text-blue-700 font-medium py-3 rounded-xl flex items-center justify-center gap-2 transition-colors text-xs"
+                                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-3 rounded-xl flex items-center justify-center gap-2 transition-colors text-xs"
                                     >
                                         <ArrowRightLeft className="w-4 h-4" />
                                         Auftrag
                                     </button>
                                     <button
                                         onClick={handleOpenKategorieSwitch}
-                                        className="bg-purple-100 hover:bg-purple-200 text-purple-700 font-medium py-3 rounded-xl flex items-center justify-center gap-2 transition-colors text-xs"
+                                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-3 rounded-xl flex items-center justify-center gap-2 transition-colors text-xs"
                                     >
                                         <ArrowRightLeft className="w-4 h-4" />
                                         Kategorie
@@ -936,7 +972,8 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
                         {!isAbwesenheitOderPause(activeSession.typ) && (
                             <button
                                 onClick={handlePause}
-                                className="w-full bg-amber-100 hover:bg-amber-200 text-amber-700 font-semibold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors mb-2"
+                                disabled={actionInProgress}
+                                className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors mb-2 disabled:opacity-60 disabled:pointer-events-none"
                             >
                                 <Clock className="w-5 h-5" />
                                 Pause
@@ -946,7 +983,8 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
                         {/* Gehen Button */}
                         <button
                             onClick={handleStopSession}
-                            className="w-full bg-rose-600 hover:bg-rose-700 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                            disabled={actionInProgress}
+                            className="w-full bg-rose-600 hover:bg-rose-700 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-60 disabled:pointer-events-none"
                         >
                             <LogOut className="w-5 h-5" />
                             Gehen (Feierabend)

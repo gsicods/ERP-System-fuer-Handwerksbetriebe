@@ -231,6 +231,23 @@ describe('OfflineService', () => {
             expect(callOrder[1]).toContain('/stop')
         })
 
+        it('sollte Offline-Start vor Offline-Pause replayen, damit Pause die laufende Buchung schliesst', async () => {
+            const callOrder: string[] = []
+            vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+                callOrder.push(typeof url === 'string' ? url : url.toString())
+                return { ok: true, status: 200, json: () => Promise.resolve({}) } as Response
+            })
+
+            await OfflineService.addPendingEntry('pause', { token: 'a' }, '2024-06-15T09:00:00Z', 60)
+            await OfflineService.addPendingEntry('start', { token: 'a', projektId: 1, arbeitsgangId: 2 }, '2024-06-15T08:00:00Z')
+
+            const result = await OfflineService._syncPendingInternal()
+
+            expect(result.synced).toBe(2)
+            expect(callOrder[0]).toContain('/start')
+            expect(callOrder[1]).toContain('/pause')
+        })
+
         it('sollte 4xx als discarded zählen und Entry in Reparatur-Liste verschieben', async () => {
             vi.spyOn(globalThis, 'fetch').mockImplementation(() => clientError(409))
             await OfflineService.addPendingEntry('stop', { token: 'a' })

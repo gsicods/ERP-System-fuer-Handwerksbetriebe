@@ -186,4 +186,34 @@ describe('DashboardPage – Pause-Button', () => {
         // Im Happy-Path NICHT offline einreihen
         expect(mockedOfflineService.addPendingEntryWithOperationId).not.toHaveBeenCalled()
     })
+
+    it('Pause-Doppeltap erzeugt nur eine Pause-Operation', async () => {
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+            const url = typeof input === 'string' ? input : input.toString()
+            if (url.includes('/api/zeiterfassung/pause')) {
+                await new Promise(resolve => setTimeout(resolve, 25))
+                return new Response(
+                    JSON.stringify({ id: 42, startZeit: new Date().toISOString(), typ: 'PAUSE', status: 'gestartet' }),
+                    { status: 200, headers: { 'Content-Type': 'application/json' } },
+                )
+            }
+            return new Response('{}', { status: 200 })
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        renderDashboard()
+
+        const pauseButton = await screen.findByRole('button', { name: /pause/i })
+        pauseButton.click()
+        pauseButton.click()
+
+        await screen.findByText('☕ Pause')
+
+        const pauseCalls = fetchMock.mock.calls.filter(([input]) => {
+            const url = typeof input === 'string' ? input : input.toString()
+            return url.includes('/api/zeiterfassung/pause')
+        })
+        expect(pauseCalls).toHaveLength(1)
+        expect(mockedOfflineService.addPendingEntryWithOperationId).not.toHaveBeenCalled()
+    })
 })
