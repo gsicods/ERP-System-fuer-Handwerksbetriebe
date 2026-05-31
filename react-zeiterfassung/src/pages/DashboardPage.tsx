@@ -22,6 +22,12 @@ interface Session {
 const isAbwesenheitOderPause = (typ: Session['typ']) =>
     typ === 'URLAUB' || typ === 'KRANKHEIT' || typ === 'FORTBILDUNG' || typ === 'PAUSE';
 
+// Eine gerade erst lokal gestartete/gewechselte Buchung gilt für dieses
+// Zeitfenster als "frisch". Innerhalb dieses Fensters darf ein verzögertes
+// GET /aktiv (Server-Transaction noch nicht sichtbar) die lokale Session NICHT
+// löschen. Gleiche Größenordnung wie die bestehenden Cooldown-Fenster (15s).
+const SESSION_FRESHNESS_MS = 15000;
+
 // Rotating daily greetings for a personal touch
 const getDailyGreeting = (): string => {
     const greetings = [
@@ -264,7 +270,24 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
                 } else {
                     // Server says no active session AND we have no pending entries
                     // (we already returned early above if pendingCount > 0)
-                    // Safe to trust the server here.
+
+                    // FRISCH-GUARD: Eine gerade erst lokal gestartete/gewechselte
+                    // Buchung darf NICHT durch eine verzögerte Server-Antwort gelöscht
+                    // werden. Der GET /aktiv (2s-Timeout) kann den frisch committeten
+                    // Start/Wechsel noch nicht sehen (Transaction-Visibility) und liefert
+                    // dann fälschlich aktiv:false. Symptom: "Aktive Buchung"-Karte
+                    // verschwindet direkt nach dem Anstechen/Wechseln und kommt erst nach
+                    // App-Neustart zurück. Ein echtes Beenden ist hier nicht betroffen:
+                    // handleStopSession setzt zuerst 'zeiterfassung_stopped_at', das oben
+                    // (Stop-Cooldown) bereits früher returnt.
+                    if (localSession?.startTime) {
+                        const sessionAge = Date.now() - new Date(localSession.startTime).getTime()
+                        if (sessionAge < SESSION_FRESHNESS_MS) {
+                            console.log(`🆕 Lokale Session ist erst ${(sessionAge / 1000).toFixed(1)}s alt - ignoriere Server aktiv:false (Frisch-Guard)`)
+                            return
+                        }
+                    }
+
                     if (localSession) {
                         console.log('ℹ️ Server hat keine aktive Session mehr - räume lokale Session auf')
                     }

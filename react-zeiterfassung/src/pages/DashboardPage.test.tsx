@@ -217,3 +217,80 @@ describe('DashboardPage – Pause-Button', () => {
         expect(mockedOfflineService.addPendingEntryWithOperationId).not.toHaveBeenCalled()
     })
 })
+
+describe('DashboardPage – loadActiveSession Frisch-Guard', () => {
+    // Stellt ein fetch-Mock bereit, bei dem GET /aktiv "keine aktive Buchung"
+    // (leeres Objekt, kein .id) liefert. Genau diese verzögerte Server-Antwort
+    // hat die frisch angestochene Buchung früher gelöscht.
+    const stubFetchAktivLeer = () => {
+        const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+        vi.stubGlobal('fetch', fetchMock)
+        return fetchMock
+    }
+
+    beforeEach(() => {
+        vi.stubGlobal('localStorage', createMemoryStorage())
+        localStorage.setItem('zeiterfassung_token', 'tok-test')
+
+        mockedOfflineService.getFailedEntries.mockResolvedValue([])
+        mockedOfflineService.getHeuteGearbeitet.mockResolvedValue({
+            stunden: 0,
+            minuten: 0,
+            fromCache: false,
+        })
+        // pendingCount=0: voll synchronisiert -> loadActiveSession führt den
+        // Server-Abgleich (GET /aktiv) wirklich aus. Das ist der Online-Start-Fall.
+        mockedOfflineService.getPendingCount.mockResolvedValue(0)
+        mockedOfflineService.getUnsyncedStopMinutes.mockResolvedValue(0)
+        mockedOfflineService.addPendingEntryWithOperationId.mockResolvedValue(undefined)
+    })
+
+    afterEach(() => {
+        vi.clearAllMocks()
+        localStorage.clear()
+        vi.unstubAllGlobals()
+    })
+
+    it('behält eine frisch angestochene Buchung, wenn GET /aktiv (verzögert) noch aktiv:false liefert', async () => {
+        // REGRESSION: Nach dem Online-Anstechen verschwand die "Aktive Buchung"-
+        // Karte, weil der Server die frisch committete Buchung noch nicht sah und
+        // GET /aktiv aktiv:false lieferte -> lokale Session wurde gelöscht.
+        const frischeSession = { ...buildActiveWorkSession(), startTime: new Date().toISOString() }
+        localStorage.setItem('zeiterfassung_active_session', JSON.stringify(frischeSession))
+
+        const fetchMock = stubFetchAktivLeer()
+        renderDashboard()
+
+        // Warten bis der Server-Abgleich tatsächlich gelaufen ist...
+        await waitFor(() => {
+            const aktivCall = fetchMock.mock.calls.some(([input]) => {
+                const url = typeof input === 'string' ? input : input?.toString() ?? ''
+                return url.includes('/api/zeiterfassung/aktiv/')
+            })
+            expect(aktivCall).toBe(true)
+        })
+
+        // ...die Karte bleibt sichtbar und die Session bleibt in localStorage.
+        expect(await screen.findByText('Bauvorhaben Mustermann')).toBeInTheDocument()
+        expect(localStorage.getItem('zeiterfassung_active_session')).not.toBeNull()
+    })
+
+    it('räumt eine alte (nicht frische) Session weiterhin auf, wenn der Server aktiv:false liefert', async () => {
+        // NO-REGRESSION: Wurde die Buchung woanders (PC) beendet, muss eine alte
+        // lokale Session beim Server-Abgleich verschwinden. Der Frisch-Guard darf
+        // das nicht verhindern.
+        const alteSession = {
+            ...buildActiveWorkSession(),
+            startTime: new Date(Date.now() - 60 * 60_000).toISOString(), // 60 Min alt
+        }
+        localStorage.setItem('zeiterfassung_active_session', JSON.stringify(alteSession))
+
+        stubFetchAktivLeer()
+        renderDashboard()
+
+        await waitFor(() => {
+            expect(localStorage.getItem('zeiterfassung_active_session')).toBeNull()
+        })
+        expect(screen.queryByText('Bauvorhaben Mustermann')).not.toBeInTheDocument()
+    })
+})
