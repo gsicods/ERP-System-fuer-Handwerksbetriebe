@@ -293,4 +293,47 @@ describe('DashboardPage – loadActiveSession Frisch-Guard', () => {
         })
         expect(screen.queryByText('Bauvorhaben Mustermann')).not.toBeInTheDocument()
     })
+
+    it('behält eine NEUE Buchung, die nach einem Stop angestochen wurde (Pause -> Arbeit fortsetzen)', async () => {
+        // REGRESSION: Pause -> "Arbeit fortsetzen" setzt zeiterfassung_stopped_at
+        // (Stop-Cooldown). Stach der Nutzer danach ein Projekt an, löschte der
+        // Stop-Cooldown die frische Buchung wieder - sie erschien erst nach 15s.
+        const stopVor2s = Date.now() - 2000
+        localStorage.setItem('zeiterfassung_stopped_at', stopVor2s.toString())
+        const neueSession = {
+            ...buildActiveWorkSession(),
+            startTime: new Date(stopVor2s + 1500).toISOString(), // NACH dem Stop gestartet
+        }
+        localStorage.setItem('zeiterfassung_active_session', JSON.stringify(neueSession))
+
+        stubFetchAktivLeer()
+        renderDashboard()
+
+        // Karte bleibt sichtbar, Session bleibt erhalten, Cooldown wird beendet.
+        expect(await screen.findByText('Bauvorhaben Mustermann')).toBeInTheDocument()
+        await waitFor(() => {
+            expect(localStorage.getItem('zeiterfassung_stopped_at')).toBeNull()
+        })
+        expect(localStorage.getItem('zeiterfassung_active_session')).not.toBeNull()
+    })
+
+    it('räumt eine vor dem Stop gestartete Session im Cooldown weiterhin auf', async () => {
+        // NO-REGRESSION: Eine Session, die VOR dem Stop lief (z.B. die gerade
+        // beendete Pause), muss vom Stop-Cooldown weiterhin entfernt werden.
+        const stopVor2s = Date.now() - 2000
+        localStorage.setItem('zeiterfassung_stopped_at', stopVor2s.toString())
+        const alteSession = {
+            ...buildActiveWorkSession(),
+            startTime: new Date(stopVor2s - 60_000).toISOString(), // VOR dem Stop gestartet
+        }
+        localStorage.setItem('zeiterfassung_active_session', JSON.stringify(alteSession))
+
+        stubFetchAktivLeer()
+        renderDashboard()
+
+        await waitFor(() => {
+            expect(localStorage.getItem('zeiterfassung_active_session')).toBeNull()
+        })
+        expect(screen.queryByText('Bauvorhaben Mustermann')).not.toBeInTheDocument()
+    })
 })

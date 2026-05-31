@@ -203,8 +203,21 @@ export default function DashboardPage({ mitarbeiter, syncStatus, onSync }: Dashb
         // Sonst sieht der User eine alte (Pause-)Session, die er nicht mehr loswird.
         const stoppedAt = localStorage.getItem('zeiterfassung_stopped_at')
         if (stoppedAt) {
-            const stoppedElapsed = Date.now() - parseInt(stoppedAt, 10)
-            if (stoppedElapsed < 15000) {
+            const stoppedAtMs = parseInt(stoppedAt, 10)
+            const stoppedElapsed = Date.now() - stoppedAtMs
+            if (stoppedElapsed < SESSION_FRESHNESS_MS) {
+                // Wurde die lokale Session NACH dem Stop gestartet, ist sie eine
+                // NEUE Buchung (z.B. Pause -> "Arbeit fortsetzen" -> Projekt
+                // anstechen). Der Stop-Cooldown darf sie NICHT löschen, sonst
+                // verschwindet die frisch angestochene Buchung bis der Cooldown
+                // nach 15s abläuft. Sie ist lokal autoritativ -> behalten.
+                const sessionStartedAfterStop = !!localSession?.startTime
+                    && new Date(localSession.startTime).getTime() >= stoppedAtMs
+                if (sessionStartedAfterStop) {
+                    console.log('🆕 Neue Buchung nach Stop - behalte lokale Session, Cooldown beendet')
+                    localStorage.removeItem('zeiterfassung_stopped_at')
+                    return
+                }
                 console.log(`🛑 Stop wurde vor ${(stoppedElapsed / 1000).toFixed(1)}s ausgelöst - ignoriere Server-Session (Cooldown)`)
                 if (localSession) {
                     // Defensive: localStorage sollte leer sein, aber falls nicht, aufräumen
