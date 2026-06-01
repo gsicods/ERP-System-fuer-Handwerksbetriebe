@@ -18,7 +18,7 @@ public class FormularTemplateAssignment {
     private String templateName;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "dokumenttyp_enum", nullable = false, length = 30)
+    @Column(name = "dokumenttyp_enum", nullable = false, length = 30, columnDefinition = "varchar(30)")
     private Dokumenttyp dokumenttyp;
 
     @ManyToOne(fetch = FetchType.LAZY)

@@ -38,7 +38,7 @@ public class Textbaustein {
     @ElementCollection(fetch = FetchType.EAGER)
     @Enumerated(EnumType.STRING)
     @CollectionTable(name = "textbaustein_dokumenttyp_enum", joinColumns = @JoinColumn(name = "textbaustein_id"))
-    @Column(name = "dokumenttyp", length = 30)
+    @Column(name = "dokumenttyp", length = 30, columnDefinition = "varchar(30)")
     private Set<Dokumenttyp> dokumenttypen = new LinkedHashSet<>();
 
     @Column(name = "sort_order")

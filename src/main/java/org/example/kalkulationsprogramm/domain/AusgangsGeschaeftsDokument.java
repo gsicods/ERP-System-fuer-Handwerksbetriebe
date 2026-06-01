@@ -38,7 +38,7 @@ public class AusgangsGeschaeftsDokument {
      * Typ des Dokuments (Anfrage, AB, Rechnung, etc.)
      */
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 30)
+    @Column(nullable = false, length = 30, columnDefinition = "varchar(30)")
     private AusgangsGeschaeftsDokumentTyp typ;
 
     /**
