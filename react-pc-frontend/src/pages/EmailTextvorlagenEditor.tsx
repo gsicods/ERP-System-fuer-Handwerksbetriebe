@@ -84,6 +84,9 @@ const SAMPLE_CONTEXT: Record<string, string> = {
   BETRAG: '1.234,56 €',
   BENUTZER: 'Thomas Kuhn',
   REVIEW_LINK: '<em>(Bewertungs-Link)</em>',
+  BANK: 'Musterbank',
+  IBAN: 'DE89 3704 0044 0532 0130 00',
+  BIC: 'COBADEFFXXX',
   NACHRICHT: 'Wir möchten den Wintergarten neu eindecken und benötigen ein Angebot.',
   ANFRAGE_DATUM: '11.05.2026',
   ANFRAGENUMMER: '00042'

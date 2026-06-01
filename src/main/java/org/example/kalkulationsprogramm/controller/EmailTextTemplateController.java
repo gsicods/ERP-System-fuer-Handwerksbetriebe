@@ -75,6 +75,12 @@ public class EmailTextTemplateController {
             Map.of("token", "{{BETRAG}}", "label", "Betrag (formatiert)"),
             Map.of("token", "{{BENUTZER}}", "label", "Sachbearbeiter / Benutzer"),
             Map.of("token", "{{REVIEW_LINK}}", "label", "Google-Bewertungs-Link"),
+            // Bankverbindung der Firma (aus den Firmeneinstellungen).
+            // Wird vom EmailTextTemplateService automatisch in jeden Render-
+            // Kontext eingespielt, daher in allen Vorlagen verfuegbar.
+            Map.of("token", "{{BANK}}", "label", "Bank (aus Firmeneinstellungen)"),
+            Map.of("token", "{{IBAN}}", "label", "IBAN (aus Firmeneinstellungen)"),
+            Map.of("token", "{{BIC}}", "label", "BIC (aus Firmeneinstellungen)"),
             // Webseiten-Lead-Bestätigung
             Map.of("token", "{{NACHRICHT}}", "label", "Nachricht aus dem Webseiten-Funnel"),
             Map.of("token", "{{ANFRAGE_DATUM}}", "label", "Anfrage-Datum (Webseite)"),
