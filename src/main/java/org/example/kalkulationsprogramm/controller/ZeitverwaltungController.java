@@ -460,6 +460,7 @@ public class ZeitverwaltungController {
         for (Abwesenheit a : abwesenheiten) {
             Map<String, Object> abwesenheitBuchung = new LinkedHashMap<>();
             abwesenheitBuchung.put("id", -a.getId()); // Negative ID um von echten Buchungen zu unterscheiden
+            abwesenheitBuchung.put("abwesenheitId", a.getId()); // Echte ID für das Löschen via /api/abwesenheit
             abwesenheitBuchung.put("projektId", null);
             abwesenheitBuchung.put("projektName", a.getTyp().name());
             abwesenheitBuchung.put("arbeitsgangId", null);

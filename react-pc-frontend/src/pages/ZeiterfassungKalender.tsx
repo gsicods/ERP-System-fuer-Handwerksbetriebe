@@ -1102,8 +1102,13 @@ function DayEditorModal({
     const handleDelete = async (buchung: Buchung) => {
         const id = buchung.id;
 
+        // Abwesenheiten (URLAUB, KRANKHEIT, etc.) werden mit negativer Anzeige-ID
+        // ausgeliefert, sind aber serverseitig persistiert und müssen über die echte
+        // abwesenheitId gelöscht werden – NICHT nur lokal entfernt werden.
+        const isAbwesenheit = !!buchung.typ && ['URLAUB', 'KRANKHEIT', 'FORTBILDUNG', 'ZEITAUSGLEICH'].includes(buchung.typ);
+
         // Neue (ungespeicherte) Buchungen nur lokal entfernen
-        if (id < 0) {
+        if (id < 0 && !isAbwesenheit) {
             setBuchungen(prev => prev.filter(b => b.id !== id));
             return;
         }
@@ -1111,10 +1116,9 @@ function DayEditorModal({
         if (!await confirmDialog({ title: 'Buchung löschen', message: 'Buchung wirklich löschen?', variant: 'danger', confirmLabel: 'Löschen' })) return;
 
         try {
-            // Abwesenheiten (URLAUB, KRANKHEIT, etc.) über anderen Endpoint löschen
-            const isAbwesenheit = buchung.typ && ['URLAUB', 'KRANKHEIT', 'FORTBILDUNG', 'ZEITAUSGLEICH'].includes(buchung.typ);
+            // Abwesenheiten über anderen Endpoint löschen (Fallback: Betrag der negativen Anzeige-ID)
             const deleteUrl = isAbwesenheit
-                ? `/api/abwesenheit/${buchung.abwesenheitId || id}`
+                ? `/api/abwesenheit/${buchung.abwesenheitId ?? Math.abs(id)}`
                 : `/api/zeitverwaltung/buchungen/${id}`;
 
             const res = await fetch(deleteUrl, { method: 'DELETE' });

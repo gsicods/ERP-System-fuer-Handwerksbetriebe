@@ -24,6 +24,7 @@ public class AbwesenheitService {
     private final ZeitkontoService zeitkontoService;
     private final FeiertagService feiertagService;
     private final MonatsSaldoService monatsSaldoService;
+    private final ZeitbuchungRepository zeitbuchungRepository;
 
     /**
      * Bucht eine Abwesenheit für einen Mitarbeiter an einem bestimmten Tag.
@@ -66,9 +67,21 @@ public class AbwesenheitService {
         }
 
         // Bei halbem Tag nur 50% der Stunden
-        BigDecimal stundenZuBuchen = halberTag
+        BigDecimal basisStunden = halberTag
                 ? sollStunden.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP)
                 : sollStunden;
+
+        // KRANKHEIT: Bereits an diesem Tag gearbeitete Stunden vom Soll abziehen.
+        // Szenario: Mitarbeiter arbeitet morgens, merkt dass es nicht geht, geht zum
+        // Arzt und meldet sich krank. Dann füllt die Krankheit nur die Lücke bis zum
+        // Soll auf (gearbeitet + Krankheit = Soll), statt zusätzlich Überstunden zu
+        // erzeugen.
+        BigDecimal gearbeiteteStunden = typ == AbwesenheitsTyp.KRANKHEIT
+                ? berechneGearbeiteteStunden(mitarbeiterId, datum)
+                : BigDecimal.ZERO;
+        BigDecimal stundenZuBuchen = typ == AbwesenheitsTyp.KRANKHEIT
+                ? basisStunden.subtract(gearbeiteteStunden).max(BigDecimal.ZERO)
+                : basisStunden;
 
         // ZEITAUSGLEICH: Prüfe ob genügend Überstunden vorhanden
         if (typ == AbwesenheitsTyp.ZEITAUSGLEICH) {
@@ -86,7 +99,14 @@ public class AbwesenheitService {
         abwesenheit.setDatum(datum);
         abwesenheit.setTyp(typ);
         abwesenheit.setStunden(stundenZuBuchen);
-        abwesenheit.setNotiz(halberTag ? "Halber Tag (manuell gebucht)" : "Manuell gebucht");
+        if (typ == AbwesenheitsTyp.KRANKHEIT && gearbeiteteStunden.compareTo(BigDecimal.ZERO) > 0) {
+            // Es wurde an diesem Tag bereits gearbeitet – Krankheit füllt nur die Lücke.
+            // Echten gearbeiteten Wert verwenden (nicht aus dem geclampten Saldo zurückrechnen).
+            abwesenheit.setNotiz("Krankheit (abzgl. " + gearbeiteteStunden.stripTrailingZeros().toPlainString()
+                    + " h gearbeitet)");
+        } else {
+            abwesenheit.setNotiz(halberTag ? "Halber Tag (manuell gebucht)" : "Manuell gebucht");
+        }
 
         Abwesenheit gespeichert = abwesenheitRepository.save(abwesenheit);
 
@@ -94,6 +114,22 @@ public class AbwesenheitService {
         monatsSaldoService.invalidiereFuerDatum(mitarbeiterId, datum);
 
         return gespeichert;
+    }
+
+    /**
+     * Summiert die an einem Tag bereits gearbeiteten Stunden (ohne Pausen).
+     * Wird genutzt, um bei Krankheit nur die Lücke bis zum Soll aufzufüllen.
+     */
+    private BigDecimal berechneGearbeiteteStunden(Long mitarbeiterId, LocalDate datum) {
+        java.time.LocalDateTime tagStart = datum.atStartOfDay();
+        java.time.LocalDateTime tagEnde = datum.atTime(23, 59, 59);
+        return zeitbuchungRepository
+                .findByMitarbeiterIdAndStartZeitBetween(mitarbeiterId, tagStart, tagEnde)
+                .stream()
+                .filter(b -> b.getTyp() != BuchungsTyp.PAUSE)
+                .map(Zeitbuchung::getAnzahlInStunden)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /**
