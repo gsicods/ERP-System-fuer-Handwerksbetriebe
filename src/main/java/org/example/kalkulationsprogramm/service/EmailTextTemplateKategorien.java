@@ -17,6 +17,7 @@ public final class EmailTextTemplateKategorien {
     private static final Map<String, EmailTextTemplateKategorie> ZUORDNUNG = Map.ofEntries(
             // Verkaufs- und Buchhaltungsdokumente an den Kunden
             Map.entry("ANGEBOT", EmailTextTemplateKategorie.DOKUMENT),
+            Map.entry("NACHTRAGSANGEBOT", EmailTextTemplateKategorie.DOKUMENT),
             Map.entry("AUFTRAGSBESTAETIGUNG", EmailTextTemplateKategorie.DOKUMENT),
             Map.entry("ZEICHNUNG", EmailTextTemplateKategorie.DOKUMENT),
             Map.entry("RECHNUNG", EmailTextTemplateKategorie.DOKUMENT),

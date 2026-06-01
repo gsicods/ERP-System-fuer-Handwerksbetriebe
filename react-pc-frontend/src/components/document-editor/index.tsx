@@ -1793,7 +1793,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         // Bei Angeboten muss vor dem finalen Versand die Gültigkeit des
         // Annahme-Links gewählt werden. Im Entwurfs-Modus gibt es keinen
         // Annahme-Link, also auch keinen Gültigkeits-Dialog.
-        if (dokumentTyp === 'ANGEBOT' && !draftSendMode) {
+        if ((dokumentTyp === 'ANGEBOT' || dokumentTyp === 'NACHTRAGSANGEBOT') && !draftSendMode) {
             setPendingFormat(format);
             setShowFormatDialog(false);
             setShowValidityDialog(true);
@@ -1863,6 +1863,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
             let pdfDateiname: string | null = null;
             const brauchtPdfSpeicherung = !isDraft && aktiveDokumentId && (
                 dokumentTyp === 'ANGEBOT' ||
+                dokumentTyp === 'NACHTRAGSANGEBOT' ||
                 dokumentTyp === 'AUFTRAGSBESTAETIGUNG' ||
                 showFinalizationPrompt
             );

@@ -130,6 +130,7 @@ function flattenTree(nodes: DokumentTreeNode[]): DokumentTreeNode[] {
 
 const TYP_COLORS: Record<string, string> = {
     'ANGEBOT': 'bg-blue-50 text-blue-700 border-blue-200',
+    'NACHTRAGSANGEBOT': 'bg-slate-100 text-slate-700 border-slate-300',
     'AUFTRAGSBESTAETIGUNG': 'bg-purple-50 text-purple-700 border-purple-200',
     'RECHNUNG': 'bg-rose-50 text-rose-700 border-rose-200',
     'TEILRECHNUNG': 'bg-rose-50 text-rose-600 border-rose-200',
@@ -1601,10 +1602,8 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                                 <span className="text-sm text-slate-500">{ausgangsDokumente.length} Dokument{ausgangsDokumente.length !== 1 ? 'e' : ''}</span>
                                 <Button
                                     size="sm"
-                                    className="bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-rose-600 text-white hover:bg-rose-700"
                                     onClick={() => setShowDokumentTypDialog(true)}
-                                    disabled={ausgangsDokumente.some(d => !d.vorgaengerId)}
-                                    title={ausgangsDokumente.some(d => !d.vorgaengerId) ? 'Es existiert bereits ein Basisdokument' : undefined}
                                 >
                                     <Plus className="w-4 h-4 mr-1" /> Dokument erstellen
                                 </Button>
@@ -1812,11 +1811,11 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                                                         </button>
 
                                                         {/* Umwandeln - nur für bestimmte Typen */}
-                                                        {(dok.typ === 'ANGEBOT' || dok.typ === 'AUFTRAGSBESTAETIGUNG') && (
+                                                        {(dok.typ === 'ANGEBOT' || dok.typ === 'NACHTRAGSANGEBOT' || dok.typ === 'AUFTRAGSBESTAETIGUNG') && (
                                                             <>
                                                                 <hr className="my-1 border-slate-100" />
                                                                 <p className="px-4 py-1 text-xs text-slate-400 font-medium">Folgedokument erstellen:</p>
-                                                                {dok.typ === 'ANGEBOT' && (
+                                                                {(dok.typ === 'ANGEBOT' || dok.typ === 'NACHTRAGSANGEBOT') && (
                                                                     <button
                                                                         className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-purple-50 hover:text-purple-700 flex items-center gap-2"
                                                                         onClick={async () => {
@@ -2050,6 +2049,7 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                                                         {ketteItems.map((kd, idx) => {
                                                             const typConfig: Record<string, { label: string; color: string; bg: string; border: string }> = {
                                                                 ANGEBOT: { label: 'Angebot', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200' },
+                                                                NACHTRAGSANGEBOT: { label: 'Nachtrag', color: 'text-slate-700', bg: 'bg-slate-100', border: 'border-slate-300' },
                                                                 AUFTRAGSBESTAETIGUNG: { label: 'AB', color: 'text-purple-700', bg: 'bg-purple-50', border: 'border-purple-200' },
                                                                 LIEFERSCHEIN: { label: 'Lieferschein', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200' },
                                                                 RECHNUNG: { label: 'Rechnung', color: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200' },
@@ -3079,11 +3079,26 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                     </DialogHeader>
                     <div className="grid grid-cols-2 gap-3 py-4">
                         {AUSGANGS_GESCHAEFTSDOKUMENT_TYPEN
-                            .filter((typ) => ['ANGEBOT', 'RECHNUNG', 'AUFTRAGSBESTAETIGUNG'].includes(typ.value))
+                            .filter((typ) => ['ANGEBOT', 'NACHTRAGSANGEBOT', 'AUFTRAGSBESTAETIGUNG', 'RECHNUNG'].includes(typ.value))
                             .map((typ) => {
-                                const isBaseType = typ.value === 'ANGEBOT' || typ.value === 'AUFTRAGSBESTAETIGUNG';
-                                const hasBasisdokument = ausgangsDokumente.some(d => !d.vorgaengerId);
-                                const disabled = isBaseType && hasBasisdokument;
+                                // Basisdokumente sind eigene Wurzel-Vorgänge (ohne vorgaengerId).
+                                // Regel: 1× Angebot zuerst, danach beliebig viele Nachtragsangebote.
+                                // Eigenständige AB/Rechnung nur, solange noch kein Basisdokument existiert.
+                                const roots = ausgangsDokumente.filter(d => !d.vorgaengerId);
+                                const hasAngebotBasis = roots.some(d => d.typ === 'ANGEBOT');
+                                const hasAnyBasis = roots.length > 0;
+                                let disabled: boolean;
+                                let disabledTitle: string;
+                                if (typ.value === 'NACHTRAGSANGEBOT') {
+                                    disabled = !hasAngebotBasis;
+                                    disabledTitle = 'Zuerst ein Angebot anlegen';
+                                } else if (typ.value === 'ANGEBOT') {
+                                    disabled = hasAnyBasis;
+                                    disabledTitle = 'Es existiert bereits ein Basisdokument – weitere nur als Nachtragsangebot';
+                                } else {
+                                    disabled = hasAnyBasis;
+                                    disabledTitle = 'Es existiert bereits ein Basisdokument';
+                                }
                                 return (
                                     <button
                                         key={typ.value}
@@ -3098,7 +3113,7 @@ const ProjektDetailView: React.FC<ProjektDetailViewProps> = ({ projekt, onBack, 
                                                 ? 'border-slate-100 bg-slate-50 opacity-50 cursor-not-allowed'
                                                 : 'border-slate-200 hover:border-rose-300 hover:bg-rose-50'
                                         }`}
-                                        title={disabled ? 'Es existiert bereits ein Basisdokument' : undefined}
+                                        title={disabled ? disabledTitle : undefined}
                                     >
                                         <div className={`flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
                                             disabled ? 'bg-slate-100 text-slate-400' : 'bg-rose-100 text-rose-600 group-hover:bg-rose-200'

@@ -1,5 +1,7 @@
 package org.example.kalkulationsprogramm.service;
 
+import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
+import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokumentTyp;
 import org.example.kalkulationsprogramm.domain.DokumentFreigabe;
 import org.example.kalkulationsprogramm.domain.FreigabeQuellTyp;
 import org.example.kalkulationsprogramm.domain.FreigabeStatus;
@@ -164,6 +166,27 @@ class DokumentFreigabeServiceTest {
         assertThat(result.getUnterzeichnerName()).isEqualTo("Max Mustermann");
         assertThat(result.getAkzeptiertIp()).isEqualTo("1.1.1.1");
         assertThat(result.getHashAcceptance()).isEqualTo("hash-vom-ersten-klick");
+    }
+
+    /**
+     * Nachtragsangebote sind – wie Angebote – digital freigebbar. Vor dieser
+     * Erweiterung lieferte der Service nur für ANGEBOT einen Freigabe-Block.
+     */
+    @Test
+    void erstelleFreigabeBlock_fuerNachtragsangebot_liefertFreigabeBlock() {
+        AusgangsGeschaeftsDokument nachtrag = new AusgangsGeschaeftsDokument();
+        nachtrag.setId(42L);
+        nachtrag.setTyp(AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT);
+        nachtrag.setDokumentNummer("NA-2026/06/00001");
+        when(ausgangsGeschaeftsDokumentRepository.findById(42L)).thenReturn(Optional.of(nachtrag));
+        when(repository.findByQuelle(any(), any())).thenReturn(List.of());
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        Optional<String> block = service.erstelleFreigabeBlockFuerDokument(
+                42L, false, "test@example.com", null);
+
+        assertThat(block).isPresent();
+        assertThat(block.get()).contains("Nachtragsangebot");
     }
 
     /**

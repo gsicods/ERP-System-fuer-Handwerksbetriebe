@@ -125,6 +125,7 @@ public class AusgangsGeschaeftsDokumentService {
     /** Dokumenttypen, die für die Produktkategorie-Zuordnung relevant sind */
     private static final Set<AusgangsGeschaeftsDokumentTyp> KATEGORIE_RELEVANTE_TYPEN = EnumSet.of(
             AusgangsGeschaeftsDokumentTyp.ANGEBOT,
+            AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT,
             AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG
     );
 
@@ -142,14 +143,17 @@ public class AusgangsGeschaeftsDokumentService {
      */
     @Transactional
     public AusgangsGeschaeftsDokument erstellen(AusgangsGeschaeftsDokumentErstellenDto dto, String ipAdresse) {
-        // Nur ein Basisdokument (ohne Vorgänger) pro Projekt/Anfrage erlaubt
+        // Basisdokument-Regeln (Dokumente ohne Vorgänger = eigene Wurzel-Vorgänge):
+        //   - Das ERSTE Basisdokument ist das ANGEBOT (max. eines pro Projekt/Anfrage).
+        //   - Jedes WEITERE Basisdokument muss ein NACHTRAGSANGEBOT sein und setzt
+        //     ein bereits existierendes Angebot voraus. So entstehen mehrere
+        //     parallele Vorgänge (Angebot + n Nachtragsangebote), jeder mit
+        //     eigener Folgekette aus AB und Rechnungen.
+        //   - Andere Typen (z.B. eine eigenständige Rechnung ohne vorheriges
+        //     Angebot) bleiben als einzelnes Basisdokument möglich, solange noch
+        //     gar kein Basisdokument existiert.
         if (dto.getVorgaengerId() == null) {
-            if (dto.getProjektId() != null && dokumentRepository.existsByProjektIdAndVorgaengerIsNull(dto.getProjektId())) {
-                throw new IllegalStateException("Es existiert bereits ein Basisdokument für dieses Projekt.");
-            }
-            if (dto.getAnfrageId() != null && dokumentRepository.existsByAnfrageIdAndVorgaengerIsNull(dto.getAnfrageId())) {
-                throw new IllegalStateException("Es existiert bereits ein Basisdokument für dieses Anfrage.");
-            }
+            validiereBasisdokument(dto.getTyp(), dto.getProjektId(), dto.getAnfrageId());
         }
 
         AusgangsGeschaeftsDokument dokument = new AusgangsGeschaeftsDokument();
@@ -419,6 +423,7 @@ public class AusgangsGeschaeftsDokumentService {
     /** Dokumenttypen die beim Export/Versand NICHT gebucht werden (nachträglich anpassbar) */
     private static final Set<AusgangsGeschaeftsDokumentTyp> NICHT_BUCHBARE_TYPEN = EnumSet.of(
             AusgangsGeschaeftsDokumentTyp.ANGEBOT,
+            AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT,
             AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG
     );
 
@@ -1325,6 +1330,38 @@ public class AusgangsGeschaeftsDokumentService {
      * Generiert eine neue Dokumentnummer im Format {PREFIX}-YYYY/MM/NNNNN.
      * Thread-sicher durch pessimistisches Locking. Gemeinsamer Monatszähler für alle Typen.
      */
+    /**
+     * Prüft die Regeln für ein neues Basisdokument (ohne Vorgänger).
+     * Siehe Kommentar in {@link #erstellen(AusgangsGeschaeftsDokumentErstellenDto, String)}.
+     */
+    private void validiereBasisdokument(AusgangsGeschaeftsDokumentTyp typ, Long projektId, Long anfrageId) {
+        if (typ == AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT) {
+            // Nachtragsangebote bauen auf einem bestehenden Angebot auf.
+            boolean hatAngebotBasis = (projektId != null
+                        && dokumentRepository.existsByProjektIdAndVorgaengerIsNullAndTyp(projektId, AusgangsGeschaeftsDokumentTyp.ANGEBOT))
+                    || (anfrageId != null
+                        && dokumentRepository.existsByAnfrageIdAndVorgaengerIsNullAndTyp(anfrageId, AusgangsGeschaeftsDokumentTyp.ANGEBOT));
+            if (!hatAngebotBasis) {
+                throw new IllegalStateException(
+                        "Ein Nachtragsangebot benötigt ein bestehendes Angebot als Basisdokument.");
+            }
+            return;
+        }
+
+        // Alle übrigen Typen (Angebot, AB, Rechnung, …) sind nur als allererstes
+        // Basisdokument erlaubt. Sobald irgendein Basisdokument existiert, ist das
+        // einzige zulässige weitere Wurzel-Dokument ein Nachtragsangebot (oben).
+        boolean hatBasis = (projektId != null && dokumentRepository.existsByProjektIdAndVorgaengerIsNull(projektId))
+                || (anfrageId != null && dokumentRepository.existsByAnfrageIdAndVorgaengerIsNull(anfrageId));
+        if (hatBasis) {
+            if (typ == AusgangsGeschaeftsDokumentTyp.ANGEBOT) {
+                throw new IllegalStateException(
+                        "Es existiert bereits ein Basisdokument. Weitere Basisdokumente sind nur als Nachtragsangebot möglich.");
+            }
+            throw new IllegalStateException("Es existiert bereits ein Basisdokument.");
+        }
+    }
+
     private String generiereNummer(AusgangsGeschaeftsDokumentTyp typ) {
         YearMonth now = YearMonth.now();
         String monatKey = now.format(DateTimeFormatter.ofPattern("yyyy/MM"));
@@ -1354,6 +1391,7 @@ public class AusgangsGeschaeftsDokumentService {
     private String praefixFuer(AusgangsGeschaeftsDokumentTyp typ) {
         return switch (typ) {
             case ANGEBOT -> "AG";
+            case NACHTRAGSANGEBOT -> "NA";
             case AUFTRAGSBESTAETIGUNG -> "AB";
             case RECHNUNG -> "RE";
             case TEILRECHNUNG -> "TR";

@@ -48,10 +48,10 @@ public class EmailTemplateController {
 
             String body = content.htmlBody();
 
-            // Nur Angebote bekommen einen digitalen Freigabe-Link.
+            // Angebote UND Nachtragsangebote bekommen einen digitalen Freigabe-Link.
             // Auftragsbestätigungen werden vom Büro versendet — der Kunde hat dem Angebot
             // bereits zugestimmt, eine zweite digitale Bestätigung waere irreführend.
-            if (dokumentTyp.equals("ANGEBOT")
+            if ((dokumentTyp.equals("ANGEBOT") || dokumentTyp.equals("NACHTRAGSANGEBOT"))
                     && request.getDokumentId() != null) {
                 boolean isAnfrage = Boolean.TRUE.equals(request.getIsAnfrage());
                 String recipient = request.getRecipient() != null ? request.getRecipient() : "";
@@ -118,7 +118,10 @@ public class EmailTemplateController {
                         "mahnung", anrede, kundenName, bauvorhaben, projektnummer, dokumentnummer,
                         rechnungsdatum, faelligkeitsdatum, betrag, benutzer, dokumentTyp);
             }
-            case "ANGEBOT" -> {
+            case "ANGEBOT", "NACHTRAGSANGEBOT" -> {
+                // Nachtragsangebot nutzt denselben Angebots-Fallback (Betreff + Text),
+                // damit der erste Versand auch ohne hinterlegte E-Mail-Vorlage einen
+                // sinnvollen Inhalt hat und nicht nur den Freigabe-Block.
                 String anfragesnummer = request.getDokumentnummer() != null ? request.getDokumentnummer() : "";
                 String kundenName = request.getKundenName() != null ? request.getKundenName() : "";
                 return EmailService.buildOfferEmail(anrede, kundenName, bauvorhaben, anfragesnummer, benutzer, null);

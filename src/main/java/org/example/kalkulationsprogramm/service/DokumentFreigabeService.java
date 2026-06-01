@@ -335,10 +335,12 @@ public class DokumentFreigabeService
 
     private static boolean istAngebotOderABTyp(AusgangsGeschaeftsDokumentTyp typ)
     {
-        // Nur Angebote bekommen einen digitalen Freigabe-Link. Auftragsbestätigungen
-        // werden vom Büro versendet, der Kunde stimmt nur dem Angebot zu — die AB ist
-        // dessen Folge und braucht keine zweite Bestätigung mehr.
-        return typ == AusgangsGeschaeftsDokumentTyp.ANGEBOT;
+        // Angebote UND Nachtragsangebote bekommen einen digitalen Freigabe-Link:
+        // beide sind Angebote an den Kunden, die er digital annehmen kann.
+        // Auftragsbestätigungen werden vom Büro versendet, der Kunde stimmt nur dem
+        // Angebot zu — die AB ist dessen Folge und braucht keine zweite Bestätigung.
+        return typ == AusgangsGeschaeftsDokumentTyp.ANGEBOT
+                || typ == AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT;
     }
 
     private static String typZuBezeichnung(AusgangsGeschaeftsDokumentTyp typ)
@@ -347,6 +349,7 @@ public class DokumentFreigabeService
         return switch (typ)
         {
             case ANGEBOT -> "Angebot";
+            case NACHTRAGSANGEBOT -> "Nachtragsangebot";
             case AUFTRAGSBESTAETIGUNG -> "Auftragsbestätigung";
             default -> typ.name();
         };
@@ -490,7 +493,10 @@ public class DokumentFreigabeService
 
         AusgangsGeschaeftsDokument angebot = ausgangsGeschaeftsDokumentRepository.findById(angebotId).orElse(null);
         if (angebot == null) return;
-        if (angebot.getTyp() != AusgangsGeschaeftsDokumentTyp.ANGEBOT) return;
+        // Angebot UND Nachtragsangebot lösen bei digitaler Annahme dieselbe Folgekette aus
+        // (digitalAngenommen + automatische Auftragsbestätigung als Nachfolger).
+        if (angebot.getTyp() != AusgangsGeschaeftsDokumentTyp.ANGEBOT
+                && angebot.getTyp() != AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT) return;
 
         // Angebot wird mit der Annahme verbindlich → sperren.
         if (!angebot.isDigitalAngenommen())

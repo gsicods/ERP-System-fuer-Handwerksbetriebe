@@ -6,6 +6,7 @@ package org.example.kalkulationsprogramm.domain;
 public enum Dokumenttyp
 {
     ANGEBOT("Angebot"),
+    NACHTRAGSANGEBOT("Nachtragsangebot"),
     AUFTRAGSBESTAETIGUNG("Auftragsbestätigung"),
     RECHNUNG("Rechnung"),
     TEILRECHNUNG("Teilrechnung"),

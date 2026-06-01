@@ -302,6 +302,7 @@ public class AutoAuftragsbestaetigungVersandService
     {
         return switch (typ) {
             case ANGEBOT -> "Angebot";
+            case NACHTRAGSANGEBOT -> "Nachtragsangebot";
             case AUFTRAGSBESTAETIGUNG -> "Auftragsbestätigung";
             case RECHNUNG -> "Rechnung";
             case TEILRECHNUNG -> "Teilrechnung";

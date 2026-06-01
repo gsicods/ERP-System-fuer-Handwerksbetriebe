@@ -60,6 +60,19 @@ public interface AusgangsGeschaeftsDokumentRepository extends JpaRepository<Ausg
     boolean existsByAnfrageIdAndVorgaengerIsNull(Long anfrageId);
 
     /**
+     * Prüft ob für ein Projekt bereits ein Basisdokument (ohne Vorgänger) eines
+     * bestimmten Typs existiert — z.B. das ursprüngliche ANGEBOT, das ein
+     * NACHTRAGSANGEBOT voraussetzt.
+     */
+    boolean existsByProjektIdAndVorgaengerIsNullAndTyp(Long projektId, AusgangsGeschaeftsDokumentTyp typ);
+
+    /**
+     * Prüft ob für eine Anfrage bereits ein Basisdokument (ohne Vorgänger) eines
+     * bestimmten Typs existiert. Siehe {@link #existsByProjektIdAndVorgaengerIsNullAndTyp}.
+     */
+    boolean existsByAnfrageIdAndVorgaengerIsNullAndTyp(Long anfrageId, AusgangsGeschaeftsDokumentTyp typ);
+
+    /**
      * Findet alle Dokumente, die über ein Anfrage mit einem Projekt verknüpft sind
      * (anfrage.projekt_id = projektId), aber kein direktes projekt_id gesetzt haben.
      */

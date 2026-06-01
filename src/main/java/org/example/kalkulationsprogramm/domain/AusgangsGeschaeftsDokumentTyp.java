@@ -12,6 +12,14 @@ package org.example.kalkulationsprogramm.domain;
  */
 public enum AusgangsGeschaeftsDokumentTyp {
     ANGEBOT,
+    /**
+     * Nachtragsangebot: ein zusätzliches Basisdokument (eigener Wurzel-Vorgang)
+     * neben dem ursprünglichen {@link #ANGEBOT}. Verhält sich wie ein Angebot —
+     * eigener Nummernkreis (Präfix "NA"), eigene Folgedokumente (AB, Rechnungen)
+     * und digitale Freigabe. Setzt voraus, dass für Projekt/Anfrage bereits ein
+     * Angebot existiert (siehe {@code AusgangsGeschaeftsDokumentService.erstellen}).
+     */
+    NACHTRAGSANGEBOT,
     AUFTRAGSBESTAETIGUNG,
     RECHNUNG,
     TEILRECHNUNG,

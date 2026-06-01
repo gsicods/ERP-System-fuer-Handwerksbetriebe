@@ -748,6 +748,7 @@ export interface OffenerPosten {
 
 export type AusgangsGeschaeftsDokumentTyp =
   | 'ANGEBOT'
+  | 'NACHTRAGSANGEBOT'
   | 'AUFTRAGSBESTAETIGUNG'
   | 'RECHNUNG'
   | 'TEILRECHNUNG'
@@ -761,6 +762,7 @@ export type AusgangsGeschaeftsDokumentTyp =
 
 export const AUSGANGS_GESCHAEFTSDOKUMENT_TYPEN: { value: AusgangsGeschaeftsDokumentTyp; label: string }[] = [
   { value: 'ANGEBOT', label: 'Angebot' },
+  { value: 'NACHTRAGSANGEBOT', label: 'Nachtragsangebot' },
   { value: 'AUFTRAGSBESTAETIGUNG', label: 'Auftragsbestätigung' },
   { value: 'RECHNUNG', label: 'Rechnung' },
   { value: 'TEILRECHNUNG', label: 'Teilrechnung' },

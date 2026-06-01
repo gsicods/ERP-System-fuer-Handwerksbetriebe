@@ -272,7 +272,7 @@ class AusgangsGeschaeftsDokumentServiceTest {
         }
 
         @Test
-        void wirftExceptionBeiDoppeltemBasisdokumentProProjekt() {
+        void wirftExceptionBeiAngebotWennBereitsBasisdokumentProProjekt() {
             when(dokumentRepository.existsByProjektIdAndVorgaengerIsNull(5L)).thenReturn(true);
 
             AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
@@ -281,11 +281,11 @@ class AusgangsGeschaeftsDokumentServiceTest {
 
             assertThatThrownBy(() -> service.erstellen(dto))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Basisdokument");
+                    .hasMessageContaining("Nachtragsangebot");
         }
 
         @Test
-        void wirftExceptionBeiDoppeltemBasisdokumentProAnfrage() {
+        void wirftExceptionBeiAngebotWennBereitsBasisdokumentProAnfrage() {
             when(dokumentRepository.existsByAnfrageIdAndVorgaengerIsNull(7L)).thenReturn(true);
 
             AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
@@ -295,6 +295,55 @@ class AusgangsGeschaeftsDokumentServiceTest {
             assertThatThrownBy(() -> service.erstellen(dto))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Basisdokument");
+        }
+
+        @Test
+        void verhindertEigenstaendigeRechnungWennBereitsBasisdokument() {
+            when(dokumentRepository.existsByProjektIdAndVorgaengerIsNull(5L)).thenReturn(true);
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.RECHNUNG);
+            dto.setProjektId(5L);
+
+            assertThatThrownBy(() -> service.erstellen(dto))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Basisdokument");
+        }
+
+        @Test
+        void erstelltNachtragsangebotAlsEigenesBasisdokumentWennAngebotExistiert() {
+            mockCounterForNummer();
+            when(dokumentRepository.existsByProjektIdAndVorgaengerIsNullAndTyp(5L, AusgangsGeschaeftsDokumentTyp.ANGEBOT))
+                    .thenReturn(true);
+            when(dokumentRepository.save(any())).thenAnswer(inv -> {
+                AusgangsGeschaeftsDokument d = inv.getArgument(0);
+                d.setId(2L);
+                return d;
+            });
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT);
+            dto.setProjektId(5L);
+
+            AusgangsGeschaeftsDokument result = service.erstellen(dto);
+
+            assertThat(result.getTyp()).isEqualTo(AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT);
+            assertThat(result.getVorgaenger()).isNull();
+            assertThat(result.getDokumentNummer()).matches("^NA-\\d{4}/\\d{2}/\\d{5}$");
+        }
+
+        @Test
+        void wirftExceptionBeiNachtragsangebotOhneVorhandenesAngebot() {
+            when(dokumentRepository.existsByProjektIdAndVorgaengerIsNullAndTyp(5L, AusgangsGeschaeftsDokumentTyp.ANGEBOT))
+                    .thenReturn(false);
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT);
+            dto.setProjektId(5L);
+
+            assertThatThrownBy(() -> service.erstellen(dto))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Nachtragsangebot benötigt ein bestehendes Angebot");
         }
 
         @Test
