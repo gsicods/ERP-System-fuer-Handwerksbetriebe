@@ -761,7 +761,7 @@ function DocumentPreviewModal({ doc, onClose, onOpenExternal, onDownload, allIma
         >
             {/* Modal Content */}
             <div
-                className="relative bg-white rounded-2xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col"
+                className="relative bg-white rounded-2xl shadow-2xl w-[calc(100vw-2cm)] h-[calc(100vh-2cm)] overflow-hidden flex flex-col"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Header */}
@@ -850,7 +850,7 @@ function DocumentPreviewModal({ doc, onClose, onOpenExternal, onDownload, allIma
                     ) : isPdf ? (
                         <PdfCanvasViewer
                             url={doc.url}
-                            className="w-full h-[70vh] rounded-lg overflow-y-auto overflow-x-hidden"
+                            className="w-full h-full rounded-lg overflow-y-auto"
                         />
                     ) : (
                         <div className="flex flex-col items-center justify-center py-12">

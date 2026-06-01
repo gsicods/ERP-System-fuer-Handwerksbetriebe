@@ -2,14 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { PageLayout } from '../components/layout/PageLayout';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { PdfCanvasViewer } from '../components/ui/PdfCanvasViewer';
+import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { DatePicker } from '../components/ui/datepicker';
 import { DetailLayout } from '../components/DetailLayout';
 import {
     Plus, User, Trash2, ArrowLeft,
-    FileText, Upload, Calendar, Euro, File, Building2, QrCode, RefreshCw, Download, Loader2, Eye, X, Phone, GraduationCap, Home, StickyNote, Receipt
+    FileText, Upload, Calendar, Euro, File, Building2, QrCode, RefreshCw, Download, Loader2, Eye, Phone, GraduationCap, Home, StickyNote, Receipt
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { ImageViewer } from '../components/ui/image-viewer';
@@ -1160,44 +1160,13 @@ export default function MitarbeiterEditor() {
                 />
             )}
 
-            {/* Dokument Vorschau Modal (Non-Images) */}
-            {previewDoc && !previewDoc.dateityp?.startsWith('image/') && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPreviewDoc(null)}>
-                    <div className="relative bg-white rounded-lg shadow-xl max-w-4xl max-h-[90vh] w-full m-4 overflow-hidden" onClick={e => e.stopPropagation()}>
-                        <div className="flex items-center justify-between p-4 border-b">
-                            <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
-                                <Eye className="w-5 h-5 text-rose-600" />
-                                {previewDoc.originalDateiname}
-                            </h3>
-                            <button
-                                onClick={() => setPreviewDoc(null)}
-                                className="p-2 hover:bg-slate-100 rounded-full transition-colors"
-                            >
-                                <X className="w-5 h-5 text-slate-500" />
-                            </button>
-                        </div>
-                        <div className="p-4 overflow-auto max-h-[calc(90vh-80px)]">
-                            {(previewDoc.dateityp === 'application/pdf' || previewDoc.originalDateiname?.endsWith('.pdf')) && previewDoc.url ? (
-                                <PdfCanvasViewer
-                                    url={previewDoc.url}
-                                    className="w-full h-[70vh] rounded-lg overflow-y-auto overflow-x-hidden"
-                                />
-                            ) : (
-                                <div className="text-center py-12">
-                                    <File className="w-16 h-16 mx-auto mb-4 text-slate-300" />
-                                    <p className="text-slate-600 mb-4">Vorschau für diesen Dateityp nicht verfügbar</p>
-                                    <Button
-                                        onClick={() => window.open(previewDoc.url, '_blank')}
-                                        className="bg-rose-600 text-white hover:bg-rose-700"
-                                    >
-                                        <Download className="w-4 h-4 mr-2" />
-                                        Datei herunterladen
-                                    </Button>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
+            {/* Dokument Vorschau Modal (Non-Images) – globale Komponente */}
+            {previewDoc && !previewDoc.dateityp?.startsWith('image/') && previewDoc.url && (
+                <DocumentPreviewModal
+                    doc={{ url: previewDoc.url, title: previewDoc.originalDateiname }}
+                    isPdf={previewDoc.dateityp === 'application/pdf' || (previewDoc.originalDateiname?.toLowerCase().endsWith('.pdf') ?? false)}
+                    onClose={() => setPreviewDoc(null)}
+                />
             )}
 
             {view === 'LIST' ? (

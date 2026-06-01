@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { PdfCanvasViewer } from '../components/ui/PdfCanvasViewer';
+import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { RefreshCw, FileText, ChevronRight, Package, Clock, CheckCircle, AlertCircle, X, Download, FolderOpen, Plus, Trash2, Percent, Euro, Save, Briefcase, EyeOff, Eye, Archive } from 'lucide-react';
@@ -221,67 +222,7 @@ function TabButton({ active, onClick, icon, label, count }: TabButtonProps) {
     );
 }
 
-// ========== PDF Preview Modal ==========
-interface DocumentPreviewModalProps {
-    url: string | null;
-    title: string;
-    onClose: () => void;
-}
-
-function DocumentPreviewModal({ url, title, onClose }: DocumentPreviewModalProps) {
-    useEffect(() => {
-        const handleEsc = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
-        };
-        window.addEventListener('keydown', handleEsc);
-        return () => window.removeEventListener('keydown', handleEsc);
-    }, [onClose]);
-
-    if (!url) return null;
-
-    const isPdf = url.toLowerCase().includes('.pdf') ||
-        url.includes('/dokumente/') ||
-        url.includes('/attachments/');
-
-    return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-            onClick={onClose}
-        >
-            <div
-                className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl mx-4 max-h-[90vh] overflow-hidden flex flex-col"
-                onClick={e => e.stopPropagation()}
-            >
-                <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-                    <h3 className="text-lg font-semibold text-slate-900 truncate">{title}</h3>
-                    <div className="flex items-center gap-2">
-                        <a
-                            href={url}
-                            download={title}
-                            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition"
-                        >
-                            <Download className="w-4 h-4" />
-                            Download
-                        </a>
-                        <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 transition">
-                            <X className="w-5 h-5 text-slate-500" />
-                        </button>
-                    </div>
-                </div>
-                <div className="flex-1 overflow-auto p-4 bg-slate-100">
-                    {isPdf ? (
-                        <PdfCanvasViewer url={url} className="w-full h-[70vh] rounded-lg overflow-y-auto overflow-x-hidden" />
-                    ) : (
-                        <div className="flex flex-col items-center justify-center h-64 text-slate-500">
-                            <FileText className="w-12 h-12 mb-4" />
-                            <p>Vorschau nicht verfügbar</p>
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}
+// PDF-Vorschau läuft über die globale Komponente ../components/DocumentPreviewModal
 
 interface BelegZuordnungAuswahlModalProps {
     belege: BelegZuordnungRef[];
@@ -1077,11 +1018,12 @@ export default function BestellungenUebersicht() {
             )}
 
             {/* PDF Preview Modal */}
-            <DocumentPreviewModal
-                url={previewUrl}
-                title={previewTitle}
-                onClose={() => setPreviewUrl(null)}
-            />
+            {previewUrl && (
+                <DocumentPreviewModal
+                    doc={{ url: previewUrl, title: previewTitle }}
+                    onClose={() => setPreviewUrl(null)}
+                />
+            )}
 
             {showBelegAuswahl && (
                 <BelegZuordnungAuswahlModal
