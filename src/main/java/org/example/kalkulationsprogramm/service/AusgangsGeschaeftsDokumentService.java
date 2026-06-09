@@ -1489,11 +1489,13 @@ public class AusgangsGeschaeftsDokumentService {
             // Override hat Vorrang vor berechneter Kundenadresse
             if (dokument.getRechnungsadresseOverride() != null && !dokument.getRechnungsadresseOverride().isBlank()) {
                 dto.setRechnungsadresse(dokument.getRechnungsadresseOverride());
+                dto.setRechnungsadresseOverride(dokument.getRechnungsadresseOverride());
             } else {
                 dto.setRechnungsadresse(buildRechnungsadresse(dokument.getKunde()));
             }
         } else if (dokument.getRechnungsadresseOverride() != null && !dokument.getRechnungsadresseOverride().isBlank()) {
             dto.setRechnungsadresse(dokument.getRechnungsadresseOverride());
+            dto.setRechnungsadresseOverride(dokument.getRechnungsadresseOverride());
         }
 
         if (dokument.getVorgaenger() != null) {

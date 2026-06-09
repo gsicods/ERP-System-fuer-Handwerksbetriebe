@@ -49,6 +49,8 @@ public class AusgangsGeschaeftsDokumentResponseDto {
     private String kundennummer;
     private String kundenName;
     private String rechnungsadresse;
+    /** Nur gesetzt wenn der User die Adresse manuell überschrieben hat. */
+    private String rechnungsadresseOverride;
 
     // Vorgänger
     private Long vorgaengerId;

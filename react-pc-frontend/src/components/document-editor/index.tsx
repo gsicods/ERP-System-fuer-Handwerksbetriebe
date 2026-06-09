@@ -221,6 +221,9 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     useEffect(() => { datumRef.current = datum; }, [datum]);
     const [blocks, setBlocks] = useState<DocBlock[]>([]);
     const [kontextDaten, setKontextDaten] = useState<KontextDaten>({});
+    // Wird auf true gesetzt sobald der User die Rechnungsadresse manuell bearbeitet hat.
+    // Dann darf loadKontext sie nicht mehr überschreiben.
+    const adresseUserEditedRef = useRef(false);
     const [dokument, setDokument] = useState<AusgangsGeschaeftsDokument | null>(null);
     const [showExportWarning, setShowExportWarning] = useState(false);
     const [showExportFormatDialog, setShowExportFormatDialog] = useState(false);
@@ -481,18 +484,22 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         const emails: string[] = [];
                         if (projekt.kundenEmails) projekt.kundenEmails.forEach((e: string) => { if (e && !emails.includes(e)) emails.push(e); });
                         if (projekt.kundeDto?.kundenEmails) projekt.kundeDto.kundenEmails.forEach((e: string) => { if (e && !emails.includes(e)) emails.push(e); });
-                        setKontextDaten({
+                        setKontextDaten(prev => ({
                             projektnummer: projekt.auftragsnummer,
                             projektBauvorhaben: projekt.bauvorhaben,
                             kundennummer: projekt.kundennummer,
                             kundenName: projekt.kunde,
                             kundeId: projekt.kundenId,
-                            rechnungsadresse: buildAdresse(projekt.kundeDto),
+                            // Wenn User die Adresse bereits bearbeitet hat (vorhandenes Override),
+                            // darf loadKontext sie nicht überschreiben.
+                            rechnungsadresse: adresseUserEditedRef.current
+                                ? prev.rechnungsadresse
+                                : buildAdresse(projekt.kundeDto),
                             anrede: projekt.kundeDto?.anrede,
                             ansprechpartner: projekt.kundeDto?.ansprechspartner || projekt.kundeDto?.ansprechpartner,
                             kundenEmails: emails,
                             zahlungsziel: projekt.kundeDto?.zahlungsziel ?? 8,
-                        });
+                        }));
                         setBetreff(projekt.bauvorhaben || '');
                     }
                 } else if (anfrageId) {
@@ -502,17 +509,20 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         const isFollowUp = dokumentTyp !== 'ANGEBOT';
                         const emails: string[] = [];
                         if (anfrage.kundenEmails) anfrage.kundenEmails.forEach((e: string) => { if (e && !emails.includes(e)) emails.push(e); });
-                        setKontextDaten({
+                        setKontextDaten(prev => ({
                             kundennummer: anfrage.kundennummer,
                             kundenName: anfrage.kundenName,
                             kundeId: anfrage.kundenId,
-                            rechnungsadresse: buildAdresseFromAnfrage(anfrage),
+                            // Wenn User die Adresse bereits bearbeitet hat, nicht überschreiben.
+                            rechnungsadresse: adresseUserEditedRef.current
+                                ? prev.rechnungsadresse
+                                : buildAdresseFromAnfrage(anfrage),
                             anrede: anfrage.kundenAnrede || anfrage.anrede,
                             ansprechpartner: anfrage.kundenAnsprechpartner || anfrage.kundenAnsprechspartner,
                             kundenEmails: emails,
                             zahlungsziel: anfrage.zahlungsziel ?? 8,
                             ...(isFollowUp ? { bezugsdokument: anfrage.anfragesnummer, bezugsdokumentTyp: 'Angebot' } : {})
-                        });
+                        }));
                         setBetreff(anfrage.bauvorhaben || '');
                     }
                 }
@@ -551,6 +561,11 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         : data.datum;
                     setDatum(datumZuVerwenden);
                     datumRef.current = datumZuVerwenden;
+                    // Sobald ein Override vorhanden ist: als "user-edited" markieren,
+                    // damit loadKontext die Adresse nicht überschreibt.
+                    if (data.rechnungsadresseOverride) {
+                        adresseUserEditedRef.current = true;
+                    }
 
                     if (data.gebucht) {
                         setKontextDaten({
@@ -573,7 +588,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                                     kundennummer: projekt.kundennummer,
                                     kundenName: projekt.kunde,
                                     kundeId: projekt.kundenId,
-                                    rechnungsadresse: buildAdresse(projekt.kundeDto),
+                                    // Override hat Vorrang vor berechneter Kundenadresse
+                                    rechnungsadresse: data.rechnungsadresseOverride || buildAdresse(projekt.kundeDto),
                                     anrede: projekt.kundeDto?.anrede,
                                     ansprechpartner: projekt.kundeDto?.ansprechspartner || projekt.kundeDto?.ansprechpartner,
                                     bezugsdokument: data.vorgaengerNummer,
@@ -589,7 +605,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                                     kundennummer: anfrage.kundennummer,
                                     kundenName: anfrage.kundenName,
                                     kundeId: anfrage.kundenId,
-                                    rechnungsadresse: buildAdresseFromAnfrage(anfrage),
+                                    // Override hat Vorrang vor berechneter Kundenadresse
+                                    rechnungsadresse: data.rechnungsadresseOverride || buildAdresseFromAnfrage(anfrage),
                                     anrede: anfrage.kundenAnrede || anfrage.anrede,
                                     ansprechpartner: anfrage.kundenAnsprechpartner || anfrage.kundenAnsprechspartner,
                                     zahlungsziel: data.zahlungszielTage ?? anfrage.zahlungsziel ?? 8,
@@ -600,16 +617,19 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                             const kundeRes = await fetch(`/api/kunden/${data.kundeId}`);
                             if (kundeRes.ok) {
                                 const kunde = await kundeRes.json();
-                                setKontextDaten({
+                                setKontextDaten(prev => ({
                                     kundennummer: kunde.kundennummer || data.kundennummer,
                                     kundenName: kunde.name || `${kunde.vorname || ''} ${kunde.nachname || ''}`.trim(),
                                     kundeId: data.kundeId,
-                                    rechnungsadresse: buildAdresse(kunde),
+                                    // Gespeichertes Override hat Vorrang
+                                    rechnungsadresse: adresseUserEditedRef.current
+                                        ? prev.rechnungsadresse
+                                        : (data.rechnungsadresseOverride || buildAdresse(kunde)),
                                     anrede: kunde.anrede,
                                     ansprechpartner: kunde.ansprechspartner || kunde.ansprechpartner,
                                     bezugsdokument: data.vorgaengerNummer,
                                     zahlungsziel: data.zahlungszielTage ?? kunde.zahlungsziel ?? 8
-                                });
+                                }));
                             }
                         } else {
                             setKontextDaten({
@@ -973,7 +993,11 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     betreff,
                     betragNetto,
                     htmlInhalt,
-                    positionenJson: positionenData
+                    positionenJson: positionenData,
+                    // Nur mitschicken wenn User die Adresse bewusst geändert hat
+                    ...(adresseUserEditedRef.current
+                        ? { rechnungsadresseOverride: kontextDaten.rechnungsadresse ?? null }
+                        : {})
                 });
                 const doPut = () => fetch(`/api/ausgangs-dokumente/${id}`, {
                     method: 'PUT',
@@ -2371,7 +2395,10 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                             <RechnungsadresseBlock
                                 value={kontextDaten.rechnungsadresse || ''}
                                 isLocked={isLocked}
-                                onChange={(newAddr) => setKontextDaten(prev => ({ ...prev, rechnungsadresse: newAddr }))}
+                                onChange={(newAddr) => {
+                                    adresseUserEditedRef.current = true;
+                                    setKontextDaten(prev => ({ ...prev, rechnungsadresse: newAddr }));
+                                }}
                             />
 
                             {/* Blocks */}

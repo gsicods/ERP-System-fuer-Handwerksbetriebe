@@ -807,6 +807,8 @@ export interface AusgangsGeschaeftsDokument {
   kundennummer?: string;
   kundenName?: string;
   rechnungsadresse?: string;
+  /** Nur gesetzt wenn der User die Adresse manuell überschrieben hat. */
+  rechnungsadresseOverride?: string;
   // Vorgänger
   vorgaengerId?: number;
   vorgaengerNummer?: string;
