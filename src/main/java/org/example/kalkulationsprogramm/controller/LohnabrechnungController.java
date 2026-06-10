@@ -10,7 +10,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -22,9 +21,6 @@ import java.util.List;
 public class LohnabrechnungController {
 
     private final LohnabrechnungService lohnabrechnungService;
-
-    @org.springframework.beans.factory.annotation.Value("${file.mail-attachment-dir}")
-    private String mailAttachmentDir;
 
     /**
      * Findet alle Lohnabrechnungen eines Mitarbeiters.
@@ -77,28 +73,20 @@ public class LohnabrechnungController {
     @GetMapping("/{id}/download")
     public ResponseEntity<Resource> downloadPdf(@PathVariable Long id) {
         try {
-            LohnabrechnungDto dto = lohnabrechnungService.findById(id);
-            if (dto == null) {
-                return ResponseEntity.notFound().build();
-            }
-
-            // Datei laden (Lohnabrechnung PDFs sind im mail-attachment-dir)
-            Path filePath = Path.of(mailAttachmentDir).resolve(dto.getOriginalDateiname()).normalize();
-            Resource resource = new UrlResource(filePath.toUri());
-
-            if (!resource.exists()) {
-                return ResponseEntity.notFound().build();
-            }
-
-            String filename = dto.getOriginalDateiname() != null 
-                    ? dto.getOriginalDateiname() 
-                    : "lohnabrechnung.pdf";
-
-            return ResponseEntity.ok()
-                    .contentType(MediaType.APPLICATION_PDF)
-                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
-                    .body(resource);
-
+            return lohnabrechnungService.findPdf(id)
+                    .map(pdf -> {
+                        try {
+                            Resource resource = new UrlResource(pdf.pfad().toUri());
+                            return ResponseEntity.ok()
+                                    .contentType(MediaType.APPLICATION_PDF)
+                                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                                            "inline; filename=\"" + pdf.anzeigeName() + "\"")
+                                    .body(resource);
+                        } catch (Exception e) {
+                            return ResponseEntity.internalServerError().<Resource>build();
+                        }
+                    })
+                    .orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.internalServerError().build();
         }

@@ -12,6 +12,7 @@ import {
     FileText, Upload, Calendar, Euro, File, Building2, QrCode, RefreshCw, Download, Loader2, Eye, Phone, GraduationCap, Home, StickyNote, Receipt
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
+import { Select } from '../components/ui/select-custom';
 import { ImageViewer } from '../components/ui/image-viewer';
 import { useConfirm } from '../components/ui/confirm-dialog';
 import { StundenlohnHistorieList } from '../components/mitarbeiter/StundenlohnHistorieList';
@@ -122,6 +123,9 @@ export default function MitarbeiterEditor() {
     // Lohnabrechnungen States
     const [lohnabrechnungen, setLohnabrechnungen] = useState<Lohnabrechnung[]>([]);
     const [loadingLohnabrechnungen, setLoadingLohnabrechnungen] = useState(false);
+    const [previewLohnabrechnung, setPreviewLohnabrechnung] = useState<Lohnabrechnung | null>(null);
+    const [lohnFilterJahr, setLohnFilterJahr] = useState('alle');
+    const [lohnFilterMonat, setLohnFilterMonat] = useState('alle');
 
     useEffect(() => {
         loadMitarbeiter();
@@ -589,9 +593,18 @@ export default function MitarbeiterEditor() {
 
     const MONATSNAMEN = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 
+    const formatEuro = (betrag: number) =>
+        new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(betrag);
+
     const LohnabrechnungenList = () => {
+        // Filter nach Jahr/Monat
+        const gefiltert = lohnabrechnungen.filter(la =>
+            (lohnFilterJahr === 'alle' || la.jahr === Number(lohnFilterJahr)) &&
+            (lohnFilterMonat === 'alle' || la.monat === Number(lohnFilterMonat))
+        );
+
         // Gruppiere nach Jahr
-        const byYear = lohnabrechnungen.reduce((acc, la) => {
+        const byYear = gefiltert.reduce((acc, la) => {
             const jahr = la.jahr;
             if (!acc[jahr]) acc[jahr] = [];
             acc[jahr].push(la);
@@ -600,13 +613,38 @@ export default function MitarbeiterEditor() {
 
         const sortedYears = Object.keys(byYear).map(Number).sort((a, b) => b - a);
 
+        const jahrOptions = [
+            { value: 'alle', label: 'Alle Jahre' },
+            ...Array.from(new Set(lohnabrechnungen.map(la => la.jahr)))
+                .sort((a, b) => b - a)
+                .map(j => ({ value: String(j), label: String(j) }))
+        ];
+        const monatOptions = [
+            { value: 'alle', label: 'Alle Monate' },
+            ...MONATSNAMEN.map((name, i) => ({ value: String(i + 1), label: name }))
+        ];
+
         return (
             <div className="space-y-4">
-                <div className="flex justify-between items-center border-b pb-4">
+                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b pb-4">
                     <h3 className="text-lg font-semibold flex items-center gap-2">
                         <Receipt className="w-5 h-5 text-rose-600" />
                         Lohnabrechnungen
                     </h3>
+                    <div className="flex gap-2">
+                        <Select
+                            options={monatOptions}
+                            value={lohnFilterMonat}
+                            onChange={setLohnFilterMonat}
+                            className="w-40"
+                        />
+                        <Select
+                            options={jahrOptions}
+                            value={lohnFilterJahr}
+                            onChange={setLohnFilterJahr}
+                            className="w-32"
+                        />
+                    </div>
                 </div>
 
                 {loadingLohnabrechnungen ? (
@@ -614,11 +652,13 @@ export default function MitarbeiterEditor() {
                         <Loader2 className="w-8 h-8 mx-auto mb-3 animate-spin text-rose-600" />
                         <p>Lade Lohnabrechnungen...</p>
                     </div>
-                ) : lohnabrechnungen.length === 0 ? (
+                ) : gefiltert.length === 0 ? (
                     <div className="text-center py-12 text-slate-500 bg-slate-50 rounded-lg border border-dashed border-slate-200">
                         <Receipt className="w-12 h-12 mx-auto mb-3 text-slate-300" />
-                        <p>Keine Lohnabrechnungen vorhanden</p>
-                        <p className="text-xs mt-1">Lohnabrechnungen werden automatisch aus Steuerberater-E-Mails importiert</p>
+                        <p>{lohnabrechnungen.length === 0 ? 'Keine Lohnabrechnungen vorhanden' : 'Keine Lohnabrechnungen für diesen Filter'}</p>
+                        {lohnabrechnungen.length === 0 && (
+                            <p className="text-xs mt-1">Lohnabrechnungen werden automatisch aus Steuerberater-E-Mails importiert</p>
+                        )}
                     </div>
                 ) : (
                     <div className="space-y-6">
@@ -639,17 +679,28 @@ export default function MitarbeiterEditor() {
                                                         {MONATSNAMEN[la.monat - 1]} {la.jahr}
                                                     </p>
                                                     <p className="text-xs text-slate-500">
-                                                        {la.originalDateiname}
-                                                        {la.bruttolohn && la.nettolohn && (
-                                                            <span className="ml-2">
-                                                                • Brutto: {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(la.bruttolohn)}
-                                                                • Netto: {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(la.nettolohn)}
+                                                        {la.bruttolohn != null && (
+                                                            <span className="font-medium text-slate-700">
+                                                                Brutto: {formatEuro(la.bruttolohn)}
                                                             </span>
                                                         )}
+                                                        {la.nettolohn != null && (
+                                                            <span className="font-medium text-slate-700">
+                                                                {la.bruttolohn != null && ' • '}Netto: {formatEuro(la.nettolohn)}
+                                                            </span>
+                                                        )}
+                                                        {la.bruttolohn == null && la.nettolohn == null && la.originalDateiname}
                                                     </p>
                                                 </div>
                                             </div>
                                             <div className="flex gap-2">
+                                                <button
+                                                    onClick={() => setPreviewLohnabrechnung(la)}
+                                                    className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                                                    title="PDF ansehen"
+                                                >
+                                                    <Eye className="w-4 h-4" />
+                                                </button>
                                                 <a
                                                     href={la.downloadUrl}
                                                     target="_blank"
@@ -1166,6 +1217,18 @@ export default function MitarbeiterEditor() {
                     doc={{ url: previewDoc.url, title: previewDoc.originalDateiname }}
                     isPdf={previewDoc.dateityp === 'application/pdf' || (previewDoc.originalDateiname?.toLowerCase().endsWith('.pdf') ?? false)}
                     onClose={() => setPreviewDoc(null)}
+                />
+            )}
+
+            {/* Lohnabrechnung PDF-Vorschau */}
+            {previewLohnabrechnung && (
+                <DocumentPreviewModal
+                    doc={{
+                        url: previewLohnabrechnung.downloadUrl,
+                        title: `Lohnabrechnung ${MONATSNAMEN[previewLohnabrechnung.monat - 1]} ${previewLohnabrechnung.jahr}`
+                    }}
+                    isPdf={true}
+                    onClose={() => setPreviewLohnabrechnung(null)}
                 />
             )}
 

@@ -1,13 +1,20 @@
 package org.example.kalkulationsprogramm.domain;
 
-import jakarta.persistence.*;
-import lombok.Getter;
-import lombok.Setter;
-
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
+import lombok.Getter;
+import lombok.Setter;
 
 @Entity
 @Getter
@@ -31,5 +38,14 @@ public class ProjektGeschaeftsdokument extends ProjektDokument
     private ProjektGeschaeftsdokument referenzDokument;
     @OneToMany(mappedBy = "referenzDokument", fetch = FetchType.LAZY)
     private List<ProjektGeschaeftsdokument> mahnungen = new ArrayList<>();
+
+    /**
+     * {@code true} wenn dieser Eintrag automatisch vom System via
+     * {@code AusgangsGeschaeftsDokumentService#erstelleOffenenPostenEintrag} erzeugt wurde.
+     * Nur systemgenerierte Rechnungen erhalten automatische Zahlungserinnerungen per E-Mail.
+     * Manuell im Offene-Posten-Editor erfasste Einträge haben dieses Flag {@code false}.
+     */
+    @Column(name = "system_generiert", nullable = false)
+    private boolean systemGeneriert = false;
 
 }

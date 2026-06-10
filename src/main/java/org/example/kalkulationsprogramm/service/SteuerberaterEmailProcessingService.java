@@ -11,6 +11,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -128,21 +132,15 @@ public class SteuerberaterEmailProcessingService {
             return;
         }
 
-        // Prüfe ob Lohnabrechnung (Keywords im Dateinamen)
-        if (isLohnabrechnungFilename(filenameLower)) {
-            processLohnabrechnungPdf(attachment, email, steuerberater);
-            return;
-        }
-
-        // Prüfe ob BWA (Keywords im Dateinamen)
+        // BWA per Dateinamen-Keyword (eindeutig genug, spart einen KI-Call)
         if (isBwaFilename(filenameLower)) {
             processBwaPdf(attachment, email, steuerberater);
             return;
         }
 
-        // Fallback: Unbekanntes Dokument - vorerst ignorieren
-        // KI-Analyse ist noch nicht implementiert
-        log.info("[Steuerberater] Unbekanntes PDF, überspringe: {}", filename);
+        // Alle übrigen PDFs vom Steuerberater per KI klassifizieren –
+        // Dateinamen sind nicht zuverlässig (z.B. "2026-05.pdf" ohne "lohn").
+        processSteuerberaterPdf(attachment, email, steuerberater);
     }
 
     /**
@@ -167,10 +165,13 @@ public class SteuerberaterEmailProcessingService {
     }
 
     /**
-     * Verarbeitet eine Lohnabrechnung-PDF.
+     * Klassifiziert und verarbeitet eine Steuerberater-PDF per KI.
+     * Lohnabrechnungen kommen als Sammel-PDF (alle Mitarbeiter in einer Datei):
+     * Die KI liefert pro Abrechnung den Seitenbereich, die PDF wird gesplittet
+     * und jede Teil-PDF dem passenden Mitarbeiter zugewiesen.
      */
-    private void processLohnabrechnungPdf(EmailAttachment attachment, Email email, SteuerberaterKontakt steuerberater) {
-        log.info("[Steuerberater] Verarbeite Lohnabrechnung: {}", attachment.getOriginalFilename());
+    private void processSteuerberaterPdf(EmailAttachment attachment, Email email, SteuerberaterKontakt steuerberater) {
+        log.info("[Steuerberater] Analysiere PDF: {}", attachment.getOriginalFilename());
 
         try {
             Path pdfPath = Paths.get(mailAttachmentDir, attachment.getStoredFilename());
@@ -178,132 +179,287 @@ public class SteuerberaterEmailProcessingService {
                 log.error("Datei nicht gefunden: {}", pdfPath);
                 return;
             }
+            // Idempotenz: dieselbe E-Mail + Datei nie doppelt verarbeiten (Backfill)
             if (lohnabrechnungRepository.existsBySourceEmailIdAndOriginalDateiname(email.getId(), attachment.getOriginalFilename())) {
-                log.info("[Steuerberater] Lohnabrechnung {} bereits importiert (Skipped)", attachment.getOriginalFilename());
+                log.info("[Steuerberater] Anhang {} bereits importiert (Skipped)", attachment.getOriginalFilename());
                 return;
             }
 
             byte[] fileBytes = Files.readAllBytes(pdfPath);
 
             String aiPrompt = """
-                Analysiere dieses PDF. Es handelt sich um eine Lohnabrechnung.
-                Extrahiere folgende Daten als JSON (nur das JSON, kein Markdown):
+                Du bekommst ein PDF, das ein Steuerberater per E-Mail an einen Handwerksbetrieb geschickt hat.
+
+                1. Klassifiziere das Dokument:
+                   - "LOHNABRECHNUNG": Lohn-/Gehalts-/Entgeltabrechnung(en)
+                   - "BWA": Betriebswirtschaftliche Auswertung
+                   - "SONSTIGES": alles andere
+
+                2. Bei LOHNABRECHNUNG: Das PDF ist meist eine Sammel-PDF mit den Abrechnungen
+                   MEHRERER Mitarbeiter hintereinander (je 1-2 Seiten pro Mitarbeiter).
+                   Finde JEDE einzelne Abrechnung und gib ihren Seitenbereich an (1-basiert).
+                   Achte auf den Mitarbeiternamen im Kopf jeder Abrechnung – ein neuer Name
+                   bedeutet eine neue Abrechnung.
+
+                Antworte NUR mit JSON (kein Markdown):
                 {
-                    "mitarbeiterName": "Vollständiger Name des Mitarbeiters",
-                    "monat": 1-12,
-                    "jahr": YYYY,
-                    "bruttolohn": Betrag als Zahl (z.B. 2500.00),
-                    "nettolohn": Betrag als Zahl (z.B. 1800.50),
-                    "istSammelPdf": true/false
+                    "dokumentTyp": "LOHNABRECHNUNG",
+                    "abrechnungen": [
+                        {
+                            "mitarbeiterName": "Vor- und Nachname",
+                            "seiten": "1-2",
+                            "monat": 1-12,
+                            "jahr": YYYY,
+                            "bruttolohn": Betrag als Zahl (z.B. 2500.00),
+                            "nettolohn": Betrag als Zahl (z.B. 1800.50)
+                        }
+                    ]
                 }
+                Bei BWA oder SONSTIGES: "abrechnungen" als leeres Array.
                 """;
 
             String aiResponse = geminiService.rufGeminiApiMitPrompt(fileBytes, "application/pdf", aiPrompt, true);
-            createLohnabrechnungFromAiResponse(aiResponse, attachment, email, steuerberater);
+
+            JsonNode root = parseAiJson(aiResponse);
+            String dokumentTyp = root != null && root.has("dokumentTyp")
+                    ? root.get("dokumentTyp").asText("")
+                    : "";
+
+            if ("BWA".equalsIgnoreCase(dokumentTyp)) {
+                processBwaPdf(attachment, email, steuerberater);
+                return;
+            }
+
+            if ("LOHNABRECHNUNG".equalsIgnoreCase(dokumentTyp)
+                    && root.has("abrechnungen") && root.get("abrechnungen").isArray()
+                    && root.get("abrechnungen").size() > 0) {
+                verarbeiteLohnabrechnungen(root.get("abrechnungen"), aiResponse, fileBytes, attachment, email, steuerberater);
+                return;
+            }
+
+            // KI hat nicht geliefert: Dateinamen-Heuristik als letzte Rettung,
+            // damit eine erkennbare Lohnabrechnung nicht verloren geht.
+            if (isLohnabrechnungFilename(attachment.getOriginalFilename().toLowerCase())) {
+                log.warn("[Steuerberater] KI-Klassifikation fehlgeschlagen, Dateiname deutet auf Lohnabrechnung: {}",
+                        attachment.getOriginalFilename());
+                verarbeiteLohnabrechnungFallback(aiResponse, fileBytes, attachment, email, steuerberater);
+                return;
+            }
+
+            log.info("[Steuerberater] PDF als '{}' klassifiziert, keine Verarbeitung: {}",
+                    dokumentTyp.isBlank() ? "unbekannt" : dokumentTyp, attachment.getOriginalFilename());
 
         } catch (Exception e) {
-            log.error("[Steuerberater] Fehler bei Lohnabrechnung-Verarbeitung: {}", e.getMessage(), e);
-            createFallbackLohnabrechnung(attachment, email, steuerberater);
+            log.error("[Steuerberater] Fehler bei PDF-Verarbeitung: {}", e.getMessage(), e);
         }
     }
 
     /**
-     * Erstellt Lohnabrechnung(en) aus KI-Antwort.
+     * Splittet die Sammel-PDF anhand der KI-Seitenbereiche und legt pro
+     * Mitarbeiter eine Lohnabrechnung an. Korrektur-Läufe (Steuerberater schickt
+     * geänderte Abrechnung für denselben Monat) ersetzen den alten Eintrag.
      */
-    private void createLohnabrechnungFromAiResponse(String aiResponse, EmailAttachment attachment, 
-            Email email, SteuerberaterKontakt steuerberater) {
-        
-        try {
-            JsonNode root = null;
-            if (aiResponse != null) {
-                // Bereinige Markdown Blöcke
-                String json = aiResponse.replaceAll("```json", "").replaceAll("```", "").trim();
-                if (json.startsWith("{")) {
-                    root = objectMapper.readTree(json);
+    private void verarbeiteLohnabrechnungen(JsonNode abrechnungen, String aiResponse, byte[] fileBytes,
+            EmailAttachment attachment, Email email, SteuerberaterKontakt steuerberater) throws IOException {
+
+        int erstellt = 0;
+        int nichtZugeordnet = 0;
+
+        try (PDDocument originalDoc = Loader.loadPDF(fileBytes)) {
+            int totalPages = originalDoc.getNumberOfPages();
+
+            for (JsonNode node : abrechnungen) {
+                String mitarbeiterName = node.has("mitarbeiterName") ? node.get("mitarbeiterName").asText(null) : null;
+
+                Mitarbeiter mitarbeiter = mitarbeiterName != null ? findMitarbeiterByName(mitarbeiterName) : null;
+                if (mitarbeiter == null) {
+                    nichtZugeordnet++;
+                    log.warn("[Steuerberater] Kein Mitarbeiter gefunden für Abrechnung '{}' in {} – Segment übersprungen",
+                            mitarbeiterName, attachment.getOriginalFilename());
+                    continue;
                 }
-            }
 
-            Integer jahr = null;
-            Integer monat = null;
-            String mitarbeiterName = null;
-            java.math.BigDecimal brutto = null;
-            java.math.BigDecimal netto = null;
+                Integer jahr = node.has("jahr") && node.get("jahr").canConvertToInt() ? node.get("jahr").asInt() : null;
+                Integer monat = node.has("monat") && node.get("monat").canConvertToInt() ? node.get("monat").asInt() : null;
+                if (jahr == null || monat == null || monat < 1 || monat > 12) {
+                    Integer[] periode = extractPeriodFromFilename(attachment.getOriginalFilename());
+                    if (jahr == null) jahr = periode[0];
+                    if (monat == null || monat < 1 || monat > 12) monat = periode[1];
+                }
 
-            if (root != null) {
-                if (root.has("jahr")) jahr = root.get("jahr").asInt();
-                if (root.has("monat")) monat = root.get("monat").asInt();
-                if (root.has("mitarbeiterName")) mitarbeiterName = root.get("mitarbeiterName").asText();
-                if (root.has("bruttolohn")) brutto = new java.math.BigDecimal(root.get("bruttolohn").asDouble());
-                if (root.has("nettolohn")) netto = new java.math.BigDecimal(root.get("nettolohn").asDouble());
-            }
+                // Seitenbereich extrahieren und als eigene PDF speichern
+                String seiten = node.has("seiten") ? node.get("seiten").asText("") : "";
+                byte[] teilPdf = extrahiereSeiten(originalDoc, seiten, totalPages);
+                String gespeicherterName = speichereLohnabrechnungPdf(teilPdf);
 
-            // Fallback auf Dateinamen wenn AI fehlschlägt oder Werte fehlen
-            if (jahr == null || monat == null) {
-                Integer[] periode = extractPeriodFromFilename(attachment.getOriginalFilename());
-                if (jahr == null) jahr = periode[0];
-                if (monat == null) monat = periode[1];
+                speichereLohnabrechnung(mitarbeiter, jahr, monat,
+                        node.has("bruttolohn") ? node.get("bruttolohn").decimalValue() : null,
+                        node.has("nettolohn") ? node.get("nettolohn").decimalValue() : null,
+                        gespeicherterName, aiResponse, attachment, email, steuerberater);
+                erstellt++;
             }
+        }
 
-            // Mitarbeiter finden
-            Mitarbeiter mitarbeiter = null;
-            if (mitarbeiterName != null && !mitarbeiterName.isBlank()) {
-                mitarbeiter = findMitarbeiterByName(mitarbeiterName);
-            }
-            if (mitarbeiter == null) {
-                mitarbeiter = findMitarbeiterFromFilename(attachment.getOriginalFilename());
-            }
+        log.info("[Steuerberater] Sammel-PDF {} verarbeitet: {} Lohnabrechnung(en) erstellt, {} nicht zuordenbar",
+                attachment.getOriginalFilename(), erstellt, nichtZugeordnet);
+    }
 
-            if (mitarbeiter != null) {
-                Lohnabrechnung la = new Lohnabrechnung();
-                la.setMitarbeiter(mitarbeiter);
-                la.setSteuerberater(steuerberater);
-                la.setJahr(jahr);
-                la.setMonat(monat);
-                la.setOriginalDateiname(attachment.getOriginalFilename());
-                la.setGespeicherterDateiname(attachment.getStoredFilename());
-                la.setSourceEmail(email);
-                la.setAiRawJson(aiResponse);
-                la.setStatus(LohnabrechnungStatus.ANALYSIERT);
-                la.setBruttolohn(brutto);
-                la.setNettolohn(netto);
-                la.setImportDatum(LocalDateTime.now());
-                
-                lohnabrechnungRepository.save(la);
-                log.info("[Steuerberater] Lohnabrechnung für {} ({}/{}) erstellt", 
-                        mitarbeiter.getNachname(), monat, jahr);
-            } else {
-                log.warn("[Steuerberater] Kein Mitarbeiter gefunden für: {}", attachment.getOriginalFilename());
-                createFallbackLohnabrechnung(attachment, email, steuerberater);
-            }
+    /**
+     * Fallback ohne brauchbare KI-Antwort: ganze PDF als eine Abrechnung,
+     * Mitarbeiter und Periode aus dem Dateinamen.
+     */
+    private void verarbeiteLohnabrechnungFallback(String aiResponse, byte[] fileBytes,
+            EmailAttachment attachment, Email email, SteuerberaterKontakt steuerberater) throws IOException {
 
-        } catch (Exception e) {
-             log.error("Fehler beim Parsen der AI Antwort: {}", e.getMessage());
-             createFallbackLohnabrechnung(attachment, email, steuerberater);
+        Mitarbeiter mitarbeiter = findMitarbeiterFromFilename(attachment.getOriginalFilename());
+        if (mitarbeiter == null) {
+            log.warn("[Steuerberater] Auch im Dateinamen kein Mitarbeiter erkennbar: {} – manuell prüfen!",
+                    attachment.getOriginalFilename());
+            return;
+        }
+
+        Integer[] periode = extractPeriodFromFilename(attachment.getOriginalFilename());
+        String gespeicherterName = speichereLohnabrechnungPdf(fileBytes);
+        speichereLohnabrechnung(mitarbeiter, periode[0], periode[1], null, null,
+                gespeicherterName, aiResponse, attachment, email, steuerberater);
+    }
+
+    /**
+     * Legt eine Lohnabrechnung an oder ersetzt die bestehende desselben
+     * Mitarbeiters für denselben Monat (Korrektur-Mail vom Steuerberater).
+     */
+    private void speichereLohnabrechnung(Mitarbeiter mitarbeiter, Integer jahr, Integer monat,
+            java.math.BigDecimal brutto, java.math.BigDecimal netto, String gespeicherterDateiname,
+            String aiResponse, EmailAttachment attachment, Email email, SteuerberaterKontakt steuerberater) {
+
+        Lohnabrechnung la = lohnabrechnungRepository
+                .findByMitarbeiterIdAndJahrAndMonat(mitarbeiter.getId(), jahr, monat)
+                .orElseGet(Lohnabrechnung::new);
+
+        boolean ersetzt = la.getId() != null;
+        if (ersetzt) {
+            loescheAlteSplitDatei(la.getGespeicherterDateiname());
+        }
+
+        la.setMitarbeiter(mitarbeiter);
+        la.setSteuerberater(steuerberater);
+        la.setJahr(jahr);
+        la.setMonat(monat);
+        la.setOriginalDateiname(attachment.getOriginalFilename());
+        la.setGespeicherterDateiname(gespeicherterDateiname);
+        la.setSourceEmail(email);
+        la.setAiRawJson(aiResponse);
+        la.setStatus(LohnabrechnungStatus.ANALYSIERT);
+        la.setBruttolohn(brutto);
+        la.setNettolohn(netto);
+        la.setImportDatum(LocalDateTime.now());
+
+        lohnabrechnungRepository.save(la);
+        log.info("[Steuerberater] Lohnabrechnung für {} ({}/{}) {}",
+                mitarbeiter.getNachname(), monat, jahr, ersetzt ? "aktualisiert (Korrektur)" : "erstellt");
+    }
+
+    /**
+     * Löscht die alte gesplittete Teil-PDF einer ersetzten Lohnabrechnung.
+     * Original-Mail-Anhänge (mail-attachment-dir) werden nie angefasst.
+     */
+    private void loescheAlteSplitDatei(String gespeicherterDateiname) {
+        if (gespeicherterDateiname == null || gespeicherterDateiname.isBlank()) {
+            return;
+        }
+        try {
+            Path basis = Paths.get(lohnabrechnungDir).toAbsolutePath().normalize();
+            Path datei = basis.resolve(gespeicherterDateiname).normalize();
+            if (datei.startsWith(basis)) {
+                Files.deleteIfExists(datei);
+            }
+        } catch (IOException e) {
+            log.warn("[Steuerberater] Alte Lohnabrechnungs-PDF konnte nicht gelöscht werden: {}", e.getMessage());
         }
     }
 
-    private Mitarbeiter findMitarbeiterByName(String name) {
-        String cleanName = name.toLowerCase();
-        for (Mitarbeiter m : mitarbeiterRepository.findByAktivTrue()) {
-             String n = m.getNachname().toLowerCase();
-             String v = m.getVorname().toLowerCase();
-             // Simple contains check
-             if (cleanName.contains(n) && cleanName.contains(v)) {
-                 return m;
-             }
+    /**
+     * Speichert eine (Teil-)PDF im Lohnabrechnungs-Verzeichnis unter UUID-Namen.
+     */
+    private String speichereLohnabrechnungPdf(byte[] pdfBytes) throws IOException {
+        Path dir = Paths.get(lohnabrechnungDir);
+        Files.createDirectories(dir);
+        String dateiname = UUID.randomUUID() + ".pdf";
+        Files.write(dir.resolve(dateiname), pdfBytes);
+        return dateiname;
+    }
+
+    /**
+     * Extrahiert einen 1-basierten Seitenbereich ("3" oder "1-2") als neue PDF.
+     * Ungültige Angaben liefern das gesamte Dokument.
+     */
+    private byte[] extrahiereSeiten(PDDocument original, String seitenRange, int totalPages) throws IOException {
+        int von = 1;
+        int bis = totalPages;
+
+        if (seitenRange != null && !seitenRange.isBlank()) {
+            Matcher m = Pattern.compile("(\\d+)\\s*(?:-\\s*(\\d+))?").matcher(seitenRange.trim());
+            if (m.matches()) {
+                von = Integer.parseInt(m.group(1));
+                bis = m.group(2) != null ? Integer.parseInt(m.group(2)) : von;
+            }
+        }
+        von = Math.max(1, Math.min(von, totalPages));
+        bis = Math.max(von, Math.min(bis, totalPages));
+
+        try (PDDocument teil = new PDDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            for (int i = von - 1; i < bis; i++) {
+                teil.addPage(original.getPage(i));
+            }
+            teil.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    /**
+     * Parst die KI-Antwort tolerant (Markdown-Blöcke entfernen).
+     */
+    private JsonNode parseAiJson(String aiResponse) {
+        if (aiResponse == null) {
+            return null;
+        }
+        try {
+            String json = aiResponse.replaceAll("```json", "").replaceAll("```", "").trim();
+            if (json.startsWith("{")) {
+                return objectMapper.readTree(json);
+            }
+        } catch (Exception e) {
+            log.warn("[Steuerberater] KI-Antwort kein gültiges JSON: {}", e.getMessage());
         }
         return null;
     }
 
     /**
-     * Erstellt Lohnabrechnung ohne Mitarbeiter-Zuweisung (zur manuellen Zuordnung).
+     * Findet Mitarbeiter anhand des von der KI extrahierten Namens.
+     * Erst Vor- und Nachname, dann eindeutiger Nachname-Match.
      */
-    private void createFallbackLohnabrechnung(EmailAttachment attachment, Email email, 
-            SteuerberaterKontakt steuerberater) {
-        
-        // TODO: Ohne Mitarbeiter speichern und zur manuellen Zuordnung markieren
-        log.warn("[Steuerberater] Erstelle Lohnabrechnung ohne Mitarbeiter-Zuweisung: {}", 
-                attachment.getOriginalFilename());
+    private Mitarbeiter findMitarbeiterByName(String name) {
+        String cleanName = name.toLowerCase();
+        List<Mitarbeiter> aktive = mitarbeiterRepository.findByAktivTrue();
+
+        for (Mitarbeiter m : aktive) {
+            if (cleanName.contains(m.getNachname().toLowerCase())
+                    && cleanName.contains(m.getVorname().toLowerCase())) {
+                return m;
+            }
+        }
+
+        // Nachname allein reicht, wenn er eindeutig ist (KI kürzt Vornamen manchmal ab)
+        Mitarbeiter einziger = null;
+        for (Mitarbeiter m : aktive) {
+            if (cleanName.contains(m.getNachname().toLowerCase())) {
+                if (einziger != null) {
+                    return null; // mehrdeutig
+                }
+                einziger = m;
+            }
+        }
+        return einziger;
     }
 
     /**
@@ -461,6 +617,4 @@ public class SteuerberaterEmailProcessingService {
         }
     }
 
-    // TODO: KI-basierte PDF-Analyse implementieren
-    // Vorerst werden PDFs nur anhand Keywords im Dateinamen klassifiziert
 }

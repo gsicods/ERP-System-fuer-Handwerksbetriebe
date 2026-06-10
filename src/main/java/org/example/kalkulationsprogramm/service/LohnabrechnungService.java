@@ -9,7 +9,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -24,6 +27,9 @@ public class LohnabrechnungService {
 
     @Value("${file.lohnabrechnung-dir:uploads/lohnabrechnungen}")
     private String lohnabrechnungDir;
+
+    @Value("${file.mail-attachment-dir}")
+    private String mailAttachmentDir;
 
     /**
      * Findet alle Lohnabrechnungen eines Mitarbeiters.
@@ -83,6 +89,46 @@ public class LohnabrechnungService {
     @Transactional
     public Lohnabrechnung save(Lohnabrechnung lohnabrechnung) {
         return lohnabrechnungRepository.save(lohnabrechnung);
+    }
+
+    /**
+     * PDF-Datei einer Lohnabrechnung mit Anzeigename für den Download.
+     */
+    public record PdfDatei(Path pfad, String anzeigeName) {}
+
+    /**
+     * Löst die PDF-Datei einer Lohnabrechnung auf.
+     * Gesplittete Sammel-PDFs liegen im Lohnabrechnungs-Verzeichnis,
+     * ältere Importe referenzieren noch direkt den E-Mail-Anhang.
+     */
+    @Transactional(readOnly = true)
+    public Optional<PdfDatei> findPdf(Long id) {
+        return lohnabrechnungRepository.findById(id).flatMap(la -> {
+            String gespeichert = la.getGespeicherterDateiname();
+            if (gespeichert == null || gespeichert.isBlank()) {
+                return Optional.empty();
+            }
+
+            String anzeigeName = la.getOriginalDateiname() != null
+                    ? la.getOriginalDateiname()
+                    : "lohnabrechnung.pdf";
+
+            for (String dir : List.of(lohnabrechnungDir, mailAttachmentDir)) {
+                Path basis = Path.of(dir).toAbsolutePath().normalize();
+                Path datei = basis.resolve(gespeichert).normalize();
+                // Schutz gegen Path-Traversal über manipulierte Dateinamen
+                if (!datei.startsWith(basis)) {
+                    log.warn("[Lohnabrechnung] Ungültiger Dateipfad für ID {}: {}", id, gespeichert);
+                    return Optional.empty();
+                }
+                if (Files.exists(datei)) {
+                    return Optional.of(new PdfDatei(datei, anzeigeName));
+                }
+            }
+
+            log.warn("[Lohnabrechnung] PDF-Datei nicht gefunden für ID {} ({})", id, gespeichert);
+            return Optional.empty();
+        });
     }
 
     /**

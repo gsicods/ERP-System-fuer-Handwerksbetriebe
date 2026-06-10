@@ -803,6 +803,9 @@ public class AusgangsGeschaeftsDokumentService {
             offenerPosten.setEmailVersandDatum(dokument.getVersandDatum());
         }
 
+        // Vom System erzeugte Einträge erhalten automatische Zahlungserinnerungen per E-Mail
+        offenerPosten.setSystemGeneriert(true);
+
         projektDokumentRepository.save(offenerPosten);
         log.info("Offener-Posten-Eintrag erstellt für Dokument {} (Typ: {})",
                 dokument.getDokumentNummer(), dokument.getTyp());

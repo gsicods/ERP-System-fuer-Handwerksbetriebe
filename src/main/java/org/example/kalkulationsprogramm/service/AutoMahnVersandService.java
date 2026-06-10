@@ -1,7 +1,23 @@
 package org.example.kalkulationsprogramm.service;
 
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.text.NumberFormat;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+
 import org.example.email.EmailService;
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument;
 import org.example.kalkulationsprogramm.domain.Firmeninformation;
@@ -23,23 +39,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.IOException;
-import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.text.NumberFormat;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Erzeugt und versendet Mahnstufen (Zahlungserinnerung, 1./2. Mahnung)
@@ -119,6 +120,7 @@ public class AutoMahnVersandService
     boolean verarbeiteRechnung(ProjektGeschaeftsdokument dok, Firmeninformation firma, LocalDate heute)
     {
         if (!istOriginalRechnungOhneMahnstufe(dok)) return false;
+        if (!dok.isSystemGeneriert()) return false;
         if (dok.isBezahlt()) return false;
         if (dok.getFaelligkeitsdatum() == null) return false;
         if (dok.getProjekt() == null) return false;
