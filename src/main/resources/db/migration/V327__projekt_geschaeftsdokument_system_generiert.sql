@@ -3,7 +3,7 @@
 -- Nur systemgenerierte Einträge erhalten automatische Zahlungserinnerungen per E-Mail.
 
 ALTER TABLE projekt_dokument
-    ADD COLUMN IF NOT EXISTS system_generiert TINYINT(1) NOT NULL DEFAULT 0;
+    ADD COLUMN system_generiert TINYINT(1) NOT NULL DEFAULT 0;
 
 -- Backfill: Alle ProjektGeschaeftsdokument-Zeilen, deren dokumentid einer
 -- Dokumentnummer in ausgangs_geschaeftsdokument entspricht, wurden vom System
