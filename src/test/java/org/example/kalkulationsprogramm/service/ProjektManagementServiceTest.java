@@ -108,6 +108,8 @@ class ProjektManagementServiceTest {
     @Mock
     private EmailRepository emailRepository;
     @Mock
+    private org.example.kalkulationsprogramm.repository.KalenderEintragRepository kalenderEintragRepository;
+    @Mock
     private ApplicationEventPublisher eventPublisher;
     @Mock
     private AusgangsGeschaeftsDokumentService ausgangsGeschaeftsDokumentService;
@@ -125,7 +127,7 @@ class ProjektManagementServiceTest {
                 arbeitsgangRepository, kundeRepository, dateiSpeicherService, projektMapper,
                 anfrageRepository, ausgangsGeschaeftsDokumentRepository, ZeitbuchungRepository, stundensatzRepository,
                 artikelRepository, artikelInProjektRepository, projektPersistenceService,
-                lieferantenRepository, emailRepository, eventPublisher);
+                lieferantenRepository, emailRepository, kalenderEintragRepository, eventPublisher);
         service.setAusgangsGeschaeftsDokumentService(ausgangsGeschaeftsDokumentService);
     }
 

@@ -22,6 +22,7 @@ import org.example.kalkulationsprogramm.domain.ArtikelWerkstoffe;
 import org.example.kalkulationsprogramm.domain.DokumentGruppe;
 import org.example.kalkulationsprogramm.domain.Email;
 import org.example.kalkulationsprogramm.domain.Kategorie;
+import org.example.kalkulationsprogramm.domain.KalenderEintrag;
 import org.example.kalkulationsprogramm.domain.Kunde;
 import org.example.kalkulationsprogramm.domain.Lieferanten;
 import org.example.kalkulationsprogramm.domain.LieferantenArtikelPreise;
@@ -54,6 +55,7 @@ import org.example.kalkulationsprogramm.repository.ArbeitsgangStundensatzReposit
 import org.example.kalkulationsprogramm.repository.ArtikelInProjektRepository;
 import org.example.kalkulationsprogramm.repository.ArtikelRepository;
 import org.example.kalkulationsprogramm.repository.EmailRepository;
+import org.example.kalkulationsprogramm.repository.KalenderEintragRepository;
 import org.example.kalkulationsprogramm.repository.KundeRepository;
 import org.example.kalkulationsprogramm.repository.LieferantenRepository;
 import org.example.kalkulationsprogramm.repository.ProduktkategorieRepository;
@@ -98,6 +100,7 @@ ProjektManagementService {
     private final ProjektPersistenceService projektPersistenceService;
     private final LieferantenRepository lieferantenRepository;
     private final EmailRepository emailRepository;
+    private final KalenderEintragRepository kalenderEintragRepository;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @lombok.Setter(onMethod_ = @org.springframework.beans.factory.annotation.Autowired)
@@ -123,6 +126,7 @@ ProjektManagementService {
             ProjektPersistenceService projektPersistenceService,
             LieferantenRepository lieferantenRepository,
             EmailRepository emailRepository,
+            KalenderEintragRepository kalenderEintragRepository,
             org.springframework.context.ApplicationEventPublisher eventPublisher) {
         this.projektRepository = projektRepository;
         this.anfrageNotizRepository = anfrageNotizRepository;
@@ -141,6 +145,7 @@ ProjektManagementService {
         this.projektPersistenceService = projektPersistenceService;
         this.lieferantenRepository = lieferantenRepository;
         this.emailRepository = emailRepository;
+        this.kalenderEintragRepository = kalenderEintragRepository;
         this.eventPublisher = eventPublisher;
     }
 
@@ -182,6 +187,7 @@ ProjektManagementService {
         mergeKurzbeschreibung(projekt, anfrage);
 
         ausgangsGeschaeftsDokumentService.migrateFromAnfrageToProjekt(anfrageId, projekt);
+        migrateAnfrageKalenderEintraegeToProjekt(anfrage, projekt);
         projektRepository.save(projekt);
         anfrageRepository.delete(anfrage);
         anfrageRepository.flush();
@@ -526,6 +532,8 @@ ProjektManagementService {
                 } catch (Exception e) {
                     System.err.println("Fehler beim Migrieren der Ausgangsgeschäftsdokumente: " + e.getMessage());
                 }
+
+                migrateAnfrageKalenderEintraegeToProjekt(a, gespeichertesProjekt);
 
                 anfrageRepository.delete(a);
             }
@@ -1748,4 +1756,14 @@ ProjektManagementService {
         return projektRepository.existsByAuftragsnummerAndIdNot(auftragsnummer, projektId);
     }
 
+    private void migrateAnfrageKalenderEintraegeToProjekt(Anfrage anfrage, Projekt projekt) {
+        List<KalenderEintrag> eintraege = kalenderEintragRepository.findByAnfrageIdOrderByDatumDesc(anfrage.getId());
+        for (KalenderEintrag e : eintraege) {
+            e.setAnfrage(null);
+            e.setProjekt(projekt);
+        }
+        if (!eintraege.isEmpty()) {
+            kalenderEintragRepository.saveAll(eintraege);
+        }
+    }
 }
