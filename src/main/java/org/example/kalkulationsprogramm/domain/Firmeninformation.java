@@ -63,15 +63,20 @@ public class Firmeninformation {
     @Column(name = "mahnverfahren_aktiv", nullable = false)
     private boolean mahnverfahrenAktiv = false;
 
-    // Tage nach Faelligkeitsdatum, bis die jeweilige Stufe automatisch ausgeloest wird.
+    // Tage nach Faelligkeitsdatum der Rechnung, bis die Zahlungserinnerung
+    // automatisch ausgeloest wird.
     @Column(name = "tage_bis_zahlungserinnerung", nullable = false)
     private int tageBisZahlungserinnerung = 7;
 
+    // Abstand in Tagen NACH dem Versand der Zahlungserinnerung, bis die
+    // 1. Mahnung folgt (nicht: Tage nach Faelligkeit der Rechnung).
     @Column(name = "tage_bis_erste_mahnung", nullable = false)
-    private int tageBisErsteMahnung = 14;
+    private int tageBisErsteMahnung = 7;
 
+    // Abstand in Tagen NACH dem Versand der 1. Mahnung, bis die 2. Mahnung
+    // folgt (nicht: Tage nach Faelligkeit der Rechnung).
     @Column(name = "tage_bis_zweite_mahnung", nullable = false)
-    private int tageBisZweiteMahnung = 21;
+    private int tageBisZweiteMahnung = 7;
 
     // Neues Zahlungsziel, das jede ausgeloeste Mahnung dem Kunden setzt.
     @Column(name = "mahnverfahren_neues_zahlungsziel_tage", nullable = false)

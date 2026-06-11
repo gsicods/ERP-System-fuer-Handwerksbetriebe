@@ -47,6 +47,14 @@ import lombok.extern.slf4j.Slf4j;
  * automatisch per E-Mail, sobald eine Rechnung gemäss den globalen
  * Tage-Schwellen aus {@link Firmeninformation} ueberfaellig ist.
  *
+ * <p>Die Stufen eskalieren mit <strong>garantierten Abstaenden</strong>: nur
+ * die Zahlungserinnerung haengt an der Faelligkeit der Original-Rechnung
+ * ({@code tageBisZahlungserinnerung}); die 1. Mahnung folgt fruehestens
+ * {@code tageBisErsteMahnung} Tage nach dem <em>Versand</em> der
+ * Zahlungserinnerung, die 2. Mahnung fruehestens {@code tageBisZweiteMahnung}
+ * Tage nach dem Versand der 1. Mahnung. So folgen die Stufen auch bei einer
+ * bereits lange ueberfaelligen Rechnung nicht im Tagesabstand aufeinander.</p>
+ *
  * <p>Im Gegensatz zur ereignisgetriebenen Auto-Auftragsbestaetigung laeuft die
  * Mahnung zeit-getrieben: ein taeglicher Cron pruefst alle offenen Rechnungen
  * und legt fuer jede faellige Rechnung die naechste fehlende Mahnstufe an.
@@ -128,7 +136,7 @@ public class AutoMahnVersandService
         long tageUeberfaellig = ChronoUnit.DAYS.between(dok.getFaelligkeitsdatum(), heute);
         if (tageUeberfaellig <= 0) return false;
 
-        Mahnstufe naechsteStufe = ermittleNaechsteStufe(dok, firma, tageUeberfaellig);
+        Mahnstufe naechsteStufe = ermittleNaechsteStufe(dok, firma, tageUeberfaellig, heute);
         if (naechsteStufe == null) return false;
 
         String empfaenger = ermittleEmpfaenger(dok);
@@ -151,35 +159,89 @@ public class AutoMahnVersandService
     }
 
     /**
-     * Ermittelt die naechste faellige Mahnstufe — die kleinste Stufe, die noch
-     * nicht versendet wurde und deren Tage-Schwelle erreicht ist. Stufen
-     * werden in fester Reihenfolge eskaliert (Zahlungserinnerung → 1.
-     * Mahnung → 2. Mahnung).
+     * Ermittelt die naechste faellige Mahnstufe. Stufen werden in fester
+     * Reihenfolge eskaliert (Zahlungserinnerung → 1. Mahnung → 2. Mahnung)
+     * mit garantierten Abstaenden:
+     *
+     * <ul>
+     *   <li><strong>Zahlungserinnerung</strong>: faellig, sobald die Rechnung
+     *       {@code tageBisZahlungserinnerung} Tage ueberfaellig ist.</li>
+     *   <li><strong>1. Mahnung</strong>: fruehestens
+     *       {@code tageBisErsteMahnung} Tage nach dem Versand der
+     *       Zahlungserinnerung.</li>
+     *   <li><strong>2. Mahnung</strong>: fruehestens
+     *       {@code tageBisZweiteMahnung} Tage nach dem Versand der
+     *       1. Mahnung.</li>
+     * </ul>
+     *
+     * <p>Damit folgen die Stufen auch bei einer bei Aktivierung schon lange
+     * ueberfaelligen Rechnung nicht im Tagesabstand aufeinander.</p>
      */
     static Mahnstufe ermittleNaechsteStufe(ProjektGeschaeftsdokument rechnung,
                                             Firmeninformation firma,
-                                            long tageUeberfaellig)
+                                            long tageUeberfaellig,
+                                            LocalDate heute)
     {
         Set<Mahnstufe> bereits = bereitsVersendeteStufen(rechnung);
 
-        if (!bereits.contains(Mahnstufe.ZAHLUNGSERINNERUNG)
-                && tageUeberfaellig >= firma.getTageBisZahlungserinnerung())
+        if (!bereits.contains(Mahnstufe.ZAHLUNGSERINNERUNG))
         {
-            return Mahnstufe.ZAHLUNGSERINNERUNG;
+            return tageUeberfaellig >= firma.getTageBisZahlungserinnerung()
+                    ? Mahnstufe.ZAHLUNGSERINNERUNG
+                    : null;
         }
-        if (bereits.contains(Mahnstufe.ZAHLUNGSERINNERUNG)
-                && !bereits.contains(Mahnstufe.ERSTE_MAHNUNG)
-                && tageUeberfaellig >= firma.getTageBisErsteMahnung())
+        if (!bereits.contains(Mahnstufe.ERSTE_MAHNUNG))
         {
-            return Mahnstufe.ERSTE_MAHNUNG;
+            return istAbstandSeitVorstufeErreicht(rechnung, Mahnstufe.ZAHLUNGSERINNERUNG,
+                    firma.getTageBisErsteMahnung(), heute)
+                    ? Mahnstufe.ERSTE_MAHNUNG
+                    : null;
         }
-        if (bereits.contains(Mahnstufe.ERSTE_MAHNUNG)
-                && !bereits.contains(Mahnstufe.ZWEITE_MAHNUNG)
-                && tageUeberfaellig >= firma.getTageBisZweiteMahnung())
+        if (!bereits.contains(Mahnstufe.ZWEITE_MAHNUNG))
         {
-            return Mahnstufe.ZWEITE_MAHNUNG;
+            return istAbstandSeitVorstufeErreicht(rechnung, Mahnstufe.ERSTE_MAHNUNG,
+                    firma.getTageBisZweiteMahnung(), heute)
+                    ? Mahnstufe.ZWEITE_MAHNUNG
+                    : null;
         }
         return null;
+    }
+
+    /**
+     * {@code true}, wenn seit dem Datum der bereits versendeten Vorstufe
+     * mindestens {@code abstandTage} Tage vergangen sind. Der Abstand wird
+     * auf mindestens 1 geklemmt, damit nie am selben Tag eskaliert wird.
+     */
+    private static boolean istAbstandSeitVorstufeErreicht(ProjektGeschaeftsdokument rechnung,
+                                                          Mahnstufe vorstufe,
+                                                          int abstandTage,
+                                                          LocalDate heute)
+    {
+        LocalDate vorstufenDatum = datumDerStufe(rechnung, vorstufe, heute);
+        return !heute.isBefore(vorstufenDatum.plusDays(Math.max(1, abstandTage)));
+    }
+
+    /**
+     * Datum, an dem die uebergebene Mahnstufe versendet wurde. Fallback-Kette
+     * pro Mahn-Dokument: {@code emailVersandDatum} → {@code rechnungsdatum} →
+     * {@code uploadDatum}. Ist alles {@code null} (oder das Mahn-Dokument
+     * unauffindbar), gilt die Stufe als heute versendet — Ergebnis: keine
+     * Eskalation am selben Tag.
+     */
+    private static LocalDate datumDerStufe(ProjektGeschaeftsdokument rechnung,
+                                           Mahnstufe stufe,
+                                           LocalDate heute)
+    {
+        if (rechnung.getMahnungen() == null) return heute;
+        for (ProjektGeschaeftsdokument mahnung : rechnung.getMahnungen())
+        {
+            if (mahnung.getMahnstufe() != stufe) continue;
+            if (mahnung.getEmailVersandDatum() != null) return mahnung.getEmailVersandDatum();
+            if (mahnung.getRechnungsdatum() != null) return mahnung.getRechnungsdatum();
+            if (mahnung.getUploadDatum() != null) return mahnung.getUploadDatum();
+            return heute;
+        }
+        return heute;
     }
 
     private static Set<Mahnstufe> bereitsVersendeteStufen(ProjektGeschaeftsdokument rechnung)
