@@ -214,9 +214,10 @@ public class AusgangsGeschaeftsDokumentService {
                 if (dto.getPositionenJson() == null && vorgaenger.getPositionenJson() != null) {
                     String inheritedJson = vorgaenger.getPositionenJson();
                     // Beim Umwandeln (z.B. Angebot -> Auftragsbestaetigung) die alten
-                    // Standard-Textbausteine (VOR/NACH) entfernen. Das Frontend laedt
-                    // beim ersten Oeffnen automatisch die fuer den neuen Typ
-                    // konfigurierten Textbausteine. Leistungen und Mengen bleiben.
+                    // Standard-Textbausteine (VOR/NACH) entfernen und das Flag
+                    // "standardTextbausteineErneuern" setzen — der DocumentEditor laedt
+                    // damit beim ersten Oeffnen einmalig die fuer den neuen Typ
+                    // konfigurierten Textbausteine nach. Leistungen und Mengen bleiben.
                     if (vorgaenger.getTyp() != dokument.getTyp()) {
                         inheritedJson = entferneStandardTextbausteine(inheritedJson);
                     }
@@ -1284,6 +1285,15 @@ public class AusgangsGeschaeftsDokumentService {
      * damit das Frontend die fuer den neuen Typ konfigurierten Standard-Textbausteine
      * frisch generieren kann. Leistungen, Section-Header, Subtotals und manuell
      * hinzugefuegte Textbausteine (ohne Rolle) bleiben unveraendert erhalten.
+     *
+     * <p>Zusaetzlich wird das Flag {@code standardTextbausteineErneuern} auf dem
+     * JSON-Root gesetzt. Der DocumentEditor laedt beim Oeffnen genau dann die fuer
+     * den neuen Typ konfigurierten Default-Textbausteine nach — und nur dann: ohne
+     * Flag bleibt der Inhalt bestehender Dokumente beim Oeffnen unangetastet (auch
+     * wenn der User Vor-/Nachtexte geloescht hat). Das Flag verschwindet beim
+     * ersten Speichern automatisch, weil der Editor das positionenJson nur aus
+     * {blocks, globalRabatt, abschlagInfo} neu aufbaut. Legacy-Dokumente im
+     * Array-Format werden dafuer in das Objekt-Format {blocks: [...]} gehoben.</p>
      */
     private String entferneStandardTextbausteine(String positionenJson) {
         if (positionenJson == null || positionenJson.isBlank()) return positionenJson;
@@ -1318,11 +1328,12 @@ public class AusgangsGeschaeftsDokumentService {
                 gefiltert.add(block);
             }
 
-            if (rootObject != null) {
-                rootObject.set("blocks", gefiltert);
-                return mapper.writeValueAsString(rootObject);
+            if (rootObject == null) {
+                rootObject = mapper.createObjectNode();
             }
-            return mapper.writeValueAsString(gefiltert);
+            rootObject.set("blocks", gefiltert);
+            rootObject.put("standardTextbausteineErneuern", true);
+            return mapper.writeValueAsString(rootObject);
         } catch (Exception e) {
             log.warn("Fehler beim Entfernen der Standard-Textbausteine aus positionenJson: {}", e.getMessage());
             return positionenJson;

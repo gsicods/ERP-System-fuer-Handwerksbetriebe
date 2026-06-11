@@ -291,7 +291,10 @@ class AusgangsGeschaeftsDokumentServiceTest {
             AusgangsGeschaeftsDokument result = service.erstellen(dto);
 
             assertThat(result.getHtmlInhalt()).isEqualTo("<p>Vorgänger</p>");
-            assertThat(result.getPositionenJson()).isEqualTo("{\"blocks\":[]}");
+            // Typwechsel (Angebot -> AB): Bloecke bleiben, zusaetzlich wird das
+            // Erneuern-Flag fuer die Standard-Textbausteine des neuen Typs gesetzt.
+            assertThat(result.getPositionenJson())
+                    .isEqualTo("{\"blocks\":[],\"standardTextbausteineErneuern\":true}");
             assertThat(result.getKunde()).isEqualTo(kunde);
         }
 
@@ -327,6 +330,41 @@ class AusgangsGeschaeftsDokumentServiceTest {
             assertThat(result.getPositionenJson()).doesNotContain("Mit freundlichen Gruessen");
             assertThat(result.getPositionenJson()).contains("Malerarbeiten");
             assertThat(result.getPositionenJson()).contains("\"quantity\":5");
+            // Flag fuer den DocumentEditor: Defaults des neuen Typs einmalig nachladen
+            assertThat(result.getPositionenJson()).contains("\"standardTextbausteineErneuern\":true");
+        }
+
+        @Test
+        void setztErneuernFlagAuchBeiLegacyArrayFormatUndHebtInObjektFormat() {
+            mockCounterForNummer();
+            AusgangsGeschaeftsDokument vorgaenger = new AusgangsGeschaeftsDokument();
+            vorgaenger.setId(103L);
+            vorgaenger.setTyp(AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG);
+            // Legacy-Format: positionenJson ist ein nacktes Block-Array
+            vorgaenger.setPositionenJson(
+                    "[{\"id\":\"v1\",\"type\":\"TEXT\",\"textbausteinRolle\":\"VOR\",\"content\":\"Alter Vortext\"},"
+                            + "{\"id\":\"s1\",\"type\":\"SERVICE\",\"title\":\"Geruestbau\",\"quantity\":2,\"price\":50}]");
+            when(dokumentRepository.findById(103L)).thenReturn(Optional.of(vorgaenger));
+            when(dokumentRepository.countByVorgaengerIdAndTyp(103L, AusgangsGeschaeftsDokumentTyp.ABSCHLAGSRECHNUNG))
+                    .thenReturn(0);
+            when(dokumentRepository.save(any())).thenAnswer(inv -> {
+                AusgangsGeschaeftsDokument d = inv.getArgument(0);
+                d.setId(4L);
+                return d;
+            });
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.ABSCHLAGSRECHNUNG);
+            dto.setVorgaengerId(103L);
+
+            AusgangsGeschaeftsDokument result = service.erstellen(dto);
+
+            // Array-Format wird in das Objekt-Format gehoben, damit das Flag Platz hat
+            assertThat(result.getPositionenJson()).startsWith("{");
+            assertThat(result.getPositionenJson()).contains("\"blocks\":[");
+            assertThat(result.getPositionenJson()).doesNotContain("Alter Vortext");
+            assertThat(result.getPositionenJson()).contains("Geruestbau");
+            assertThat(result.getPositionenJson()).contains("\"standardTextbausteineErneuern\":true");
         }
 
         @Test

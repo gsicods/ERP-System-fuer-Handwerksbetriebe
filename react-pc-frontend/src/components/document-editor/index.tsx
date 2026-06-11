@@ -344,7 +344,11 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     const showFinalizationPrompt = invoiceTypes.includes(currentDokumentTyp);
 
     // --- Placeholders ---
-    const replacePlaceholders = useCallback((text: string, isPreview: boolean = true): string => {
+    // keepZahlungszielPlatzhalter: laesst {{ZAHLUNGSZIEL}} und {{ZAHLUNGSZIEL_TAGE}}
+    // unangetastet, damit sie anschliessend als geschuetzte Chips gerendert werden
+    // koennen (Editor-Inhalt) statt als Klartext einzufrieren. PDF/Preview-Pfade
+    // nutzen den Default (false) und loesen beide zu aktuellen Werten auf.
+    const replacePlaceholders = useCallback((text: string, isPreview: boolean = true, keepZahlungszielPlatzhalter: boolean = false): string => {
         if (!text) return text;
         // Defensiv: Sollte ein Chip-Span im Content stehen (statt des Platzhalters),
         // zuerst zurueck zum Platzhalter normalisieren — so steht im PDF/Versand
@@ -379,8 +383,10 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
             'BEZUGSDOKUMENTNUMMER': kontextDaten.bezugsdokument || '',
             'BEZUGSDOKUMENTTYP': kontextDaten.bezugsdokumentTyp || '',
             'BEZUGSDOKUMENTDATUM': kontextDaten.bezugsdokumentDatum || '',
-            'ZAHLUNGSZIEL': berechneZahlungszielDatum(datumRef.current, kontextDaten.zahlungsziel ?? DEFAULT_ZAHLUNGSZIEL_TAGE),
-            'ZAHLUNGSZIEL_TAGE': String(kontextDaten.zahlungsziel ?? DEFAULT_ZAHLUNGSZIEL_TAGE)
+            ...(keepZahlungszielPlatzhalter ? {} : {
+                'ZAHLUNGSZIEL': berechneZahlungszielDatum(datumRef.current, kontextDaten.zahlungsziel ?? DEFAULT_ZAHLUNGSZIEL_TAGE),
+                'ZAHLUNGSZIEL_TAGE': String(kontextDaten.zahlungsziel ?? DEFAULT_ZAHLUNGSZIEL_TAGE)
+            })
         };
 
         return text.replace(/\{\{\s*([a-zA-Z0-9_äöüÄÖÜß]+)\s*\}\}/g, (match, key) => {
@@ -405,10 +411,22 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         [datum, zahlungszielTage]
     );
 
-    /** block.content → Editor-HTML: erst Chip (schuetzt {{ZAHLUNGSZIEL}} vor der Klartext-Ersetzung), dann restliche Platzhalter. */
+    /**
+     * block.content → Editor-HTML: erst alle uebrigen Platzhalter aufloesen
+     * (Zahlungsziel-Platzhalter bleiben stehen), dann beide Zahlungsziel-
+     * Platzhalter in geschuetzte Chips wandeln. Die Reihenfolge ist wichtig:
+     * replacePlaceholders normalisiert Chip-HTML defensiv zurueck zum
+     * Platzhalter — liefe es NACH der Chip-Erzeugung, wuerde es den frisch
+     * erzeugten Chip sofort wieder zerstoeren (Bug: Zahlungsziel stand als
+     * Klartext im Editor statt als Chip).
+     */
     const prepareEditorContent = useCallback(
-        (text: string) => replacePlaceholders(zahlungszielPlaceholderToChipHtml(text, zahlungszielDatumDisplay)),
-        [replacePlaceholders, zahlungszielDatumDisplay]
+        (text: string) => zahlungszielPlaceholderToChipHtml(
+            replacePlaceholders(text, true, true),
+            zahlungszielDatumDisplay,
+            String(zahlungszielTage)
+        ),
+        [replacePlaceholders, zahlungszielDatumDisplay, zahlungszielTage]
     );
 
     /** Editor-HTML → block.content: Chip wieder als Platzhalter serialisieren. */
@@ -755,6 +773,15 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                                 if (parsed.abschlagInfo) {
                                     setAbschlagInfo(parsed.abschlagInfo);
                                 }
+                                // Vom Backend beim Umwandeln gesetzt: alte Standard-
+                                // Textbausteine wurden entfernt, die fuer den neuen Typ
+                                // konfigurierten sollen einmalig nachgeladen werden.
+                                // Das Flag verschwindet beim ersten Speichern automatisch,
+                                // weil der Save-Payload nur {blocks, globalRabatt,
+                                // abschlagInfo} neu aufbaut.
+                                if (parsed.standardTextbausteineErneuern === true) {
+                                    setStandardTexteErneuern(true);
+                                }
                             }
                             setBlocks(loadedBlocks.filter(b => b.type !== 'CLOSURE'));
                             setGlobalRabatt(loadedGlobalRabatt);
@@ -851,18 +878,26 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     }, []);
 
     // --- Auto-Load Standard-Textbausteine je Dokumenttyp ---
-    // Vor-/Nachtexte werden NUR beim erstmaligen Anlegen eines Dokuments aus der
+    // Vor-/Nachtexte werden beim erstmaligen Anlegen eines Dokuments aus der
     // Formular-Vorlage geladen (dokumentId noch nicht gesetzt). Sobald ein
     // Dokument einmal gespeichert wurde, ist der User Herr ueber den Inhalt:
     // nichts wird beim erneuten Oeffnen automatisch hinzugefuegt oder ersetzt –
-    // selbst wenn der User Vor-/Nachtexte komplett geloescht hat. Konvertierungen
-    // (z.B. Angebot -> AB) liefern das neue Dokument bereits aus dem Backend
-    // mit den dort konfigurierten Defaults.
+    // selbst wenn der User Vor-/Nachtexte komplett geloescht hat.
+    // EINZIGE AUSNAHME: frisch umgewandelte Dokumente (z.B. AB -> Abschlags-
+    // rechnung). Das Backend entfernt beim Typwechsel die alten Standard-
+    // Textbausteine und setzt das Flag "standardTextbausteineErneuern" ins
+    // positionenJson — dann (und nur dann) laedt der Editor die fuer den neuen
+    // Typ konfigurierten Defaults einmalig nach. Beim ersten Speichern wird das
+    // Flag automatisch verworfen (Save-Payload baut das JSON neu auf).
+    const [standardTexteErneuern, setStandardTexteErneuern] = useState(false);
     const lastAppliedDefaultsTypRef = useRef<string | null>(null);
     useEffect(() => {
         if (loading) return;
         if (!dokumentTyp) return;
-        if (dokument?.gebucht) return;
+        // Gebuchte oder digital angenommene Dokumente sind unveraenderlich —
+        // auch das Umwandlungs-Flag darf deren Inhalt nicht mehr anfassen
+        // (z.B. Auto-AB nach digitaler Angebotsannahme).
+        if (dokument?.gebucht || dokument?.digitalAngenommen) return;
 
         // Warten, bis der Kontext (Kunde / Projekt) geladen ist, damit
         // {{KUNDENNAME}}, {{BAUVORHABEN}} etc. korrekt aufgeloest werden.
@@ -875,11 +910,11 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         if (lastAppliedDefaultsTypRef.current === dokumentTyp) return;
 
         // Bestehendes Dokument (bereits gespeichert): keine automatischen Defaults
-        // nachladen – auch nicht beim Umschalten des Dokumenttyps oder bei
-        // Konvertierungen. Der ref-Marker wird gesetzt, damit der Effekt bei
-        // erneuten Renders sofort no-op bleibt.
-        if (dokumentId) {
-            lastAppliedDefaultsTypRef.current = dokumentTyp;
+        // nachladen — ausser das Backend hat es beim Umwandeln explizit per Flag
+        // angefordert (siehe Kommentar oben). Bewusst KEIN Marker-Set hier: das
+        // Flag wird asynchron aus positionenJson geparst und darf den Effekt
+        // auch dann noch ausloesen, wenn er vorher schon einmal gelaufen ist.
+        if (dokumentId && !standardTexteErneuern) {
             return;
         }
 
@@ -914,7 +949,10 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                 if (aborted) return;
                 const buildBlock = (item: { id: number; html?: string; beschreibung?: string }, rolle: 'VOR' | 'NACH'): DocBlock => {
                     const rawHtml = item.html || item.beschreibung || '';
-                    const resolvedHtml = replacePlaceholders(rawHtml, false);
+                    // Zahlungsziel-Platzhalter NICHT aufloesen: sie bleiben in
+                    // block.content erhalten und werden im Editor als geschuetzte
+                    // Chips gerendert (sonst friert "8 Tage" als Klartext ein).
+                    const resolvedHtml = replacePlaceholders(rawHtml, false, true);
                     return {
                         id: crypto.randomUUID(),
                         type: 'TEXT',
@@ -948,6 +986,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         ...nachBlocks,
                     ];
                 });
+                // Umwandlungs-Flag verbraucht: Defaults des neuen Typs sind drin.
+                setStandardTexteErneuern(false);
             } catch {
                 // Stumm: fehlende Defaults sind kein Fehler. Marker zuruecksetzen,
                 // damit ein spaeterer Re-Render (z.B. nach Reconnect) das Laden
@@ -958,7 +998,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
             }
         })();
         return () => { aborted = true; };
-    }, [loading, dokumentId, dokumentTyp, replacePlaceholders, kontextDaten, projektId, anfrageId, dokument]);
+    }, [loading, dokumentId, dokumentTyp, replacePlaceholders, kontextDaten, projektId, anfrageId, dokument, standardTexteErneuern]);
 
     const syncDocumentIdInUrl = useCallback((savedDocumentId?: number) => {
         if (!savedDocumentId) return;
@@ -2742,7 +2782,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     dokumentTyp={dokumentTyp}
                     onSelect={(tb) => {
                         const htmlContent = tb.html || tb.beschreibung || '';
-                        const resolvedContent = replacePlaceholders(htmlContent);
+                        // Zahlungsziel-Platzhalter bleiben erhalten → geschuetzter Chip im Editor.
+                        const resolvedContent = replacePlaceholders(htmlContent, true, true);
                         addBlock('TEXT', {
                             content: resolvedContent,
                             fontSize: extractFontSizeFromHtml(resolvedContent) || extractFontSizeFromHtml(htmlContent),

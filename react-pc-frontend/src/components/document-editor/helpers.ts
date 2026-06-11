@@ -74,11 +74,13 @@ export const extractBoldFromHtml = (html: string): boolean => {
 };
 
 // --- Zahlungsziel-Chip: geschützter Platzhalter in Textbausteinen ---
-// {{ZAHLUNGSZIEL}} wird im Editor als nicht editierbarer Chip gerendert und beim
-// Speichern wieder als Platzhalter serialisiert, damit das Datum nie als
-// Klartext "einfriert" und immer aus Rechnungsdatum + Zahlungsziel-Tagen folgt.
+// {{ZAHLUNGSZIEL}} (Fälligkeitsdatum) und {{ZAHLUNGSZIEL_TAGE}} (Anzahl Tage)
+// werden im Editor als nicht editierbare Chips gerendert und beim Speichern
+// wieder als Platzhalter serialisiert, damit die Werte nie als Klartext
+// "einfrieren" und immer aus Rechnungsdatum + Zahlungsziel-Tagen folgen.
 
 export const ZAHLUNGSZIEL_PLACEHOLDER = '{{ZAHLUNGSZIEL}}';
+export const ZAHLUNGSZIEL_TAGE_PLACEHOLDER = '{{ZAHLUNGSZIEL_TAGE}}';
 
 /**
  * Fallback-Zahlungsziel in Tagen, wenn weder Dokument noch Kunde/Anfrage eines
@@ -90,23 +92,36 @@ export const DEFAULT_ZAHLUNGSZIEL_TAGE = 8;
 /** Matcht {{ZAHLUNGSZIEL}} (case-insensitive, mit Leerraum), aber NICHT {{ZAHLUNGSZIEL_TAGE}}. */
 const ZAHLUNGSZIEL_PLACEHOLDER_REGEX = /\{\{\s*ZAHLUNGSZIEL\s*\}\}/gi;
 
-/** Matcht den vom Editor gerenderten Chip-Span (Attribut-Reihenfolge tolerant). */
-const ZAHLUNGSZIEL_CHIP_REGEX = /<span[^>]*data-zahlungsziel-chip[^>]*>[\s\S]*?<\/span>/gi;
+/** Matcht {{ZAHLUNGSZIEL_TAGE}} (case-insensitive, mit Leerraum). */
+const ZAHLUNGSZIEL_TAGE_PLACEHOLDER_REGEX = /\{\{\s*ZAHLUNGSZIEL_TAGE\s*\}\}/gi;
 
 /**
- * Ersetzt den Platzhalter durch das Chip-Span, das die Tiptap-Extension
- * als geschützten Atom-Node parst. Muss exakt das HTML erzeugen, das
+ * Matcht den vom Editor gerenderten Chip-Span (Attribut-Reihenfolge tolerant)
+ * und fängt den Attributwert ("datum" | "tage" | legacy "true") als Gruppe 1.
+ */
+const ZAHLUNGSZIEL_CHIP_REGEX = /<span[^>]*data-zahlungsziel-chip(?:="([^"]*)")?[^>]*>[\s\S]*?<\/span>/gi;
+
+/**
+ * Ersetzt beide Zahlungsziel-Platzhalter durch Chip-Spans, die die Tiptap-
+ * Extension als geschützte Atom-Nodes parst. Muss exakt das HTML erzeugen, das
  * editor.getHTML() für den Node liefert (sonst Sync-Loop im TiptapEditor).
  */
-export function zahlungszielPlaceholderToChipHtml(html: string, displayDatum: string): string {
+export function zahlungszielPlaceholderToChipHtml(html: string, displayDatum: string, displayTage: string): string {
     if (!html) return html;
-    return html.replace(ZAHLUNGSZIEL_PLACEHOLDER_REGEX, `<span data-zahlungsziel-chip="true">${displayDatum}</span>`);
+    return html
+        .replace(ZAHLUNGSZIEL_TAGE_PLACEHOLDER_REGEX, `<span data-zahlungsziel-chip="tage">${displayTage}</span>`)
+        .replace(ZAHLUNGSZIEL_PLACEHOLDER_REGEX, `<span data-zahlungsziel-chip="datum">${displayDatum}</span>`);
 }
 
-/** Serialisiert Chip-Spans zurück zum Platzhalter (für block.content / Persistenz). */
+/**
+ * Serialisiert Chip-Spans zurück zu ihrem Platzhalter (für block.content /
+ * Persistenz). Der Attributwert bestimmt den Platzhalter; legacy "true"
+ * (Chips aus der ersten Chip-Version) wird als Datum interpretiert.
+ */
 export function chipHtmlToZahlungszielPlaceholder(html: string): string {
     if (!html) return html;
-    return html.replace(ZAHLUNGSZIEL_CHIP_REGEX, ZAHLUNGSZIEL_PLACEHOLDER);
+    return html.replace(ZAHLUNGSZIEL_CHIP_REGEX, (_match, variante) =>
+        variante === 'tage' ? ZAHLUNGSZIEL_TAGE_PLACEHOLDER : ZAHLUNGSZIEL_PLACEHOLDER);
 }
 
 /**

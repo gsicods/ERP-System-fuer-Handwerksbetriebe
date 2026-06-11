@@ -17,7 +17,14 @@
  * DSGVO: ausschliesslich Dummy-Daten.
  */
 import { describe, it, expect } from 'vitest';
-import { extractBoldFromHtml, extractFontSizeFromHtml } from './helpers';
+import {
+    extractBoldFromHtml,
+    extractFontSizeFromHtml,
+    zahlungszielPlaceholderToChipHtml,
+    chipHtmlToZahlungszielPlaceholder,
+    ZAHLUNGSZIEL_PLACEHOLDER,
+    ZAHLUNGSZIEL_TAGE_PLACEHOLDER,
+} from './helpers';
 
 describe('extractBoldFromHtml', () => {
     it('liefert false fuer leeres oder undefiniertes HTML', () => {
@@ -60,5 +67,70 @@ describe('extractFontSizeFromHtml', () => {
     it('clampt Werte ausserhalb 10-20pt', () => {
         expect(extractFontSizeFromHtml('<span style="font-size: 6pt">x</span>')).toBe(10);
         expect(extractFontSizeFromHtml('<span style="font-size: 48pt">x</span>')).toBe(20);
+    });
+});
+
+/**
+ * Zahlungsziel-Chips (Regressions-Bug, 2026-06-11):
+ *  Das Zahlungsziel im Textbaustein stand als eingefrorener Klartext
+ *  ("8 Tage" / "17.06.2026") im Editor statt als geschuetzter Chip.
+ *  Beide Platzhalter ({{ZAHLUNGSZIEL}} = Faelligkeitsdatum,
+ *  {{ZAHLUNGSZIEL_TAGE}} = Anzahl Tage) muessen verlustfrei in Chip-Spans
+ *  und wieder zurueck wandelbar sein — sonst friert der Wert beim Speichern ein.
+ */
+describe('zahlungszielPlaceholderToChipHtml', () => {
+    it('wandelt {{ZAHLUNGSZIEL}} in einen Datum-Chip', () => {
+        const html = '<p>Zahlbar bis: {{ZAHLUNGSZIEL}}</p>';
+        expect(zahlungszielPlaceholderToChipHtml(html, '17.06.2026', '8'))
+            .toBe('<p>Zahlbar bis: <span data-zahlungsziel-chip="datum">17.06.2026</span></p>');
+    });
+
+    it('wandelt {{ZAHLUNGSZIEL_TAGE}} in einen Tage-Chip (Bug-Regression)', () => {
+        const html = '<p>Zahlbar innerhalb von {{ZAHLUNGSZIEL_TAGE}} Tagen nach Rechnungsdatum.</p>';
+        expect(zahlungszielPlaceholderToChipHtml(html, '17.06.2026', '8'))
+            .toBe('<p>Zahlbar innerhalb von <span data-zahlungsziel-chip="tage">8</span> Tagen nach Rechnungsdatum.</p>');
+    });
+
+    it('verwechselt die beiden Platzhalter nicht, wenn beide vorkommen', () => {
+        const html = '<p>{{ZAHLUNGSZIEL_TAGE}} Tage, faellig {{ZAHLUNGSZIEL}}</p>';
+        const result = zahlungszielPlaceholderToChipHtml(html, '17.06.2026', '8');
+        expect(result).toContain('<span data-zahlungsziel-chip="tage">8</span>');
+        expect(result).toContain('<span data-zahlungsziel-chip="datum">17.06.2026</span>');
+    });
+
+    it('toleriert Leerraum und Kleinschreibung im Platzhalter', () => {
+        const result = zahlungszielPlaceholderToChipHtml('<p>{{ zahlungsziel }}</p>', '17.06.2026', '8');
+        expect(result).toBe('<p><span data-zahlungsziel-chip="datum">17.06.2026</span></p>');
+    });
+});
+
+describe('chipHtmlToZahlungszielPlaceholder', () => {
+    it('serialisiert den Datum-Chip zurueck zu {{ZAHLUNGSZIEL}}', () => {
+        const html = '<p>Zahlbar bis: <span data-zahlungsziel-chip="datum">17.06.2026</span></p>';
+        expect(chipHtmlToZahlungszielPlaceholder(html))
+            .toBe(`<p>Zahlbar bis: ${ZAHLUNGSZIEL_PLACEHOLDER}</p>`);
+    });
+
+    it('serialisiert den Tage-Chip zurueck zu {{ZAHLUNGSZIEL_TAGE}} (Bug-Regression)', () => {
+        const html = '<p>von <span data-zahlungsziel-chip="tage">8</span> Tagen</p>';
+        expect(chipHtmlToZahlungszielPlaceholder(html))
+            .toBe(`<p>von ${ZAHLUNGSZIEL_TAGE_PLACEHOLDER} Tagen</p>`);
+    });
+
+    it('interpretiert Legacy-Chips (data-zahlungsziel-chip="true") als Datum', () => {
+        const html = '<p><span data-zahlungsziel-chip="true">17.06.2026</span></p>';
+        expect(chipHtmlToZahlungszielPlaceholder(html))
+            .toBe(`<p>${ZAHLUNGSZIEL_PLACEHOLDER}</p>`);
+    });
+
+    it('ist verlustfrei im Round-Trip Platzhalter -> Chip -> Platzhalter', () => {
+        const original = '<p>Zahlbar innerhalb von {{ZAHLUNGSZIEL_TAGE}} Tagen, faellig am {{ZAHLUNGSZIEL}}.</p>';
+        const chipped = zahlungszielPlaceholderToChipHtml(original, '17.06.2026', '8');
+        expect(chipHtmlToZahlungszielPlaceholder(chipped)).toBe(original);
+    });
+
+    it('laesst HTML ohne Chips unveraendert', () => {
+        const html = '<p>Mit freundlichen Gruessen, Max Mustermann</p>';
+        expect(chipHtmlToZahlungszielPlaceholder(html)).toBe(html);
     });
 });

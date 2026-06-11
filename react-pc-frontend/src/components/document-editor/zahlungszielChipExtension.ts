@@ -5,8 +5,9 @@ import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 /**
  * Geschützter Inline-Chip für das Zahlungsziel in Textbausteinen.
  *
- * Der Chip wird aus `<span data-zahlungsziel-chip>` geparst (erzeugt aus dem
- * Platzhalter {{ZAHLUNGSZIEL}}, siehe helpers.ts) und ist ein Atom-Node:
+ * Der Chip wird aus `<span data-zahlungsziel-chip="datum|tage">` geparst
+ * (erzeugt aus den Platzhaltern {{ZAHLUNGSZIEL}} bzw. {{ZAHLUNGSZIEL_TAGE}},
+ * siehe helpers.ts) und ist ein Atom-Node:
  * Der Cursor kann nicht hinein, der Inhalt ist nicht editierbar. Ein
  * ProseMirror-Plugin verwirft zusätzlich jede Transaktion, die die Anzahl
  * der Chips verringern würde — der Chip ist damit auch nicht löschbar
@@ -34,6 +35,16 @@ export const ZahlungszielChip = Node.create({
                 // nicht als Attribut — daher hier kein Attribut rendern.
                 renderHTML: () => ({}),
             },
+            // Welcher Platzhalter hinter dem Chip steht: 'datum' = {{ZAHLUNGSZIEL}},
+            // 'tage' = {{ZAHLUNGSZIEL_TAGE}}. Legacy-Markup ("true") wird als
+            // Datum interpretiert. Wird in renderHTML als Attributwert ausgegeben,
+            // damit die Serialisierung (helpers.ts) den Platzhalter zurückgewinnt.
+            variante: {
+                default: 'datum',
+                parseHTML: (element: HTMLElement) =>
+                    element.getAttribute('data-zahlungsziel-chip') === 'tage' ? 'tage' : 'datum',
+                renderHTML: () => ({}),
+            },
         };
     },
 
@@ -47,7 +58,7 @@ export const ZahlungszielChip = Node.create({
         // und der Controlled-Value-Sync im TiptapEditor nicht oszilliert.
         return [
             'span',
-            mergeAttributes(HTMLAttributes, { 'data-zahlungsziel-chip': 'true' }),
+            mergeAttributes(HTMLAttributes, { 'data-zahlungsziel-chip': node.attrs.variante }),
             node.attrs.display,
         ];
     },
