@@ -1,16 +1,16 @@
 # Graph Report - ERP-System-fuer-Handwerksbetriebe  (2026-06-11)
 
 ## Corpus Check
-- 1207 files · ~1,085,266 words
+- 1202 files · ~1,081,006 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 10764 nodes · 20799 edges · 817 communities (374 shown, 443 thin omitted)
+- 10764 nodes · 20799 edges · 819 communities (378 shown, 441 thin omitted)
 - Extraction: 74% EXTRACTED · 26% INFERRED · 0% AMBIGUOUS · INFERRED: 5478 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `9c712b03`
+- Built from commit: `e91f6603`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -749,6 +749,8 @@
 - [[_COMMUNITY_Community 805|Community 805]]
 - [[_COMMUNITY_Community 807|Community 807]]
 - [[_COMMUNITY_Community 808|Community 808]]
+- [[_COMMUNITY_Community 809|Community 809]]
+- [[_COMMUNITY_Community 810|Community 810]]
 - [[_COMMUNITY_Community 811|Community 811]]
 - [[_COMMUNITY_Community 812|Community 812]]
 - [[_COMMUNITY_Community 813|Community 813]]
@@ -780,7 +782,7 @@
 - `MarkdownText()` --calls--> `fmt()`  [INFERRED]
   react-pc-frontend/src/components/KiHilfeChat.tsx → react-zeiterfassung/src/pages/BelegPositionenAuswahlPage.tsx
 
-## Communities (817 total, 443 thin omitted)
+## Communities (819 total, 441 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.03
@@ -842,10 +844,6 @@ Nodes (36): Kostenstelle, KostenstelleSelectModal(), KostenstelleSelectModalProp
 Cohesion: 0.08
 Nodes (4): ProjektMapperTest, AnfrageNotizRepository, ProjektManagementServiceTest, ProjektPersistenceService
 
-### Community 19 - "Community 19"
-Cohesion: 0.13
-Nodes (3): DokumentFreigabeRepository, AlternativPositionen, DokumentFreigabeServiceTest
-
 ### Community 21 - "Community 21"
 Cohesion: 0.08
 Nodes (13): AllCapsBetreff, DomainBlacklist, ErstkontaktHeuristik, GefaehrlicheDateitypen, ImageSpam, IsSpamMethode, LieferantenWhitelist, LinkDichte (+5 more)
@@ -863,12 +861,12 @@ Cohesion: 0.04
 Nodes (44): ArtikelImportModal(), ArtikelImportModalProps, autoMapHeaders(), createInitialMappings(), DEFAULT_HEADER_CANDIDATES, FIELD_DEFINITIONS, FieldDefinition, IMPORT_FEEDBACK_STEPS (+36 more)
 
 ### Community 27 - "Community 27"
-Cohesion: 0.09
-Nodes (4): AusgangsGeschaeftsDokumentCounterRepository, AusgangsGeschaeftsDokumentRepository, Erstellen, RechnungsadresseVererbung
+Cohesion: 0.10
+Nodes (3): AusgangsGeschaeftsDokumentRepository, Erstellen, RechnungsadresseVererbung
 
 ### Community 28 - "Community 28"
-Cohesion: 0.04
-Nodes (10): AbteilungBerechtigungController, AusgangsDokumentUebersichtDto, DokumentUebersichtController, EingangsDokumentUebersichtDto, EmailSignatureController, SaveSignatureRequest, KiHilfeController, Filter (+2 more)
+Cohesion: 0.05
+Nodes (7): AbteilungBerechtigungController, EmailSignatureController, SaveSignatureRequest, KiHilfeController, Filter, ProjektManagementService, SummiereKorrekturen
 
 ### Community 29 - "Community 29"
 Cohesion: 0.11
@@ -900,7 +898,7 @@ Nodes (31): AuthContext, AuthContextValue, AuthProvider(), AuthUser, LoginResult
 
 ### Community 40 - "Community 40"
 Cohesion: 0.08
-Nodes (8): GetById, Abrechnungsverlauf, Aktualisieren, AusgangsGeschaeftsDokumentServiceTest, Buchen, EnsureAnfrageDokument, Loeschen, Stornieren
+Nodes (7): AusgangsGeschaeftsDokumentController, GetById, Aktualisieren, AusgangsGeschaeftsDokumentServiceTest, Buchen, Loeschen, Stornieren
 
 ### Community 41 - "Community 41"
 Cohesion: 0.07
@@ -983,8 +981,8 @@ Cohesion: 0.12
 Nodes (4): ModellStatus, Prediction, SpamBayesServiceTest, StatusGetter
 
 ### Community 68 - "Community 68"
-Cohesion: 0.12
-Nodes (30): craftInvokerFunction(), createNamedFunction(), __embind_finalize_value_array(), __embind_finalize_value_object(), __embind_register_class(), __embind_register_class_class_function(), __embind_register_class_constructor(), __embind_register_class_function() (+22 more)
+Cohesion: 0.11
+Nodes (36): craftInvokerFunction(), __embind_finalize_value_array(), __embind_finalize_value_object(), __embind_register_bool(), __embind_register_class(), __embind_register_class_class_function(), __embind_register_class_constructor(), __embind_register_class_function() (+28 more)
 
 ### Community 69 - "Community 69"
 Cohesion: 0.15
@@ -1015,8 +1013,8 @@ Cohesion: 0.06
 Nodes (33): 3 个候选尺寸对比, 4 条硬约束（违反会直接报错）, body 写法三选一（等价）, code:css (body { width: 960pt;  height: 540pt; }    /* 最清晰，推荐 */), code:block10 (原设计 → editable 版调整), code:js (const pptx = new pptxgen();), code:html (<!-- ❌ 错误：文字直接在 div 里 -->), code:css (/* ❌ 错误 */) (+25 more)
 
 ### Community 77 - "Community 77"
-Cohesion: 0.06
-Nodes (19): SeenSenderDomainRepository, EmailAutoAssignmentServiceTest, FindPossibleAssignments, KeineZuordnung, KeywordMatching, KeywordMinimumlaenge, KundeEmailZuordnung, LieferantZuordnung (+11 more)
+Cohesion: 0.14
+Nodes (9): EmailAutoAssignmentServiceTest, FindPossibleAssignments, KeineZuordnung, KeywordMatching, KeywordMinimumlaenge, KundeEmailZuordnung, LieferantZuordnung, MultiStepFallback (+1 more)
 
 ### Community 78 - "Community 78"
 Cohesion: 0.07
@@ -1071,8 +1069,8 @@ Cohesion: 0.06
 Nodes (5): EmailTextTemplateController, EmailSignature, EmailTextTemplateDto, EmailTextTemplateKategorien, TextbausteinDto
 
 ### Community 93 - "Community 93"
-Cohesion: 0.10
-Nodes (6): ScanResult, SpamFilterService, BekannteKundenEmails, EnsembleIntegration, NewsletterErkennung, ZugeordneteEmails
+Cohesion: 0.17
+Nodes (4): BekannteKundenEmails, EnsembleIntegration, NewsletterErkennung, ZugeordneteEmails
 
 ### Community 94 - "Community 94"
 Cohesion: 0.11
@@ -1170,6 +1168,10 @@ Nodes (22): formatLocalDate(), MobileDatePickerProps, MONTHS, buttons, { contain
 Cohesion: 0.09
 Nodes (27): abort(), addFunctionWasm(), allocate(), assert(), _clock_gettime(), convertJsFunctionToWasm(), _emscripten_get_now(), _emscripten_get_now_is_monotonic() (+19 more)
 
+### Community 128 - "Community 128"
+Cohesion: 0.12
+Nodes (3): EmailAttachment, ScanResult, SpamFilterService
+
 ### Community 129 - "Community 129"
 Cohesion: 0.10
 Nodes (22): buildExclusiveItemTypesByCat(), buildItemKey(), CategoryDto, dismissCategory(), dismissItem(), filterDismissed(), gcOrphanedDismissals(), ITEM_TO_CAT_TYPES (+14 more)
@@ -1191,8 +1193,8 @@ Cohesion: 0.14
 Nodes (3): EmailAiService, EmailAiPostProcessor, EmailAiPostProcessorTest
 
 ### Community 135 - "Community 135"
-Cohesion: 0.06
-Nodes (5): AnfrageController, AnfrageControllerTest, Hinweis, AnfrageService, AnfrageServiceTest
+Cohesion: 0.05
+Nodes (6): AnfrageController, AnfrageControllerTest, Hinweis, AnfrageService, AnfrageServiceTest, SteuerberaterKontaktService
 
 ### Community 136 - "Community 136"
 Cohesion: 0.12
@@ -1287,8 +1289,8 @@ Cohesion: 0.08
 Nodes (24): BASENAME, { chromium }, DIR, DURATION, ffmpeg, FONT_WAIT, fs, HEIGHT (+16 more)
 
 ### Community 165 - "Community 165"
-Cohesion: 0.11
-Nodes (3): FreigabeInternalController, DokumentFreigabe, DokumentFreigabeService
+Cohesion: 0.07
+Nodes (4): FreigabeInternalController, DokumentFreigabe, DokumentFreigabeRepository, DokumentFreigabeService
 
 ### Community 167 - "Community 167"
 Cohesion: 0.10
@@ -1359,8 +1361,8 @@ Cohesion: 0.05
 Nodes (6): BestellungsUebersichtController, BestellungsUebersichtControllerBuildKettenTest, LieferantReklamationController, LieferscheinSearchDto, LieferantDokumentProjektAnteilRepository, LieferantDokumentService
 
 ### Community 192 - "Community 192"
-Cohesion: 0.22
-Nodes (15): __embind_register_bool(), __embind_register_emval(), __embind_register_float(), __embind_register_integer(), __embind_register_memory_view(), __embind_register_std_string(), __embind_register_std_wstring(), __embind_register_void() (+7 more)
+Cohesion: 0.10
+Nodes (10): SeenSenderDomainRepository, AusgangsordnerVerarbeitung, DuplikatErkennung, EmailImportServiceTest, FehlerBehandlung, LieferantenNewsletter, LieferantVorrangBeiThreadVererbung, NewsletterMarkierung (+2 more)
 
 ### Community 194 - "Community 194"
 Cohesion: 0.11
@@ -1415,8 +1417,8 @@ Cohesion: 0.25
 Nodes (3): FrontendUserController, SaveProfileRequest, SetDefaultSignatureRequest
 
 ### Community 214 - "Community 214"
-Cohesion: 0.14
-Nodes (22): attachFinalizer(), ClassHandle_clone(), ClassHandle_delete(), ClassHandle_deleteLater(), constNoSmartPtrRawPointerToWireType(), detachFinalizer(), downcastPointer(), __embind_register_class_property() (+14 more)
+Cohesion: 0.19
+Nodes (17): attachFinalizer(), ClassHandle_clone(), ClassHandle_delete(), ClassHandle_deleteLater(), constNoSmartPtrRawPointerToWireType(), detachFinalizer(), __embind_register_class_property(), _embind_repr() (+9 more)
 
 ### Community 216 - "Community 216"
 Cohesion: 0.12
@@ -1463,12 +1465,12 @@ Cohesion: 0.14
 Nodes (13): Apache License 2.0, BSD 3-Clause License, Drittanbieter-Lizenzen / Third-Party Licenses, EPL 2.0 / GPL 2.0 mit Classpath Exception, GPL 2.0 mit FOSS Exception, ISC License, Java Backend, LGPL 2.1 / MPL 2.0 (+5 more)
 
 ### Community 232 - "Community 232"
-Cohesion: 0.07
+Cohesion: 0.06
 Nodes (9): Projekt, ProjektMapper, ProjektSimple, BestellungService, ContactService, EmailAutoAssignmentService, EntityOption, PossibleAssignments (+1 more)
 
 ### Community 236 - "Community 236"
-Cohesion: 0.14
-Nodes (3): toAnredeText(), leer(), AutoAuftragsbestaetigungVersandServicePreview
+Cohesion: 0.11
+Nodes (4): toAnredeText(), leer(), AutoAuftragsbestaetigungVersandServicePreview, AutoMahnVersandServicePreview
 
 ### Community 237 - "Community 237"
 Cohesion: 0.09
@@ -1499,8 +1501,8 @@ Cohesion: 0.14
 Nodes (4): KasseEinstellungRepository, EhegattengehaltSchedulerService, EhegattengehaltSchedulerServiceTest, KasseShortcutServiceTest
 
 ### Community 250 - "Community 250"
-Cohesion: 0.12
-Nodes (3): AusgangsGeschaeftsDokumentAuditController, AusgangsGeschaeftsDokumentAuditRepository, SteuerpruefungZ3ExportService
+Cohesion: 0.09
+Nodes (5): AuditChainBackfillRunner, AusgangsGeschaeftsDokumentAuditController, AuditChainStateRepository, AusgangsGeschaeftsDokumentAuditRepository, SteuerpruefungZ3ExportService
 
 ### Community 251 - "Community 251"
 Cohesion: 0.15
@@ -1523,7 +1525,7 @@ Cohesion: 0.15
 Nodes (11): allTypes, emails, input, item, mockFetch, onChange, onRemove, removeButton (+3 more)
 
 ### Community 256 - "Community 256"
-Cohesion: 0.11
+Cohesion: 0.12
 Nodes (4): NotificationController, NotificationControllerTest, LieferantReklamationRepository, ProjektNotizRepository
 
 ### Community 257 - "Community 257"
@@ -1573,6 +1575,10 @@ Nodes (15): __emval_addMethodCaller(), __emval_as(), __emval_call_void_method(),
 ### Community 271 - "Community 271"
 Cohesion: 0.17
 Nodes (12): 3.1 底色不用纯黑纯白, 3.2 Easing 绝不是 linear, 3.3 Slow-Fast-Boom-Stop 叙事, 3.4 展示「过程」而非「魔法结果」, 3.5 鼠标轨迹人工绘制（弧线 + Perlin Noise）, 3.6 Logo「形变收束」(Morph), 3.7 衬线 + 无衬线双字体, 3.8 焦点切换 = 背景减弱 + 前景锐化 + Flash 引导 (+4 more)
+
+### Community 272 - "Community 272"
+Cohesion: 0.18
+Nodes (3): AusgangsDokumentUebersichtDto, DokumentUebersichtController, EingangsDokumentUebersichtDto
 
 ### Community 273 - "Community 273"
 Cohesion: 0.11
@@ -1735,8 +1741,8 @@ Cohesion: 0.36
 Nodes (4): Create-AutoStartTask(), Create-BackupTask(), Create-WeeklyRestartTask(), Remove-ExistingTask()
 
 ### Community 343 - "Community 343"
-Cohesion: 0.07
-Nodes (8): ZeitverwaltungController, Zeitbuchung, ArbeitsgangMapper, ArbeitsgangMapperTest, ArbeitsgangStundensatzRepository, ProjektAuswertungPdfService, BuildComparatorTests, ZeitbuchungAutoStopService
+Cohesion: 0.09
+Nodes (6): ZeitverwaltungController, Zeitbuchung, ArbeitsgangMapper, ArbeitsgangMapperTest, ArbeitsgangStundensatzRepository, ZeitbuchungAutoStopService
 
 ### Community 347 - "Community 347"
 Cohesion: 0.09
@@ -1958,37 +1964,49 @@ Nodes (6): BestellungController, ArtikelInProjektRepository, BestellungPdfServic
 Cohesion: 0.33
 Nodes (7): AufteilungsSektion(), AuswertungView(), BelegRow(), formatDate(), formatEuro(), KassenbuchView(), TKontoZeile()
 
+### Community 794 - "Community 794"
+Cohesion: 0.10
+Nodes (3): Zeitkonto, ZeitkontoService, ZeitkontoServiceTest
+
 ### Community 795 - "Community 795"
 Cohesion: 0.33
 Nodes (4): AbwesenheitenPageProps, Antrag, statusConfig, typConfig
 
+### Community 802 - "Community 802"
+Cohesion: 0.33
+Nodes (7): createNamedFunction(), __emval_addMethodCaller(), __emval_get_method_caller(), __emval_lookupTypes(), extendError(), makeLegalFunctionName(), new_()
+
 ### Community 803 - "Community 803"
 Cohesion: 0.40
 Nodes (5): getBinary(), getBinaryPromise(), intArrayFromBase64(), isDataURI(), tryParseAsDataURI()
+
+### Community 809 - "Community 809"
+Cohesion: 0.29
+Nodes (7): downcastPointer(), getBasestPointer(), getInheritedInstance(), makeClassHandle(), RegisteredPointer_fromWireType(), replacePublicSymbol(), throwInternalError()
 
 ### Community 827 - "Community 827"
 Cohesion: 0.11
 Nodes (18): formatKg(), AttachmentPreviewModal(), AttachmentPreviewModalProps, Bestellung, BestellungEditor(), BestellungEmailModal(), BestellungEmailModalProps, FrontendUserSelection (+10 more)
 
 ## Knowledge Gaps
-- **2119 isolated node(s):** `FONT_SIZES`, `FontSizeCommandChain`, `FontSizeEditorCommands`, `TiptapEditorProps`, `TiptapEditorRef` (+2114 more)
+- **2119 isolated node(s):** `version`, `source`, `sourceType`, `skillPath`, `computedHash` (+2114 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **443 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **441 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `Select()` connect `Community 25` to `Community 0`, `Community 1`, `Community 6`, `Community 136`, `Community 12`, `Community 153`, `Community 163`, `Community 169`, `Community 173`, `Community 179`, `Community 181`, `Community 55`, `Community 827`, `Community 196`, `Community 201`, `Community 207`, `Community 218`, `Community 352`, `Community 236`, `Community 112`?**
-  _High betweenness centrality (0.110) - this node is a cross-community bridge._
-- **Why does `body` connect `Community 45` to `Community 3`, `Community 260`, `Community 4`, `Community 134`, `Community 135`, `Community 263`, `Community 7`, `Community 259`, `Community 133`, `Community 268`, `Community 394`, `Community 136`, `Community 18`, `Community 275`, `Community 20`, `Community 789`, `Community 790`, `Community 277`, `Community 788`, `Community 22`, `Community 147`, `Community 26`, `Community 28`, `Community 797`, `Community 149`, `Community 159`, `Community 800`, `Community 32`, `Community 162`, `Community 33`, `Community 804`, `Community 165`, `Community 285`, `Community 299`, `Community 43`, `Community 429`, `Community 44`, `Community 173`, `Community 49`, `Community 305`, `Community 180`, `Community 188`, `Community 191`, `Community 64`, `Community 67`, `Community 324`, `Community 325`, `Community 74`, `Community 75`, `Community 460`, `Community 464`, `Community 80`, `Community 82`, `Community 212`, `Community 215`, `Community 343`, `Community 225`, `Community 97`, `Community 100`, `Community 231`, `Community 103`, `Community 361`, `Community 234`, `Community 107`, `Community 363`, `Community 237`, `Community 110`, `Community 364`, `Community 368`, `Community 245`, `Community 250`, `Community 252`, `Community 127`?**
-  _High betweenness centrality (0.081) - this node is a cross-community bridge._
-- **Why does `empty()` connect `Community 237` to `Community 2`, `Community 130`, `Community 4`, `Community 132`, `Community 514`, `Community 135`, `Community 10`, `Community 395`, `Community 13`, `Community 141`, `Community 142`, `Community 273`, `Community 17`, `Community 275`, `Community 276`, `Community 20`, `Community 22`, `Community 19`, `Community 21`, `Community 147`, `Community 154`, `Community 155`, `Community 28`, `Community 29`, `Community 794`, `Community 32`, `Community 165`, `Community 805`, `Community 39`, `Community 40`, `Community 297`, `Community 171`, `Community 44`, `Community 173`, `Community 302`, `Community 304`, `Community 49`, `Community 178`, `Community 310`, `Community 183`, `Community 57`, `Community 58`, `Community 187`, `Community 188`, `Community 60`, `Community 63`, `Community 67`, `Community 199`, `Community 200`, `Community 77`, `Community 78`, `Community 81`, `Community 82`, `Community 343`, `Community 87`, `Community 91`, `Community 349`, `Community 93`, `Community 101`, `Community 232`, `Community 105`, `Community 362`, `Community 106`, `Community 108`, `Community 234`, `Community 110`, `Community 241`, `Community 243`, `Community 116`, `Community 245`, `Community 374`, `Community 246`?**
-  _High betweenness centrality (0.051) - this node is a cross-community bridge._
+  _High betweenness centrality (0.114) - this node is a cross-community bridge._
+- **Why does `body` connect `Community 45` to `Community 3`, `Community 260`, `Community 259`, `Community 134`, `Community 135`, `Community 7`, `Community 133`, `Community 394`, `Community 136`, `Community 268`, `Community 18`, `Community 275`, `Community 20`, `Community 789`, `Community 790`, `Community 277`, `Community 788`, `Community 22`, `Community 147`, `Community 26`, `Community 28`, `Community 797`, `Community 149`, `Community 159`, `Community 800`, `Community 32`, `Community 162`, `Community 33`, `Community 804`, `Community 165`, `Community 285`, `Community 40`, `Community 299`, `Community 43`, `Community 429`, `Community 44`, `Community 173`, `Community 49`, `Community 305`, `Community 180`, `Community 188`, `Community 191`, `Community 64`, `Community 67`, `Community 324`, `Community 325`, `Community 74`, `Community 75`, `Community 460`, `Community 464`, `Community 80`, `Community 82`, `Community 212`, `Community 215`, `Community 343`, `Community 225`, `Community 97`, `Community 100`, `Community 231`, `Community 103`, `Community 361`, `Community 234`, `Community 107`, `Community 363`, `Community 237`, `Community 110`, `Community 364`, `Community 368`, `Community 245`, `Community 250`, `Community 252`, `Community 127`?**
+  _High betweenness centrality (0.096) - this node is a cross-community bridge._
+- **Why does `empty()` connect `Community 237` to `Community 2`, `Community 130`, `Community 132`, `Community 514`, `Community 135`, `Community 10`, `Community 395`, `Community 13`, `Community 141`, `Community 142`, `Community 273`, `Community 17`, `Community 275`, `Community 276`, `Community 20`, `Community 22`, `Community 19`, `Community 21`, `Community 147`, `Community 154`, `Community 155`, `Community 28`, `Community 29`, `Community 794`, `Community 32`, `Community 165`, `Community 805`, `Community 39`, `Community 40`, `Community 297`, `Community 171`, `Community 44`, `Community 173`, `Community 302`, `Community 304`, `Community 49`, `Community 178`, `Community 435`, `Community 310`, `Community 183`, `Community 57`, `Community 58`, `Community 187`, `Community 188`, `Community 60`, `Community 63`, `Community 67`, `Community 199`, `Community 200`, `Community 77`, `Community 78`, `Community 81`, `Community 82`, `Community 343`, `Community 87`, `Community 91`, `Community 349`, `Community 93`, `Community 101`, `Community 232`, `Community 105`, `Community 362`, `Community 106`, `Community 108`, `Community 234`, `Community 110`, `Community 241`, `Community 243`, `Community 116`, `Community 245`, `Community 374`, `Community 246`?**
+  _High betweenness centrality (0.044) - this node is a cross-community bridge._
 - **Are the 182 inferred relationships involving `body` (e.g. with `.bucheAbwesenheit()` and `.empfangeSnapshot()`) actually correct?**
   _`body` has 182 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 163 inferred relationships involving `Filter` (e.g. with `.getAllBerechtigungen()` and `.getBerechtigungen()`) actually correct?**
   _`Filter` has 163 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 153 inferred relationships involving `empty()` (e.g. with `.getSignatureForFrontendUser()` and `.getSignatureForFrontendUser()`) actually correct?**
   _`empty()` has 153 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `FONT_SIZES`, `FontSizeCommandChain`, `FontSizeEditorCommands` to the rest of the system?**
+- **What connects `version`, `source`, `sourceType` to the rest of the system?**
   _2119 weakly-connected nodes found - possible documentation gaps or missing edges._
