@@ -24,6 +24,9 @@ import {
     chipHtmlToZahlungszielPlaceholder,
     ZAHLUNGSZIEL_PLACEHOLDER,
     ZAHLUNGSZIEL_TAGE_PLACEHOLDER,
+    buildBezugsdokumentKontext,
+    defaultsLabelKandidaten,
+    mussAufKontextWarten,
 } from './helpers';
 
 describe('extractBoldFromHtml', () => {
@@ -132,5 +135,70 @@ describe('chipHtmlToZahlungszielPlaceholder', () => {
     it('laesst HTML ohne Chips unveraendert', () => {
         const html = '<p>Mit freundlichen Gruessen, Max Mustermann</p>';
         expect(chipHtmlToZahlungszielPlaceholder(html)).toBe(html);
+    });
+});
+
+/**
+ * Bezugsdaten beim Umwandeln Angebot -> Auftragsbestaetigung:
+ *  Der explizite Vorgaenger muss Nummer, Typ und Datum fuer die neuen
+ *  Standard-Textbausteine liefern.
+ */
+describe('buildBezugsdokumentKontext', () => {
+    it('uebernimmt beim umgewandelten Angebot auch das Bezugsdokumentdatum (Bug-Regression)', () => {
+        expect(buildBezugsdokumentKontext({
+            dokumentNummer: 'AG-2026/06/00006',
+            datum: '2026-06-10',
+        }, 'Angebot')).toEqual({
+            bezugsdokument: 'AG-2026/06/00006',
+            bezugsdokumentTyp: 'Angebot',
+            bezugsdokumentDatum: '10.06.2026',
+        });
+    });
+
+    it('liefert bei fehlendem Datum einen leeren Platzhalterwert', () => {
+        expect(buildBezugsdokumentKontext({
+            dokumentNummer: 'AG-2026/06/00007',
+        }, 'Angebot').bezugsdokumentDatum).toBe('');
+    });
+});
+
+/**
+ * Fallback-Reihenfolge fuer Standard-Textbausteine: Nachtragsangebote ohne
+ * eigene Vorlage/Defaults greifen auf die Angebots-Defaults zurueck.
+ */
+describe('defaultsLabelKandidaten', () => {
+    it('liefert fuer Nachtragsangebot den Angebots-Fallback (Bug-Regression)', () => {
+        expect(defaultsLabelKandidaten('NACHTRAGSANGEBOT', 'Nachtragsangebot'))
+            .toEqual(['Nachtragsangebot', 'Angebot']);
+    });
+
+    it('liefert fuer alle anderen Typen nur das eigene Label', () => {
+        expect(defaultsLabelKandidaten('ANGEBOT', 'Angebot')).toEqual(['Angebot']);
+        expect(defaultsLabelKandidaten('ABSCHLAGSRECHNUNG', 'Abschlagsrechnung')).toEqual(['Abschlagsrechnung']);
+    });
+});
+
+/**
+ * Gate fuer das Laden der Standard-Textbausteine (Regressions-Bug, 2026-06-12):
+ *  Ein Angebot aus einem Projekt OHNE Kunde/Auftragsnummer bekam nie
+ *  Vor-/Nachtexte, weil das Gate dauerhaft auf "Kontext bereit" wartete.
+ *  Aus einer Anfrage (immer mit Kundenname) funktionierte es.
+ */
+describe('mussAufKontextWarten', () => {
+    it('blockiert NICHT mehr, wenn der Kontext-Load abgeschlossen ist aber leer blieb (Bug-Regression)', () => {
+        expect(mussAufKontextWarten({}, true, true)).toBe(false);
+    });
+
+    it('wartet, solange der Kontext-Load noch laeuft und keine Daten da sind', () => {
+        expect(mussAufKontextWarten({}, false, true)).toBe(true);
+    });
+
+    it('blockiert nicht, sobald Kontext-Daten da sind (auch wenn Load formal noch laeuft)', () => {
+        expect(mussAufKontextWarten({ kundenName: 'Max Mustermann' }, false, true)).toBe(false);
+        expect(mussAufKontextWarten({ projektnummer: '2026/01/00001' }, false, true)).toBe(false);
+    });
+
+    it('wartet nie, wenn das Dokument weder Projekt noch Anfrage hat', () => {
+        expect(mussAufKontextWarten({}, false, false)).toBe(false);
     });
 });

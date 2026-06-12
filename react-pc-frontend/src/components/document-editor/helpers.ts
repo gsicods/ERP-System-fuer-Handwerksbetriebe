@@ -98,6 +98,11 @@ const ZAHLUNGSZIEL_TAGE_PLACEHOLDER_REGEX = /\{\{\s*ZAHLUNGSZIEL_TAGE\s*\}\}/gi;
 /**
  * Matcht den vom Editor gerenderten Chip-Span (Attribut-Reihenfolge tolerant)
  * und fängt den Attributwert ("datum" | "tage" | legacy "true") als Gruppe 1.
+ *
+ * Annahme: Der Chip ist ein Tiptap-Atom-Node OHNE Kind-Elemente (siehe
+ * zahlungszielChipExtension.ts) — `[\s\S]*?` bis zum ersten </span> ist daher
+ * sicher. Sollte der Chip jemals verschachteltes Markup enthalten, muss diese
+ * Regex auf einen echten Parser umgestellt werden.
  */
 const ZAHLUNGSZIEL_CHIP_REGEX = /<span[^>]*data-zahlungsziel-chip(?:="([^"]*)")?[^>]*>[\s\S]*?<\/span>/gi;
 
@@ -132,6 +137,78 @@ export function berechneZahlungszielDatum(datumIso: string | undefined, zahlungs
     const d = datumIso ? new Date(datumIso) : new Date();
     d.setDate(d.getDate() + zahlungszielTage);
     return d.toLocaleDateString('de-DE');
+}
+
+interface KontextFuerDefaults {
+    kundenName?: string;
+    projektnummer?: string;
+    projektBauvorhaben?: string;
+    kundennummer?: string;
+}
+
+interface BezugsdokumentLike {
+    dokumentNummer?: string;
+    datum?: string;
+}
+
+export interface BezugsdokumentKontext {
+    bezugsdokument: string;
+    bezugsdokumentTyp: string;
+    bezugsdokumentDatum: string;
+}
+
+/**
+ * Baut die Platzhalterwerte aus dem expliziten Vorgängerdokument.
+ * ISO-Datumswerte werden ohne Date-/Timezone-Konvertierung formatiert, damit
+ * das Bezugsdatum unabhängig von der Browser-Zeitzone stabil bleibt.
+ */
+export function buildBezugsdokumentKontext(
+    vorgaenger: BezugsdokumentLike,
+    typLabel: string,
+): BezugsdokumentKontext {
+    const datumTeile = vorgaenger.datum?.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const bezugsdokumentDatum = datumTeile
+        ? `${datumTeile[3]}.${datumTeile[2]}.${datumTeile[1]}`
+        : '';
+
+    return {
+        bezugsdokument: vorgaenger.dokumentNummer || '',
+        bezugsdokumentTyp: typLabel,
+        bezugsdokumentDatum,
+    };
+}
+
+/**
+ * Entscheidet, ob das Laden der Standard-Textbausteine noch auf den
+ * Kontext (Kunde/Projekt) warten muss.
+ *
+ * Gewartet wird NUR, solange der Kontext-Load laeuft (kontextGeladen=false)
+ * und noch keine Kontext-Daten da sind. Ein abgeschlossener Load ohne Daten
+ * (z.B. Projekt ohne Kunde/Auftragsnummer) darf die Textbausteine nicht
+ * dauerhaft blockieren — das war der Bug "Angebot aus Projekt hat keine
+ * Vor-/Nachtexte, aus Anfrage schon".
+ */
+export function mussAufKontextWarten(
+    kontext: KontextFuerDefaults,
+    kontextGeladen: boolean,
+    hatProjektOderAnfrage: boolean,
+): boolean {
+    const kontextBereit = !!kontext.kundenName
+        || !!kontext.projektnummer
+        || !!kontext.projektBauvorhaben
+        || !!kontext.kundennummer;
+    return !kontextBereit && !kontextGeladen && hatProjektOderAnfrage;
+}
+
+/**
+ * Dokumenttyp-Labels, unter denen die Standard-Textbausteine (Vor-/Nachtexte)
+ * der Formular-Vorlage gesucht werden — in Fallback-Reihenfolge.
+ * Nachtragsangebote verhalten sich wie Angebote: Ist fuer "Nachtragsangebot"
+ * keine eigene Vorlage bzw. kein Standard-Text gepflegt, greifen automatisch
+ * die Angebots-Defaults (gleiches Muster wie AutoMahnVersandService -> "Rechnung").
+ */
+export function defaultsLabelKandidaten(dokumentTyp: string, typLabel: string): string[] {
+    return dokumentTyp === 'NACHTRAGSANGEBOT' ? [typLabel, 'Angebot'] : [typLabel];
 }
 
 export function buildAdresse(kunde: AdresseKundeLike | null | undefined): string {

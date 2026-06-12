@@ -368,6 +368,39 @@ class AusgangsGeschaeftsDokumentServiceTest {
         }
 
         @Test
+        void entferntStandardTextbausteineAuchBeiExplizitMitgeschicktemPositionenJson() {
+            // Regressionsfall: Der ProjektEditor-Rechnungsdialog schickt beim Umwandeln
+            // ein explizites positionenJson mit (inkl. der alten Standard-Textbausteine
+            // des Vorgaengers). Auch dann muessen die Standard-Texte entfernt und das
+            // Erneuern-Flag gesetzt werden — nicht nur beim geerbten positionenJson.
+            mockCounterForNummer();
+            AusgangsGeschaeftsDokument vorgaenger = new AusgangsGeschaeftsDokument();
+            vorgaenger.setId(104L);
+            vorgaenger.setTyp(AusgangsGeschaeftsDokumentTyp.ANGEBOT);
+            when(dokumentRepository.findById(104L)).thenReturn(Optional.of(vorgaenger));
+            when(dokumentRepository.save(any())).thenAnswer(inv -> {
+                AusgangsGeschaeftsDokument d = inv.getArgument(0);
+                d.setId(5L);
+                return d;
+            });
+
+            AusgangsGeschaeftsDokumentErstellenDto dto = new AusgangsGeschaeftsDokumentErstellenDto();
+            dto.setTyp(AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG);
+            dto.setVorgaengerId(104L);
+            dto.setPositionenJson(
+                    "{\"blocks\":["
+                            + "{\"id\":\"v1\",\"type\":\"TEXT\",\"textbausteinRolle\":\"VOR\",\"content\":\"Alter Angebots-Vortext\"},"
+                            + "{\"id\":\"s1\",\"type\":\"SERVICE\",\"title\":\"Treppenbau\",\"quantity\":1,\"price\":900}"
+                            + "],\"globalRabatt\":0}");
+
+            AusgangsGeschaeftsDokument result = service.erstellen(dto);
+
+            assertThat(result.getPositionenJson()).doesNotContain("Alter Angebots-Vortext");
+            assertThat(result.getPositionenJson()).contains("Treppenbau");
+            assertThat(result.getPositionenJson()).contains("\"standardTextbausteineErneuern\":true");
+        }
+
+        @Test
         void behaeltPositionenJsonBeiGleichemTypUnveraendert() {
             mockCounterForNummer();
             AusgangsGeschaeftsDokument vorgaenger = new AusgangsGeschaeftsDokument();

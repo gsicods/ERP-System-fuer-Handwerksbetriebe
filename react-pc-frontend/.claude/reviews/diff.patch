@@ -1,0 +1,70 @@
+diff --git a/react-pc-frontend/src/components/document-editor/index.tsx b/react-pc-frontend/src/components/document-editor/index.tsx
+index fbff714..2e10f3a 100644
+--- a/react-pc-frontend/src/components/document-editor/index.tsx
++++ b/react-pc-frontend/src/components/document-editor/index.tsx
+@@ -930,23 +930,40 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
+         let aborted = false;
+         (async () => {
+             try {
+-                const tplRes = await fetch(
+-                    `/api/formulare/templates/selection?dokumenttyp=${encodeURIComponent(typLabel)}`,
+-                );
+-                if (aborted || tplRes.status !== 200) return;
+-                const templateName = (await tplRes.text()).trim();
+-                if (!templateName) return;
+-
+-                const dfRes = await fetch(
+-                    `/api/formulare/templates/${encodeURIComponent(templateName)}/textbaustein-defaults/resolve?dokumenttyp=${encodeURIComponent(typLabel)}`,
+-                );
+-                if (aborted || !dfRes.ok) return;
+-                const data: {
++                type DefaultsResponse = {
+                     vortexte: Array<{ id: number; name: string; html?: string; beschreibung?: string }>;
+                     nachtexte: Array<{ id: number; name: string; html?: string; beschreibung?: string }>;
+-                } = await dfRes.json();
++                };
++
++                // Nachtragsangebote verhalten sich wie Angebote: Ist fuer
++                // "Nachtragsangebot" keine eigene Vorlage bzw. kein Standard-Text
++                // gepflegt, greifen automatisch die Angebots-Defaults (gleiches
++                // Fallback-Muster wie AutoMahnVersandService -> "Rechnung").
++                const labelKandidaten = dokumentTyp === 'NACHTRAGSANGEBOT'
++                    ? [typLabel, 'Angebot']
++                    : [typLabel];
++
++                let data: DefaultsResponse | null = null;
++                for (const label of labelKandidaten) {
++                    const tplRes = await fetch(
++                        `/api/formulare/templates/selection?dokumenttyp=${encodeURIComponent(label)}`,
++                    );
++                    if (aborted) return;
++                    if (tplRes.status !== 200) continue;
++                    const templateName = (await tplRes.text()).trim();
++                    if (!templateName) continue;
++
++                    const dfRes = await fetch(
++                        `/api/formulare/templates/${encodeURIComponent(templateName)}/textbaustein-defaults/resolve?dokumenttyp=${encodeURIComponent(label)}`,
++                    );
++                    if (aborted) return;
++                    if (!dfRes.ok) continue;
++                    const kandidat: DefaultsResponse = await dfRes.json();
++                    data = kandidat;
++                    if ((kandidat.vortexte?.length || 0) > 0 || (kandidat.nachtexte?.length || 0) > 0) break;
++                }
+ 
+-                if (aborted) return;
++                if (aborted || !data) return;
+                 const buildBlock = (item: { id: number; html?: string; beschreibung?: string }, rolle: 'VOR' | 'NACH'): DocBlock => {
+                     const rawHtml = item.html || item.beschreibung || '';
+                     // Zahlungsziel-Platzhalter NICHT aufloesen: sie bleiben in
+@@ -965,8 +982,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
+                     };
+                 };
+ 
+-                const vorBlocks = data.vortexte.map(v => buildBlock(v, 'VOR'));
+-                const nachBlocks = data.nachtexte.map(n => buildBlock(n, 'NACH'));
++                const vorBlocks = (data.vortexte || []).map(v => buildBlock(v, 'VOR'));
++                const nachBlocks = (data.nachtexte || []).map(n => buildBlock(n, 'NACH'));
+ 
+                 setBlocks(prev => {
+                     // Vorhandene Default-Bloecke entfernen, manuell eingefuegte Texte bleiben

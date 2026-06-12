@@ -212,16 +212,17 @@ public class AusgangsGeschaeftsDokumentService {
                     dokument.setHtmlInhalt(vorgaenger.getHtmlInhalt());
                 }
                 if (dto.getPositionenJson() == null && vorgaenger.getPositionenJson() != null) {
-                    String inheritedJson = vorgaenger.getPositionenJson();
-                    // Beim Umwandeln (z.B. Angebot -> Auftragsbestaetigung) die alten
-                    // Standard-Textbausteine (VOR/NACH) entfernen und das Flag
-                    // "standardTextbausteineErneuern" setzen — der DocumentEditor laedt
-                    // damit beim ersten Oeffnen einmalig die fuer den neuen Typ
-                    // konfigurierten Textbausteine nach. Leistungen und Mengen bleiben.
-                    if (vorgaenger.getTyp() != dokument.getTyp()) {
-                        inheritedJson = entferneStandardTextbausteine(inheritedJson);
-                    }
-                    dokument.setPositionenJson(inheritedJson);
+                    dokument.setPositionenJson(vorgaenger.getPositionenJson());
+                }
+                // Beim Umwandeln (Typwechsel, z.B. AB -> Abschlagsrechnung) die alten
+                // Standard-Textbausteine (VOR/NACH) entfernen und das Flag
+                // "standardTextbausteineErneuern" setzen — der DocumentEditor laedt
+                // damit beim ersten Oeffnen einmalig die fuer den neuen Typ
+                // konfigurierten Textbausteine nach. Gilt fuer geerbtes UND explizit
+                // mitgeschicktes positionenJson (z.B. Teil-/Abschlagsrechnung aus dem
+                // ProjektEditor-Dialog). Leistungen und Mengen bleiben.
+                if (vorgaenger.getTyp() != dokument.getTyp() && dokument.getPositionenJson() != null) {
+                    dokument.setPositionenJson(entferneStandardTextbausteine(dokument.getPositionenJson()));
                 }
                 // Kunde vom Vorgänger übernehmen falls nicht gesetzt
                 if (dokument.getKunde() == null && vorgaenger.getKunde() != null) {

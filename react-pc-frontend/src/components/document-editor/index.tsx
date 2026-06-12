@@ -66,7 +66,7 @@ function applyInsert(prev: DocBlock[], block: DocBlock, anchor: InsertAnchor): D
             return insertIntoSection(prev, block, anchor.sectionId);
     }
 }
-import { buildAdresse, buildAdresseFromAnfrage, blocksToHtml, calculateNetto, extractFontSizeFromHtml, extractBoldFromHtml, unitMap, getAllServiceBlocks, findBlockContainer, flattenBlocksForPdf, buildPositionMap, computeClosureSummary, zahlungszielPlaceholderToChipHtml, chipHtmlToZahlungszielPlaceholder, berechneZahlungszielDatum, DEFAULT_ZAHLUNGSZIEL_TAGE } from './helpers';
+import { buildAdresse, buildAdresseFromAnfrage, blocksToHtml, calculateNetto, extractFontSizeFromHtml, extractBoldFromHtml, unitMap, getAllServiceBlocks, findBlockContainer, flattenBlocksForPdf, buildPositionMap, computeClosureSummary, zahlungszielPlaceholderToChipHtml, chipHtmlToZahlungszielPlaceholder, berechneZahlungszielDatum, DEFAULT_ZAHLUNGSZIEL_TAGE, buildBezugsdokumentKontext, defaultsLabelKandidaten, mussAufKontextWarten } from './helpers';
 import { DocumentEditorHeader } from './DocumentEditorHeader';
 import { ServiceBlock } from './ServiceBlock';
 import { TextBlock } from './TextBlock';
@@ -548,6 +548,13 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     };
 
     // --- Load Kontext ---
+    /**
+     * true, sobald der Kontext-Load (Projekt/Anfrage) abgeschlossen ist —
+     * unabhaengig davon, ob er Daten geliefert hat. Der Defaults-Effekt
+     * wartet nur, solange der Load noch LAEUFT: Ein Projekt ohne Kunde/
+     * Auftragsnummer darf die Standard-Textbausteine nicht dauerhaft blockieren.
+     */
+    const [kontextGeladen, setKontextGeladen] = useState(false);
     useEffect(() => {
         const loadKontext = async () => {
             try {
@@ -574,6 +581,7 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         if (projekt.kundenEmails) projekt.kundenEmails.forEach((e: string) => { if (e && !emails.includes(e)) emails.push(e); });
                         if (projekt.kundeDto?.kundenEmails) projekt.kundeDto.kundenEmails.forEach((e: string) => { if (e && !emails.includes(e)) emails.push(e); });
                         setKontextDaten(prev => ({
+                            ...prev,
                             projektnummer: projekt.auftragsnummer,
                             projektBauvorhaben: projekt.bauvorhaben,
                             kundennummer: projekt.kundennummer,
@@ -595,10 +603,11 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     const res = await fetch(`/api/anfragen/${anfrageId}`);
                     if (res.ok) {
                         const anfrage = await res.json();
-                        const isFollowUp = dokumentTyp !== 'ANGEBOT';
+                        const useAnfrageAsReferenceFallback = !dokumentId && dokumentTyp !== 'ANGEBOT';
                         const emails: string[] = [];
                         if (anfrage.kundenEmails) anfrage.kundenEmails.forEach((e: string) => { if (e && !emails.includes(e)) emails.push(e); });
                         setKontextDaten(prev => ({
+                            ...prev,
                             kundennummer: anfrage.kundennummer,
                             kundenName: anfrage.kundenName,
                             kundeId: anfrage.kundenId,
@@ -610,13 +619,17 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                             ansprechpartner: anfrage.kundenAnsprechpartner || anfrage.kundenAnsprechspartner,
                             kundenEmails: emails,
                             zahlungsziel: anfrage.zahlungsziel ?? DEFAULT_ZAHLUNGSZIEL_TAGE,
-                            ...(isFollowUp ? { bezugsdokument: anfrage.anfragesnummer, bezugsdokumentTyp: 'Angebot' } : {})
+                            ...(useAnfrageAsReferenceFallback
+                                ? { bezugsdokument: anfrage.anfragesnummer, bezugsdokumentTyp: 'Angebot' }
+                                : {})
                         }));
                         setBetreff(anfrage.bauvorhaben || '');
                     }
                 }
             } catch (err) {
                 console.error('Fehler beim Laden der Kontext-Daten:', err);
+            } finally {
+                setKontextGeladen(true);
             }
         };
         loadKontext();
@@ -733,29 +746,26 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         }
                     }
 
-                    // Fetch predecessor type
-                    if (data.anfrageId && !data.gebucht) {
-                        // Already loaded above
+                    // Ein expliziter Vorgänger ist die verbindliche Quelle fuer
+                    // Bezugsnummer, -typ und -datum. Der Request wird abgewartet,
+                    // damit umgewandelte Standardtexte nicht vorher mit leerem
+                    // {{BEZUGSDOKUMENTDATUM}} erzeugt und eingefroren werden.
+                    if (data.vorgaengerId) {
+                        try {
+                            const vorgaengerRes = await fetch(`/api/ausgangs-dokumente/${data.vorgaengerId}`);
+                            if (vorgaengerRes.ok) {
+                                const vorgaenger: AusgangsGeschaeftsDokument = await vorgaengerRes.json();
+                                const typLabel = AUSGANGS_GESCHAEFTSDOKUMENT_TYPEN.find(t => t.value === vorgaenger.typ)?.label || vorgaenger.typ;
+                                setKontextDaten(prev => ({
+                                    ...prev,
+                                    ...buildBezugsdokumentKontext(vorgaenger, typLabel)
+                                }));
+                            }
+                        } catch (err) {
+                            console.error('Fehler beim Laden des Bezugsdokuments:', err);
+                        }
                     } else if (data.anfrageId && data.typ !== 'ANGEBOT') {
                         setKontextDaten(prev => ({ ...prev, bezugsdokumentTyp: 'Angebot' }));
-                    } else if (data.vorgaengerId) {
-                        fetch(`/api/ausgangs-dokumente/${data.vorgaengerId}`)
-                            .then(r => r.ok ? r.json() : null)
-                            .then(vorgaenger => {
-                                if (vorgaenger) {
-                                    const typLabel = AUSGANGS_GESCHAEFTSDOKUMENT_TYPEN.find(t => t.value === vorgaenger.typ)?.label || vorgaenger.typ;
-                                    const vorgaengerDatum = vorgaenger.datum
-                                        ? new Date(vorgaenger.datum).toLocaleDateString('de-DE')
-                                        : '';
-                                    setKontextDaten(prev => ({
-                                        ...prev,
-                                        bezugsdokumentTyp: typLabel,
-                                        bezugsdokument: prev.bezugsdokument || vorgaenger.dokumentNummer,
-                                        bezugsdokumentDatum: vorgaengerDatum
-                                    }));
-                                }
-                            })
-                            .catch(console.error);
                     }
 
                     let loadedBlocks: DocBlock[] = [];
@@ -891,6 +901,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
     // Flag automatisch verworfen (Save-Payload baut das JSON neu auf).
     const [standardTexteErneuern, setStandardTexteErneuern] = useState(false);
     const lastAppliedDefaultsTypRef = useRef<string | null>(null);
+    /** Typ, fuer den gerade ein Defaults-Fetch laeuft (verhindert Doppel-Fetches). */
+    const defaultsInFlightTypRef = useRef<string | null>(null);
     useEffect(() => {
         if (loading) return;
         if (!dokumentTyp) return;
@@ -900,12 +912,9 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
         if (dokument?.gebucht || dokument?.digitalAngenommen) return;
 
         // Warten, bis der Kontext (Kunde / Projekt) geladen ist, damit
-        // {{KUNDENNAME}}, {{BAUVORHABEN}} etc. korrekt aufgeloest werden.
-        const kontextBereit = !!kontextDaten.kundenName
-            || !!kontextDaten.projektnummer
-            || !!kontextDaten.projektBauvorhaben
-            || !!kontextDaten.kundennummer;
-        if (!kontextBereit && !!(projektId || anfrageId)) return;
+        // {{KUNDENNAME}}, {{BAUVORHABEN}} etc. korrekt aufgeloest werden —
+        // aber nur, solange der Kontext-Load noch laeuft (siehe helpers.ts).
+        if (mussAufKontextWarten(kontextDaten, kontextGeladen, !!(projektId || anfrageId))) return;
 
         if (lastAppliedDefaultsTypRef.current === dokumentTyp) return;
 
@@ -920,33 +929,45 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
 
         const typLabel = AUSGANGS_GESCHAEFTSDOKUMENT_TYPEN.find(t => t.value === dokumentTyp)?.label || dokumentTyp;
 
-        // Optimistisch markieren: verhindert, dass der Effekt bei einem
-        // Render mit unveraendertem dokumentTyp waehrend des Fetches erneut
-        // feuert. Wird unten beim Abort revertiert, damit eine spaetere
-        // Kontextaenderung das Laden noch nachholen kann.
-        const previousMarker = lastAppliedDefaultsTypRef.current;
-        lastAppliedDefaultsTypRef.current = dokumentTyp;
+        // Laeuft fuer diesen Typ schon ein Fetch? Dann nichts doppelt starten.
+        // WICHTIG: Der "applied"-Marker wird erst NACH erfolgreichem setBlocks
+        // gesetzt (nicht optimistisch vorab). Die fruehere Variante markierte
+        // vor dem Fetch und brach bei jedem Effekt-Re-Run (z.B. Kontext-Update
+        // waehrend des Fetches) ohne Revert ab — die Vor-/Nachtexte blieben
+        // dann dauerhaft aus.
+        if (defaultsInFlightTypRef.current === dokumentTyp) return;
+        defaultsInFlightTypRef.current = dokumentTyp;
 
-        let aborted = false;
         (async () => {
             try {
-                const tplRes = await fetch(
-                    `/api/formulare/templates/selection?dokumenttyp=${encodeURIComponent(typLabel)}`,
-                );
-                if (aborted || tplRes.status !== 200) return;
-                const templateName = (await tplRes.text()).trim();
-                if (!templateName) return;
-
-                const dfRes = await fetch(
-                    `/api/formulare/templates/${encodeURIComponent(templateName)}/textbaustein-defaults/resolve?dokumenttyp=${encodeURIComponent(typLabel)}`,
-                );
-                if (aborted || !dfRes.ok) return;
-                const data: {
+                type DefaultsResponse = {
                     vortexte: Array<{ id: number; name: string; html?: string; beschreibung?: string }>;
                     nachtexte: Array<{ id: number; name: string; html?: string; beschreibung?: string }>;
-                } = await dfRes.json();
+                };
 
-                if (aborted) return;
+                // Fallback-Reihenfolge der Dokumenttyp-Labels (Nachtragsangebot
+                // faellt auf die Angebots-Defaults zurueck, siehe helpers.ts).
+                const labelKandidaten = defaultsLabelKandidaten(dokumentTyp, typLabel);
+
+                let data: DefaultsResponse | null = null;
+                for (const label of labelKandidaten) {
+                    const tplRes = await fetch(
+                        `/api/formulare/templates/selection?dokumenttyp=${encodeURIComponent(label)}`,
+                    );
+                    if (tplRes.status !== 200) continue;
+                    const templateName = (await tplRes.text()).trim();
+                    if (!templateName) continue;
+
+                    const dfRes = await fetch(
+                        `/api/formulare/templates/${encodeURIComponent(templateName)}/textbaustein-defaults/resolve?dokumenttyp=${encodeURIComponent(label)}`,
+                    );
+                    if (!dfRes.ok) continue;
+                    const kandidat: DefaultsResponse = await dfRes.json();
+                    data = kandidat;
+                    if ((kandidat.vortexte?.length || 0) > 0 || (kandidat.nachtexte?.length || 0) > 0) break;
+                }
+
+                if (!data) return;
                 const buildBlock = (item: { id: number; html?: string; beschreibung?: string }, rolle: 'VOR' | 'NACH'): DocBlock => {
                     const rawHtml = item.html || item.beschreibung || '';
                     // Zahlungsziel-Platzhalter NICHT aufloesen: sie bleiben in
@@ -965,8 +986,8 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                     };
                 };
 
-                const vorBlocks = data.vortexte.map(v => buildBlock(v, 'VOR'));
-                const nachBlocks = data.nachtexte.map(n => buildBlock(n, 'NACH'));
+                const vorBlocks = (data.vortexte || []).map(v => buildBlock(v, 'VOR'));
+                const nachBlocks = (data.nachtexte || []).map(n => buildBlock(n, 'NACH'));
 
                 setBlocks(prev => {
                     // Vorhandene Default-Bloecke entfernen, manuell eingefuegte Texte bleiben
@@ -986,19 +1007,21 @@ export default function DocumentEditor({ projektId, anfrageId, dokumentId, initi
                         ...nachBlocks,
                     ];
                 });
-                // Umwandlungs-Flag verbraucht: Defaults des neuen Typs sind drin.
+                // Erfolg: erst jetzt als "angewendet" markieren und das
+                // Umwandlungs-Flag verbrauchen — die Defaults des neuen Typs sind drin.
+                lastAppliedDefaultsTypRef.current = dokumentTyp;
                 setStandardTexteErneuern(false);
             } catch {
-                // Stumm: fehlende Defaults sind kein Fehler. Marker zuruecksetzen,
-                // damit ein spaeterer Re-Render (z.B. nach Reconnect) das Laden
-                // erneut versuchen kann.
-                if (lastAppliedDefaultsTypRef.current === dokumentTyp) {
-                    lastAppliedDefaultsTypRef.current = previousMarker;
+                // Stumm: fehlende Defaults sind kein Fehler. Der Marker wurde noch
+                // nicht gesetzt, ein spaeterer Re-Render (z.B. nach Reconnect)
+                // versucht das Laden automatisch erneut.
+            } finally {
+                if (defaultsInFlightTypRef.current === dokumentTyp) {
+                    defaultsInFlightTypRef.current = null;
                 }
             }
         })();
-        return () => { aborted = true; };
-    }, [loading, dokumentId, dokumentTyp, replacePlaceholders, kontextDaten, projektId, anfrageId, dokument, standardTexteErneuern]);
+    }, [loading, dokumentId, dokumentTyp, replacePlaceholders, kontextDaten, projektId, anfrageId, dokument, standardTexteErneuern, kontextGeladen]);
 
     const syncDocumentIdInUrl = useCallback((savedDocumentId?: number) => {
         if (!savedDocumentId) return;
