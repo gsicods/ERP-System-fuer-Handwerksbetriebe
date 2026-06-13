@@ -175,6 +175,52 @@ describe('ZuordnungModal – Netto-Berechnung Regression', () => {
         });
     });
 
+    it('sendet streckungJahre fuer eine Kostenstelle und zeigt den Jahresanteil-Hinweis', async () => {
+        mockFetch.mockImplementation((url: string, options?: RequestInit) => {
+            if (options?.method === 'POST') {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true }) });
+            }
+            if (url.includes('/geschaeftsdaten/')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve(makeGeschaeftsdatenResponse(300, 357)) });
+            }
+            if (url.includes('/zuordnungen/')) {
+                return Promise.resolve({
+                    ok: true,
+                    json: () => Promise.resolve([
+                        { kostenstelleId: 10, kostenstelleName: 'Zertifizierung', prozentanteil: 100, betrag: 300.00, beschreibung: '', streckungJahre: 1 },
+                    ]),
+                });
+            }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+        });
+
+        render(<ZuordnungModal {...defaultProps} />);
+
+        await waitFor(() => expect(screen.getByText('Verteilungsmodus:')).toBeInTheDocument());
+
+        // Spinbuttons: [0] = Prozent-Anteil, [1] = Streckungs-Jahre
+        const spinbuttons = screen.getAllByRole('spinbutton');
+        fireEvent.change(spinbuttons[1], { target: { value: '3' } });
+
+        // Hinweis "≈ 100,00 € / Jahr ab 2026" erscheint (300 / 3, Rechnungsjahr 2026)
+        await waitFor(() => expect(screen.getByText(/100,00.*\/ Jahr ab 2026/)).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole('button', { name: /Zuordnen/i }));
+
+        await waitFor(() => {
+            expect(mockFetch).toHaveBeenCalledWith(
+                '/api/bestellungen-uebersicht/zuordnen',
+                expect.objectContaining({ method: 'POST' })
+            );
+        });
+        const postCall = mockFetch.mock.calls.find(([, options]) => options?.method === 'POST');
+        const body = JSON.parse(postCall?.[1]?.body as string);
+        expect(body.projektAnteile[0]).toMatchObject({
+            kostenstelleId: 10,
+            streckungJahre: 3,
+        });
+    });
+
     it('behaelt geladene absolute Zuordnungen beim Speichern absolut', async () => {
         mockFetch.mockImplementation((url: string, options?: RequestInit) => {
             if (options?.method === 'POST') {

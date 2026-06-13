@@ -381,7 +381,12 @@ public class BestellungsUebersichtController {
                 }
                 betragSumme = betragSumme.add(anteil.betrag);
             }
-            vorbereiteteZuordnungen.add(new VorbereiteteBelegZuordnung(ks, anteil.prozentanteil, anteil.betrag, anteil.beschreibung));
+            Integer streckungJahre = normalisiereStreckungJahre(anteil.streckungJahre);
+            if (streckungJahre == null) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Streckung darf höchstens 20 Jahre betragen"));
+            }
+            vorbereiteteZuordnungen.add(new VorbereiteteBelegZuordnung(
+                    ks, anteil.prozentanteil, anteil.betrag, anteil.beschreibung, streckungJahre));
         }
         if (vorbereiteteZuordnungen.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Keine gueltige Kostenstellen-Zuordnung angegeben"));
@@ -396,7 +401,10 @@ public class BestellungsUebersichtController {
         belegKostenstellenAnteilRepository.deleteByBelegId(beleg.getId());
 
         VorbereiteteBelegZuordnung ersteZuordnung = vorbereiteteZuordnungen.get(0);
+        // Der Direkt-Shortcut (Beleg.kostenstelle ohne Split-Entity) kann keine
+        // Streckung speichern — bei Streckung daher immer einen Split anlegen.
         boolean istVollstaendigeEinzelzuordnung = vorbereiteteZuordnungen.size() == 1
+                && ersteZuordnung.streckungJahre() <= 1
                 && ((ersteZuordnung.prozentanteil() != null
                         && ersteZuordnung.prozentanteil().compareTo(BigDecimal.valueOf(100)) == 0)
                     || (ersteZuordnung.prozentanteil() == null
@@ -419,7 +427,7 @@ public class BestellungsUebersichtController {
             split.setBeschreibung(zuordnung.beschreibung());
             split.setZugeordnetVon(zugeordnetVon);
             split.setStreckungStartJahr(defaultStartJahr);
-            split.setStreckungJahre(1);
+            split.setStreckungJahre(zuordnung.streckungJahre());
             if (zuordnung.prozentanteil() != null) {
                 split.setProzent(zuordnung.prozentanteil().intValue());
             } else {
@@ -529,6 +537,19 @@ public class BestellungsUebersichtController {
                 projektAnteil.setAbsoluterBetrag(anteil.betrag);
             }
             projektAnteil.setBeschreibung(anteil.beschreibung);
+
+            // Kostenstreckung nur für Kostenstellen (periodische Gemeinkosten, z.B.
+            // Zertifizierung alle 3 Jahre). Projekt-Anteile bleiben einmalig.
+            if (kostenstelle != null) {
+                Integer streckungJahre = normalisiereStreckungJahre(anteil.streckungJahre);
+                if (streckungJahre == null) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "Streckung darf höchstens 20 Jahre betragen"));
+                }
+                projektAnteil.setStreckungJahre(streckungJahre);
+                projektAnteil.setStreckungStartJahr(gd.getDokumentDatum() != null
+                        ? gd.getDokumentDatum().getYear()
+                        : LocalDate.now().getYear());
+            }
             
             // Betrag berechnen: Kostenstellen-Anteile werden netto verrechnet
             // (Vorsteuerabzug landet beim Finanzamt, nicht im Gemeinkostentopf).
@@ -714,15 +735,28 @@ public class BestellungsUebersichtController {
             @PathVariable Long kostenstelleId,
             @RequestParam(value = "token", required = false) String token,
             Authentication auth) {
-        
-        // Quelle: LieferantDokumentProjektAnteil (Dokumentenverwaltung)
-        var dokumentAnteile = projektAnteilRepository.findByKostenstelleId(kostenstelleId);
 
-        List<ZuordnungDto> dtos = dokumentAnteile.stream()
+        List<ZuordnungDto> dtos = ladeZuordnungenForKostenstelle(kostenstelleId, darfBelegeSehen(token, auth));
+
+        dtos.sort(Comparator
+                .comparing((ZuordnungDto z) -> z.dokumentDatum, Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(z -> z.zugeordnetAm, Comparator.nullsLast(Comparator.reverseOrder())));
+
+        return ResponseEntity.ok(dtos);
+    }
+
+    /**
+     * Lädt alle Zuordnungen einer Kostenstelle aus den drei Quellen
+     * (Lieferanten-Dokument-Anteile, Beleg-Splits, direkt zugeordnete Belege).
+     * Beleg-Quellen nur, wenn der Aufrufer Belege sehen darf.
+     */
+    private List<ZuordnungDto> ladeZuordnungenForKostenstelle(Long kostenstelleId, boolean darfBelegeSehen) {
+        // Quelle: LieferantDokumentProjektAnteil (Dokumentenverwaltung)
+        List<ZuordnungDto> dtos = projektAnteilRepository.findByKostenstelleId(kostenstelleId).stream()
                 .map(this::toZuordnungDto)
                 .collect(Collectors.toList());
 
-        if (darfBelegeSehen(token, auth)) {
+        if (darfBelegeSehen) {
             belegKostenstellenAnteilRepository.findByKostenstelleIdEager(kostenstelleId).stream()
                     .map(this::toZuordnungDto)
                     .forEach(dtos::add);
@@ -732,11 +766,71 @@ public class BestellungsUebersichtController {
                     .forEach(dtos::add);
         }
 
-        dtos.sort(Comparator
-                .comparing((ZuordnungDto z) -> z.dokumentDatum, Comparator.nullsLast(Comparator.reverseOrder()))
-                .thenComparing(z -> z.zugeordnetAm, Comparator.nullsLast(Comparator.reverseOrder())));
+        return dtos;
+    }
 
-        return ResponseEntity.ok(dtos);
+    /**
+     * Auswertung aller aktiven Kostenstellen für ein Geschäftsjahr inklusive
+     * Vorjahresvergleich. Optional auf einen einzelnen Monat eingrenzbar.
+     * Speist sowohl die Kostenstellen-Übersicht als auch das
+     * Vorjahresvergleichs-Diagramm der Erfolgsanalyse.
+     */
+    @GetMapping("/kostenstellen/auswertung")
+    @Transactional(readOnly = true)
+    public ResponseEntity<List<KostenstelleAuswertungDto>> getKostenstellenAuswertung(
+            @RequestParam int jahr,
+            @RequestParam(value = "monat", required = false) Integer monat,
+            @RequestParam(value = "token", required = false) String token,
+            Authentication auth) {
+
+        boolean darfBelegeSehen = darfBelegeSehen(token, auth);
+
+        List<KostenstelleAuswertungDto> result = new ArrayList<>();
+        for (Kostenstelle ks : kostenstelleRepository.findByAktivTrueOrderBySortierungAsc()) {
+            BigDecimal summeDiesesJahr = BigDecimal.ZERO;
+            BigDecimal summeVorjahr = BigDecimal.ZERO;
+            long anzahlDiesesJahr = 0;
+
+            for (ZuordnungDto z : ladeZuordnungenForKostenstelle(ks.getId(), darfBelegeSehen)) {
+                if (z.dokumentDatum == null || z.betrag == null) {
+                    continue;
+                }
+                if (monat != null && z.dokumentDatum.getMonthValue() != monat) {
+                    continue;
+                }
+                // Kostenstreckung: Kosten werden über mehrere Jahre verteilt (z.B.
+                // Zertifizierung alle 3 Jahre). Pro Jahr zählt nur der Jahresanteil,
+                // und das für jedes Jahr im Streckungsfenster. Ohne Streckung
+                // (streckungJahre = 1) bleibt das Verhalten identisch zum Rechnungsjahr.
+                int streckungJahre = (z.streckungJahre != null && z.streckungJahre >= 1) ? z.streckungJahre : 1;
+                int startJahr = z.streckungStartJahr != null ? z.streckungStartJahr : z.dokumentDatum.getYear();
+                BigDecimal jahresBetrag = z.jahresanteil != null
+                        ? z.jahresanteil
+                        : z.betrag.divide(BigDecimal.valueOf(streckungJahre), 2, java.math.RoundingMode.HALF_UP);
+
+                if (jahr >= startJahr && jahr < startJahr + streckungJahre) {
+                    summeDiesesJahr = summeDiesesJahr.add(jahresBetrag);
+                    anzahlDiesesJahr++;
+                }
+                int vorjahr = jahr - 1;
+                if (vorjahr >= startJahr && vorjahr < startJahr + streckungJahre) {
+                    summeVorjahr = summeVorjahr.add(jahresBetrag);
+                }
+            }
+
+            result.add(new KostenstelleAuswertungDto(
+                    ks.getId(),
+                    ks.getBezeichnung(),
+                    ks.getTyp().name(),
+                    ks.getBeschreibung(),
+                    ks.isIstFixkosten(),
+                    ks.isIstInvestition(),
+                    summeDiesesJahr,
+                    summeVorjahr,
+                    anzahlDiesesJahr));
+        }
+
+        return ResponseEntity.ok(result);
     }
 
     private ZuordnungDto toZuordnungDto(LieferantDokumentProjektAnteil a) {
@@ -754,6 +848,9 @@ public class BestellungsUebersichtController {
         dto.betrag = a.getBerechneterBetrag();
         dto.prozentanteil = a.getProzent() != null ? BigDecimal.valueOf(a.getProzent()) : null;
         dto.beschreibung = a.getBeschreibung();
+        dto.streckungJahre = a.getStreckungJahre();
+        dto.streckungStartJahr = a.getStreckungStartJahr();
+        dto.jahresanteil = a.getJahresanteil();
         if (a.getZugeordnetAm() != null) {
             dto.zugeordnetAm = a.getZugeordnetAm();
         } else if (a.getDokument().getUploadDatum() != null) {
@@ -784,6 +881,9 @@ public class BestellungsUebersichtController {
         dto.betrag = a.getBerechneterBetrag();
         dto.prozentanteil = a.getProzent() != null ? BigDecimal.valueOf(a.getProzent()) : null;
         dto.beschreibung = a.getBeschreibung();
+        dto.streckungJahre = a.getStreckungJahre();
+        dto.streckungStartJahr = a.getStreckungStartJahr();
+        dto.jahresanteil = a.getJahresanteil();
         dto.zugeordnetAm = a.getZugeordnetAm();
         if (a.getZugeordnetVon() != null) {
             dto.zugeordnetVonName = a.getZugeordnetVon().getDisplayName();
@@ -804,6 +904,9 @@ public class BestellungsUebersichtController {
         dto.kostenstelleName = beleg.getKostenstelle().getBezeichnung();
         dto.betrag = effektiverBelegNettoBetrag(beleg);
         dto.prozentanteil = BigDecimal.valueOf(100);
+        dto.streckungJahre = 1;
+        dto.streckungStartJahr = beleg.getBelegDatum() != null ? beleg.getBelegDatum().getYear() : null;
+        dto.jahresanteil = dto.betrag;
         dto.beschreibung = beleg.getBeschreibung();
         dto.zugeordnetAm = beleg.getValidiertAm() != null ? beleg.getValidiertAm() : beleg.getUploadDatum();
         dto.lieferantName = beleg.getLieferant() != null ? beleg.getLieferant().getLieferantenname() : null;
@@ -864,11 +967,22 @@ public class BestellungsUebersichtController {
         return null;
     }
 
+    /**
+     * Normalisiert die Streckungs-Jahre einer Kostenstellen-Zuordnung: null/&lt;1 wird zu 1
+     * (keine Streckung). Gibt {@code null} zurück, wenn der Wert die zulässige Obergrenze
+     * (20 Jahre) überschreitet — der Aufrufer antwortet dann mit Bad Request.
+     */
+    private static Integer normalisiereStreckungJahre(Integer streckungJahre) {
+        int wert = (streckungJahre != null && streckungJahre >= 1) ? streckungJahre : 1;
+        return wert > 20 ? null : wert;
+    }
+
     private record VorbereiteteBelegZuordnung(
             Kostenstelle kostenstelle,
             BigDecimal prozentanteil,
             BigDecimal betrag,
-            String beschreibung) {
+            String beschreibung,
+            int streckungJahre) {
     }
 
     /**
@@ -1060,6 +1174,11 @@ public class BestellungsUebersichtController {
         public BigDecimal betrag;
         public BigDecimal prozentanteil;
         public String beschreibung;
+        /**
+         * Über wie viele Jahre die Kosten verteilt werden sollen (nur Kostenstellen).
+         * Null oder 1 = keine Streckung. Beispiel: Zertifizierung alle 3 Jahre = 3.
+         */
+        public Integer streckungJahre;
     }
 
     public static class ZuordnungDto {
@@ -1074,7 +1193,12 @@ public class BestellungsUebersichtController {
         public String beschreibung;
         public LocalDateTime zugeordnetAm;
         public String zugeordnetVonName;
-        
+
+        // Kostenstreckung (periodische Gemeinkosten über mehrere Jahre)
+        public Integer streckungJahre;
+        public Integer streckungStartJahr;
+        public BigDecimal jahresanteil;
+
         // Extra Info
         public String lieferantName;
         public String bestellnummer;
@@ -1098,4 +1222,19 @@ public class BestellungsUebersichtController {
     }
 
     public record KostenstelleDto(Long id, String bezeichnung, String typ, String beschreibung) {}
+
+    /**
+     * Kostenstelle mit aggregierten Kosten für ein Jahr inkl. Vorjahresvergleich.
+     */
+    public record KostenstelleAuswertungDto(
+            Long id,
+            String bezeichnung,
+            String typ,
+            String beschreibung,
+            boolean istFixkosten,
+            boolean istInvestition,
+            BigDecimal summeDiesesJahr,
+            BigDecimal summeVorjahr,
+            long anzahlDiesesJahr) {
+    }
 }

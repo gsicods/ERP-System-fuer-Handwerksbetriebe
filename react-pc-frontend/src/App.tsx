@@ -18,6 +18,7 @@ import ProjektEditor from './pages/ProjektEditor';
 import AnfrageEditor from './pages/AnfrageEditor';
 import BestellungenUebersicht from './pages/BestellungenUebersicht';
 import ErfolgsanalyseEditor from './pages/ErfolgsanalyseEditor';
+import KostenstellenControllingEditor from './pages/KostenstellenControllingEditor';
 import FormularwesenEditor from './pages/FormularwesenEditor';
 import OffenePostenEditor from './pages/OffenePostenEditor';
 import EmailCenter from './pages/EmailCenter';
@@ -82,6 +83,7 @@ export default function App() {
                 <Route path="/bestellungen/bedarf" element={<ErrorBoundary><BestellungEditor /></ErrorBoundary>} />
                 <Route path="/kalender" element={<ErrorBoundary><TerminKalender /></ErrorBoundary>} />
                 <Route path="/analyse" element={<ErrorBoundary><ErfolgsanalyseEditor /></ErrorBoundary>} />
+                <Route path="/kostenstellen" element={<ErrorBoundary><KostenstellenControllingEditor /></ErrorBoundary>} />
                 <Route path="/formulare" element={<ErrorBoundary><FormularwesenEditor /></ErrorBoundary>} />
                 <Route path="/offeneposten" element={<ErrorBoundary><OffenePostenEditor /></ErrorBoundary>} />
                 <Route path="/rechnungsuebersicht" element={<ErrorBoundary><RechnungsuebersichtEditor /></ErrorBoundary>} />

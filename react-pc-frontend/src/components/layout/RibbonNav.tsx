@@ -5,7 +5,7 @@ import {
     BarChart3, Briefcase, Building2, Clock, Euro, FileCheck, FileJson,
     FileText, Gem, Home, Layers, List, Mail, MailPlus, Package, Settings,
     ShoppingCart, Truck, ChevronUp, ChevronDown, User, LogOut,
-    Calendar, CalendarDays, Plane, Shield, Receipt
+    Calendar, CalendarDays, Plane, Shield, Receipt, Wallet
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { NotificationBell } from './NotificationBell';
@@ -158,6 +158,7 @@ const NAVIGATION: NavCategory[] = [
                 label: 'Auswertung',
                 items: [
                     { name: 'Erfolgsanalyse', href: '/analyse', icon: BarChart3 },
+                    { name: 'Kostenstellen', href: '/kostenstellen', icon: Wallet },
                 ]
             }
         ]

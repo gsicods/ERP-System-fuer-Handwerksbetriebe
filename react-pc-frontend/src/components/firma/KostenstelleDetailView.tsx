@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, FileText, Download, Calendar, Euro } from 'lucide-react';
+import { ArrowLeft, FileText, Download, Calendar, CalendarRange, Euro } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card } from '../ui/card';
 
@@ -14,6 +14,11 @@ interface ZuordnungDto {
     prozentanteil: number | null;
     beschreibung: string;
     zugeordnetAm: string;
+
+    // Kostenstreckung über mehrere Jahre (z.B. Zertifizierung alle 3 Jahre)
+    streckungJahre?: number | null;
+    streckungStartJahr?: number | null;
+    jahresanteil?: number | null;
     
     // Extra Info
     lieferantName?: string;
@@ -132,7 +137,7 @@ export function KostenstelleDetailView({ kostenstelle, onBack }: KostenstelleDet
                                         )}
                                     </div>
                                     <p className="text-sm text-slate-600 mb-1">{a.beschreibung}</p>
-                                    <div className="flex gap-3 text-xs text-slate-400">
+                                    <div className="flex flex-wrap gap-3 text-xs text-slate-400">
                                         <span className="flex items-center">
                                             <Calendar className="w-3 h-3 mr-1" />
                                             {formatDate(a.dokumentDatum)}
@@ -141,6 +146,13 @@ export function KostenstelleDetailView({ kostenstelle, onBack }: KostenstelleDet
                                             <Euro className="w-3 h-3 mr-1" />
                                             Anteil: {a.prozentanteil ? `${a.prozentanteil.toFixed(1)}%` : 'Pausschal'}
                                         </span>
+                                        {a.streckungJahre != null && a.streckungJahre > 1 && (
+                                            <span className="flex items-center text-rose-600 font-medium bg-rose-50 px-1.5 py-0.5 rounded">
+                                                <CalendarRange className="w-3 h-3 mr-1" />
+                                                über {a.streckungJahre} Jahre · {formatCurrency(a.jahresanteil ?? (a.betrag / a.streckungJahre))}/Jahr
+                                                {a.streckungStartJahr != null && ` (${a.streckungStartJahr}–${a.streckungStartJahr + a.streckungJahre - 1})`}
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-4">

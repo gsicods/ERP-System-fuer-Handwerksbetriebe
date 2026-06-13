@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Building2, Wallet, Users, Plus, Edit2, Trash2, Save, X, RefreshCw, FileText, Download, Calendar, ShieldCheck, AtSign, HeartPulse, CalendarClock, BellRing, Mail, MailWarning, Info, type LucideIcon } from 'lucide-react';
+import { Building2, Users, Plus, Edit2, Trash2, Save, X, RefreshCw, FileText, Download, Calendar, ShieldCheck, AtSign, HeartPulse, CalendarClock, BellRing, Mail, MailWarning, Info, type LucideIcon } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -8,7 +8,6 @@ import { Select } from '../components/ui/select-custom';
 import { PageLayout } from '../components/layout/PageLayout';
 import { cn } from '../lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
-import { KostenstelleDetailView } from '../components/firma/KostenstelleDetailView';
 import { DatePicker } from '../components/ui/datepicker';
 import { useToast } from '../components/ui/toast';
 import { useConfirm } from '../components/ui/confirm-dialog';
@@ -56,17 +55,6 @@ interface GewerkOption {
     bgName: string;
     bgSatzProzent: number;
     aktiv: boolean;
-}
-
-interface Kostenstelle {
-    id: number;
-    bezeichnung: string;
-    typ: 'LAGER' | 'GEMEINKOSTEN' | 'PROJEKT' | 'SONSTIG';
-    beschreibung: string;
-    istFixkosten: boolean;
-    istInvestition: boolean;
-    aktiv: boolean;
-    sortierung: number;
 }
 
 interface SteuerberaterAnsprechpartner {
@@ -143,15 +131,8 @@ interface EmailAbsender {
     sortierung: number;
 }
 
-type ActiveTab = 'firma' | 'kostenstellen' | 'steuerberater' | 'absender' | 'steuerpruefung' | 'lohn-stammdaten' | 'unfallversicherung';
+type ActiveTab = 'firma' | 'steuerberater' | 'absender' | 'steuerpruefung' | 'lohn-stammdaten' | 'unfallversicherung';
 type SteuerberaterSubTab = 'kontakte' | 'lohnabrechnungen' | 'bwa';
-
-const KOSTENSTELLEN_TYP_OPTIONS = [
-    { value: 'LAGER', label: 'Lager (Investitionen)' },
-    { value: 'GEMEINKOSTEN', label: 'Gemeinkosten (Fixkosten)' },
-    { value: 'PROJEKT', label: 'Projekt' },
-    { value: 'SONSTIG', label: 'Sonstige' },
-];
 
 // --- Mahnverfahren-Zeitstrahl (lokale Bausteine, nur in dieser Seite verwendet) ---
 
@@ -202,12 +183,6 @@ export default function FirmaEditor() {
     // Firmeninformation State
     const [firma, setFirma] = useState<Firmeninformation | null>(null);
 
-    // Kostenstellen State
-    const [kostenstellen, setKostenstellen] = useState<Kostenstelle[]>([]);
-    const [showKostenstelleModal, setShowKostenstelleModal] = useState(false);
-    const [editingKostenstelle, setEditingKostenstelle] = useState<Partial<Kostenstelle> | null>(null);
-    const [selectedKostenstelle, setSelectedKostenstelle] = useState<Kostenstelle | null>(null);
-
     // Steuerberater State
     const [steuerberater, setSteuerberater] = useState<SteuerberaterKontakt[]>([]);
     const [showSteuerberaterModal, setShowSteuerberaterModal] = useState(false);
@@ -251,18 +226,6 @@ export default function FirmaEditor() {
             }
         } catch (e) {
             console.error('Fehler beim Laden der Gewerke', e);
-        }
-    }, []);
-
-    // Load Kostenstellen
-    const loadKostenstellen = useCallback(async () => {
-        try {
-            const res = await fetch('/api/firma/kostenstellen');
-            if (res.ok) {
-                setKostenstellen(await res.json());
-            }
-        } catch (e) {
-            console.error('Fehler beim Laden der Kostenstellen', e);
         }
     }, []);
 
@@ -353,9 +316,9 @@ export default function FirmaEditor() {
 
     useEffect(() => {
         setLoading(true);
-        Promise.all([loadFirma(), loadKostenstellen(), loadSteuerberater(), loadAbsender(), loadMeta(), loadGewerke()])
+        Promise.all([loadFirma(), loadSteuerberater(), loadAbsender(), loadMeta(), loadGewerke()])
             .finally(() => setLoading(false));
-    }, [loadFirma, loadKostenstellen, loadSteuerberater, loadAbsender, loadMeta, loadGewerke]);
+    }, [loadFirma, loadSteuerberater, loadAbsender, loadMeta, loadGewerke]);
 
     // Logo-Upload-State: Cache-Buster, damit das <img> nach Upload/Löschen neu lädt
     const [logoVersion, setLogoVersion] = useState(0);
@@ -441,51 +404,6 @@ export default function FirmaEditor() {
             console.error('Fehler beim Speichern', e);
         } finally {
             setSaving(false);
-        }
-    };
-
-    // Save Kostenstelle
-    const saveKostenstelle = async () => {
-        if (!editingKostenstelle) return;
-        setSaving(true);
-        try {
-            const typ = editingKostenstelle.typ || 'GEMEINKOSTEN';
-            const payload = {
-                ...editingKostenstelle,
-                typ,
-                istFixkosten: typ === 'GEMEINKOSTEN',
-                istInvestition: typ === 'LAGER',
-            };
-            const method = payload.id ? 'PUT' : 'POST';
-            const url = payload.id 
-                ? `/api/firma/kostenstellen/${payload.id}`
-                : '/api/firma/kostenstellen';
-            
-            const res = await fetch(url, {
-                method,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (res.ok) {
-                await loadKostenstellen();
-                setShowKostenstelleModal(false);
-                setEditingKostenstelle(null);
-            }
-        } catch (e) {
-            console.error('Fehler beim Speichern', e);
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    // Delete Kostenstelle
-    const deleteKostenstelle = async (id: number) => {
-        if (!await confirmDialog({ title: 'Kostenstelle löschen', message: 'Kostenstelle wirklich löschen?', variant: 'danger', confirmLabel: 'Löschen' })) return;
-        try {
-            await fetch(`/api/firma/kostenstellen/${id}`, { method: 'DELETE' });
-            await loadKostenstellen();
-        } catch (e) {
-            console.error('Fehler beim Löschen', e);
         }
     };
 
@@ -598,37 +516,11 @@ export default function FirmaEditor() {
         }
     };
 
-    // Init Standard Kostenstellen
-    const initKostenstellen = async () => {
-        try {
-            const res = await fetch('/api/firma/kostenstellen/init', { method: 'POST' });
-            if (res.ok) {
-                setKostenstellen(await res.json());
-            }
-        } catch (e) {
-            console.error('Fehler beim Initialisieren', e);
-        }
-    };
-
-    const getKostenstelleTypLabel = (typ: string) => {
-        const option = KOSTENSTELLEN_TYP_OPTIONS.find(o => o.value === typ);
-        return option?.label || typ;
-    };
-
-    const getKostenstelleTypColor = (typ: string) => {
-        switch (typ) {
-            case 'LAGER': return 'bg-blue-100 text-blue-700 border-blue-200';
-            case 'GEMEINKOSTEN': return 'bg-rose-100 text-rose-700 border-rose-200';
-            case 'PROJEKT': return 'bg-green-100 text-green-700 border-green-200';
-            default: return 'bg-slate-100 text-slate-700 border-slate-200';
-        }
-    };
-
     return (
         <PageLayout
             ribbonCategory="Vorlagen & Stammdaten"
             title="FIRMENINFORMATIONEN"
-            subtitle="Firmendaten, Kostenstellen, Steuerberater und Systemkonfiguration"
+            subtitle="Firmendaten, Steuerberater und Systemkonfiguration"
         >
             {loading ? (
                 <div className="flex items-center justify-center py-20">
@@ -649,18 +541,6 @@ export default function FirmaEditor() {
                         >
                             <Building2 className="w-4 h-4 inline-block mr-2" />
                             Firmendaten
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('kostenstellen')}
-                            className={cn(
-                                "px-4 py-2 text-sm font-medium rounded-t-lg transition",
-                                activeTab === 'kostenstellen'
-                                    ? "bg-rose-50 text-rose-700 border-b-2 border-rose-600"
-                                    : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
-                            )}
-                        >
-                            <Wallet className="w-4 h-4 inline-block mr-2" />
-                            Kostenstellen ({kostenstellen.length})
                         </button>
                         <button
                             onClick={() => setActiveTab('lohn-stammdaten')}
@@ -1024,102 +904,6 @@ export default function FirmaEditor() {
                                 </Button>
                             </div>
                         </Card>
-                    )}
-
-                    {activeTab === 'kostenstellen' && (
-                        <div className="space-y-4">
-                            <div className="flex justify-between items-center">
-                                <p className="text-slate-500 text-sm">
-                                    Kostenstellen für die Zuordnung von Lieferantenrechnungen
-                                </p>
-                                <div className="flex gap-2">
-                                    {kostenstellen.length === 0 && (
-                                        <Button
-                                            variant="outline"
-                                            onClick={initKostenstellen}
-                                            className="border-rose-300 text-rose-700"
-                                        >
-                                            Standard anlegen
-                                        </Button>
-                                    )}
-                                    <Button
-                                        onClick={() => {
-                                            setEditingKostenstelle({ aktiv: true, sortierung: kostenstellen.length + 1 });
-                                            setShowKostenstelleModal(true);
-                                        }}
-                                        className="bg-rose-600 text-white hover:bg-rose-700"
-                                    >
-                                        <Plus className="w-4 h-4 mr-2" />
-                                        Neue Kostenstelle
-                                    </Button>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {selectedKostenstelle ? (
-                                    <div className="col-span-full">
-                                        <KostenstelleDetailView 
-                                            kostenstelle={selectedKostenstelle} 
-                                            onBack={() => setSelectedKostenstelle(null)} 
-                                        />
-                                    </div>
-                                ) : (
-                                    kostenstellen.map(ks => (
-                                    <Card 
-                                        key={ks.id} 
-                                        className="p-4 cursor-pointer hover:shadow-md transition-shadow group"
-                                        onClick={() => setSelectedKostenstelle(ks)}
-                                    >
-                                        <div className="flex justify-between items-start">
-                                            <div>
-                                                <h4 className="font-semibold text-slate-900 group-hover:text-rose-600 transition-colors">{ks.bezeichnung}</h4>
-                                                <span className={cn(
-                                                    "inline-block px-2 py-0.5 text-xs rounded border mt-1",
-                                                    getKostenstelleTypColor(ks.typ)
-                                                )}>
-                                                    {getKostenstelleTypLabel(ks.typ)}
-                                                </span>
-                                            </div>
-                                            <div className="flex gap-1">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setEditingKostenstelle(ks);
-                                                        setShowKostenstelleModal(true);
-                                                    }}
-                                                >
-                                                    <Edit2 className="w-4 h-4" />
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        deleteKostenstelle(ks.id);
-                                                    }}
-                                                    className="text-red-600 hover:text-red-700"
-                                                >
-                                                    <Trash2 className="w-4 h-4" />
-                                                </Button>
-                                            </div>
-                                        </div>
-                                        {ks.beschreibung && (
-                                            <p className="text-sm text-slate-500 mt-2">{ks.beschreibung}</p>
-                                        )}
-                                        <div className="flex gap-2 mt-2">
-                                            {ks.istFixkosten && (
-                                                <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Fixkosten</span>
-                                            )}
-                                            {ks.istInvestition && (
-                                                <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Investition</span>
-                                            )}
-                                        </div>
-                                    </Card>
-                                )))}
-                            </div>
-                        </div>
                     )}
 
                     {activeTab === 'steuerberater' && (
@@ -1549,64 +1333,6 @@ export default function FirmaEditor() {
                     )}
                 </>
             )}
-
-            {/* Kostenstelle Modal */}
-            <Dialog open={showKostenstelleModal} onOpenChange={setShowKostenstelleModal}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>
-                            {editingKostenstelle?.id ? 'Kostenstelle bearbeiten' : 'Neue Kostenstelle'}
-                        </DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4 py-4">
-                        <div>
-                            <Label>Bezeichnung *</Label>
-                            <Input
-                                value={editingKostenstelle?.bezeichnung || ''}
-                                onChange={e => setEditingKostenstelle({ ...editingKostenstelle, bezeichnung: e.target.value })}
-                            />
-                        </div>
-                        <div>
-                            <Label>Typ *</Label>
-                            <Select
-                                value={editingKostenstelle?.typ || 'GEMEINKOSTEN'}
-                                onChange={value => setEditingKostenstelle({ ...editingKostenstelle, typ: value as Kostenstelle['typ'] })}
-                                options={KOSTENSTELLEN_TYP_OPTIONS}
-                            />
-                        </div>
-                        <div>
-                            <Label>Beschreibung</Label>
-                            <Input
-                                value={editingKostenstelle?.beschreibung || ''}
-                                onChange={e => setEditingKostenstelle({ ...editingKostenstelle, beschreibung: e.target.value })}
-                            />
-                        </div>
-                        <p className="text-xs text-slate-500">
-                            {(editingKostenstelle?.typ || 'GEMEINKOSTEN') === 'GEMEINKOSTEN'
-                                ? 'Wird als Fixkosten für die Gemeinkostenberechnung verwendet.'
-                                : (editingKostenstelle?.typ || '') === 'LAGER'
-                                    ? 'Wird als Investition gewertet (keine echten Kosten).'
-                                    : (editingKostenstelle?.typ || '') === 'PROJEKT'
-                                        ? 'Kosten werden dem jeweiligen Projekt zugeordnet.'
-                                        : 'Sonstige Kostenzuordnung.'}
-                        </p>
-                    </div>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setShowKostenstelleModal(false)}>
-                            <X className="w-4 h-4 mr-2" />
-                            Abbrechen
-                        </Button>
-                        <Button
-                            onClick={saveKostenstelle}
-                            disabled={saving || !editingKostenstelle?.bezeichnung}
-                            className="bg-rose-600 text-white hover:bg-rose-700"
-                        >
-                            {saving ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                            Speichern
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
 
             {/* E-Mail-Absender Modal */}
             <Dialog open={showAbsenderModal} onOpenChange={setShowAbsenderModal}>

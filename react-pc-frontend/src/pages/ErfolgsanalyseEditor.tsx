@@ -81,6 +81,15 @@ interface KategorieUmsatzVergleich {
     verrechnungseinheit?: string;
 }
 
+interface KostenstelleVergleich {
+    id: number;
+    bezeichnung: string;
+    typ: string;
+    summeDiesesJahr: number;
+    summeVorjahr: number;
+    anzahlDiesesJahr: number;
+}
+
 interface MonatsumsatzDto {
     monat: number;
     letztesJahr: number;
@@ -400,6 +409,7 @@ export default function ErfolgsanalyseEditor() {
     const [lieferantenkostenJahre, setLieferantenkostenJahre] = useState<LieferantenkostenJahr[]>([]);
     const [lieferantPerformance, setLieferantPerformance] = useState<LieferantPerformance[]>([]);
     const [websiteAnalytics, setWebsiteAnalytics] = useState<WebsiteAnalyticsSnapshotDto | null>(null);
+    const [kostenstellenVergleich, setKostenstellenVergleich] = useState<KostenstelleVergleich[]>([]);
 
     // Lade Daten
     const loadData = useCallback(async () => {
@@ -408,12 +418,13 @@ export default function ErfolgsanalyseEditor() {
             const params = new URLSearchParams({ jahr: jahr.toString() });
             if (monat) params.append('monat', monat);
 
-            const [docsRes, statsRes, liefkostenRes, liefPerfRes, websiteRes] = await Promise.all([
+            const [docsRes, statsRes, liefkostenRes, liefPerfRes, websiteRes, kostenstellenRes] = await Promise.all([
                 fetch(`/api/projekte/umsatz?${params.toString()}`),
                 fetch(`/api/projekte/umsatz/statistiken?jahr=${jahr}${monat ? `&monat=${monat}` : ''}`),
                 fetch('/api/projekte/umsatz/lieferantenkosten-jahresuebersicht'),
                 fetch(`/api/projekte/umsatz/lieferanten-performance?jahr=${jahr}${monat ? `&monat=${monat}` : ''}`),
                 fetch('/api/website-analytics/latest'),
+                fetch(`/api/bestellungen-uebersicht/kostenstellen/auswertung?jahr=${jahr}${monat ? `&monat=${monat}` : ''}`),
             ]);
 
             if (docsRes.ok) {
@@ -446,6 +457,13 @@ export default function ErfolgsanalyseEditor() {
                 }
             } else {
                 setWebsiteAnalytics(null);
+            }
+
+            if (kostenstellenRes.ok) {
+                const ks = await kostenstellenRes.json();
+                setKostenstellenVergleich(Array.isArray(ks) ? ks : []);
+            } else {
+                setKostenstellenVergleich([]);
             }
         } catch (err) {
             console.error('Fehler beim Laden:', err);
@@ -536,6 +554,36 @@ export default function ErfolgsanalyseEditor() {
             ],
         };
     }, [statistiken]);
+
+    // Kostenstellen Vorjahresvergleich Chart Data
+    const kostenstellenChartData = useMemo(() => {
+        if (!kostenstellenVergleich || kostenstellenVergleich.length === 0) return null;
+        // Nur Kostenstellen mit Kosten (dieses oder letztes Jahr), absteigend nach diesem Jahr
+        const relevant = kostenstellenVergleich
+            .filter(k => (k.summeDiesesJahr || 0) > 0 || (k.summeVorjahr || 0) > 0)
+            .sort((a, b) => (b.summeDiesesJahr || 0) - (a.summeDiesesJahr || 0));
+        if (relevant.length === 0) return null;
+
+        return {
+            labels: relevant.map(k => k.bezeichnung),
+            datasets: [
+                {
+                    label: 'Dieses Jahr',
+                    data: relevant.map(k => k.summeDiesesJahr || 0),
+                    backgroundColor: 'rgba(225, 29, 72, 0.8)',
+                    borderColor: 'rgba(225, 29, 72, 1)',
+                    borderWidth: 1,
+                },
+                {
+                    label: 'Letztes Jahr',
+                    data: relevant.map(k => k.summeVorjahr || 0),
+                    backgroundColor: 'rgba(148, 163, 184, 0.8)',
+                    borderColor: 'rgba(148, 163, 184, 1)',
+                    borderWidth: 1,
+                },
+            ],
+        };
+    }, [kostenstellenVergleich]);
 
     // Monatlicher Verlauf Chart Data (mit Lieferantenkosten und Gewinn)
     const verlaufChartData = useMemo(() => {
@@ -1158,6 +1206,39 @@ export default function ErfolgsanalyseEditor() {
                                 </div>
                             </Card>
                         </div>
+
+                        {/* 4b. Kostenstellen Vorjahresvergleich */}
+                        <Card className="p-6 border-0 shadow-sm rounded-xl">
+                            <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+                                <Wallet className="w-5 h-5 text-rose-600" />
+                                <h2 className="text-lg font-bold text-slate-900">Kostenstellen (Vorjahresvergleich)</h2>
+                            </div>
+                            <div className="h-[320px] w-full relative">
+                                {kostenstellenChartData ? (
+                                    <Bar
+                                        key={`kostenstellen-${jahr}-${monat}`}
+                                        data={kostenstellenChartData}
+                                        options={{
+                                            ...barChartOptions,
+                                            maintainAspectRatio: false,
+                                            plugins: { legend: { display: true, position: 'bottom' } },
+                                            scales: {
+                                                y: {
+                                                    beginAtZero: true,
+                                                    ticks: {
+                                                        callback: (value: number | string) => formatCurrency(Number(value)),
+                                                    },
+                                                },
+                                            },
+                                        }}
+                                    />
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-400 border-2 border-dashed border-slate-100 rounded-xl">
+                                        Keine Kostenstellen-Daten verfügbar
+                                    </div>
+                                )}
+                            </div>
+                        </Card>
 
                         {/* 5. Website-Daten (bauschlosserei-kuhn.de) */}
                         <Card className="p-6 border-0 shadow-sm rounded-xl">
