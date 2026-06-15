@@ -73,6 +73,8 @@ interface ProjektAnteil {
     betrag: number;
     prozentanteil: number | null;
     beschreibung: string;
+    // Über wie viele Jahre die Kosten verteilt werden (nur Kostenstellen). 1 = keine Aufteilung.
+    streckungJahre?: number;
 }
 
 // ========== Helpers ==========
@@ -349,7 +351,8 @@ function ZuordnungModal({ kette, onClose, onSuccess }: ZuordnungModalProps) {
             kostenstelleName: k.bezeichnung,
             prozentanteil: defaultAnteil,
             betrag: modus === 'prozent' ? (defaultBetrag * defaultAnteil / 100) : 0,
-            beschreibung: ''
+            beschreibung: '',
+            streckungJahre: 1
         }]);
         setShowKostenstelleModal(false);
     };
@@ -403,6 +406,9 @@ function ZuordnungModal({ kette, onClose, onSuccess }: ZuordnungModalProps) {
         return s + (isLast && letzterAnteilBerechnet ? letzterAnteilBerechnet.restProzent : (a.prozentanteil || 0));
     }, 0);
     const rest = (geschaeftsdaten?.betragNetto || 0) - sumBetrag;
+    const rechnungsJahr = geschaeftsdaten?.dokumentDatum
+        ? new Date(geschaeftsdaten.dokumentDatum).getFullYear()
+        : new Date().getFullYear();
 
     // Speichern - mit berechneten Werten für den letzten Eintrag
     const speichern = async () => {
@@ -419,10 +425,12 @@ function ZuordnungModal({ kette, onClose, onSuccess }: ZuordnungModalProps) {
                     kostenstelleId: a.kostenstelleId,
                     betrag: modus === 'absolut' ? betrag : null,
                     prozentanteil: modus === 'absolut' ? null : prozentanteil,
-                    beschreibung: a.beschreibung
+                    beschreibung: a.beschreibung,
+                    // Streckung nur bei Kostenstellen mitschicken (Projekte bleiben einmalig)
+                    streckungJahre: a.kostenstelleId != null ? (a.streckungJahre && a.streckungJahre > 1 ? a.streckungJahre : 1) : undefined
                 };
             });
-            
+
             const res = await fetch('/api/bestellungen-uebersicht/zuordnen', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -673,6 +681,31 @@ function ZuordnungModal({ kette, onClose, onSuccess }: ZuordnungModalProps) {
                                                             />
                                                         </div>
                                                     </div>
+
+                                                    {/* Kosten über mehrere Jahre verteilen – nur für Kostenstellen */}
+                                                    {a.kostenstelleId != null && (() => {
+                                                        const jahre = a.streckungJahre && a.streckungJahre > 0 ? a.streckungJahre : 1;
+                                                        const proJahr = jahre > 1 ? displayBetrag / jahre : displayBetrag;
+                                                        return (
+                                                            <div className="mt-3 pt-3 border-t border-slate-200 flex flex-wrap items-center gap-2">
+                                                                <span className="text-xs text-slate-600">Kosten verteilen über</span>
+                                                                <input
+                                                                    type="number"
+                                                                    min={1}
+                                                                    max={20}
+                                                                    value={jahre}
+                                                                    onChange={e => updateAnteil(idx, 'streckungJahre', Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                                                                    className="w-16 px-2 py-1 border border-slate-200 rounded-lg text-sm text-center focus:ring-2 focus:ring-rose-500"
+                                                                />
+                                                                <span className="text-xs text-slate-600">{jahre === 1 ? 'Jahr' : 'Jahre'}</span>
+                                                                {jahre > 1 && (
+                                                                    <span className="text-xs text-rose-600 font-medium ml-1">
+                                                                        ≈ {formatEuro(proJahr)} € / Jahr ab {rechnungsJahr}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })()}
                                                 </div>
                                             );
                                         })}
