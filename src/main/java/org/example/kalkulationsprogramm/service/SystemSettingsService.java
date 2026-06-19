@@ -197,7 +197,7 @@ public class SystemSettingsService {
     }
 
     public boolean isInitialConfigurationRequired() {
-        return !hasConfiguredValue(getGeminiApiKey()) || !isSmtpConfigured();
+        return !isSmtpConfigured();
     }
 
     public boolean isSmtpConfigured() {

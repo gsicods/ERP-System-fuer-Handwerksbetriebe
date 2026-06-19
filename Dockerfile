@@ -1,28 +1,30 @@
 # ===== Stage 1: Build the Spring Boot JAR =====
-FROM eclipse-temurin:23-jdk AS builder
+FROM maven:3.9-eclipse-temurin-23 AS builder
 
 WORKDIR /app
 
-# Copy Maven wrapper and pom.xml first (better layer caching)
-COPY mvnw mvnw.cmd pom.xml ./
-COPY .mvn .mvn
+# Copy pom.xml first (better layer caching)
+COPY pom.xml ./
 
 # Download dependencies (cached unless pom.xml changes)
-RUN chmod +x mvnw && ./mvnw dependency:go-offline -B
+RUN mvn dependency:go-offline -B
 
 # Copy source code
 COPY src src
 
 # Build the JAR (skip tests – they run separately)
-RUN ./mvnw clean package -DskipTests -B
+RUN mvn clean package -DskipTests -B
 
 # ===== Stage 2: Runtime image =====
 FROM eclipse-temurin:23-jre
 
 WORKDIR /app
 
-# Create directories for uploads and logs
-RUN mkdir -p /app/uploads/attachments \
+# Install healthcheck dependency and create directories for uploads and logs
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/uploads/attachments \
              /app/uploads/CADdrawings \
              /app/uploads/cutaway_images \
              /app/uploads/formulare \
@@ -32,7 +34,7 @@ RUN mkdir -p /app/uploads/attachments \
              /app/logs
 
 # Copy the built JAR from builder stage
-COPY --from=builder /app/target/Kalkulationsprogramm-1.0.0.jar app.jar
+COPY --from=builder /app/target/Kalkulationsprogramm-*.jar app.jar
 
 # Expose server port
 EXPOSE 8080
@@ -41,5 +43,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=60s \
     CMD curl -sf http://localhost:8080/ || exit 1
 
-# Run with docker profile
-ENTRYPOINT ["java", "-jar", "app.jar", "--spring.profiles.active=docker"]
+# Run the application. The active Spring profile is provided by the environment.
+ENTRYPOINT ["java", "-jar", "app.jar"]
