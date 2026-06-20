@@ -148,6 +148,7 @@ const NAVIGATION: NavCategory[] = [
             {
                 label: 'Buchhaltung',
                 items: [
+                    { name: 'Finanzen', href: '/finanzen', icon: BarChart3 },
                     { name: 'Offene Posten', href: '/offeneposten', icon: Euro },
                     { name: 'Rechnungen', href: '/rechnungsuebersicht', icon: FileText },
                     { name: 'Belege & Kasse', href: '/belege-kasse', icon: Receipt },

@@ -37,6 +37,7 @@ import AbteilungBerechtigungenEditor from './pages/AbteilungBerechtigungenEditor
 import TerminKalender from './pages/TerminKalender';
 import RechnungsuebersichtEditor from './pages/RechnungsuebersichtEditor';
 import BelegeKasseEditor from './pages/BelegeKasseEditor';
+import FinanzenDashboard from './pages/FinanzenDashboard';
 import DokumentUebersichtEditor from './pages/DokumentUebersichtEditor';
 import FirmaEditor from './pages/FirmaEditor';
 import BestellungEditor from './pages/BestellungEditor';
@@ -86,6 +87,7 @@ export default function App() {
                 <Route path="/kostenstellen" element={<ErrorBoundary><KostenstellenControllingEditor /></ErrorBoundary>} />
                 <Route path="/formulare" element={<ErrorBoundary><FormularwesenEditor /></ErrorBoundary>} />
                 <Route path="/offeneposten" element={<ErrorBoundary><OffenePostenEditor /></ErrorBoundary>} />
+                <Route path="/finanzen" element={<ErrorBoundary><FinanzenDashboard /></ErrorBoundary>} />
                 <Route path="/rechnungsuebersicht" element={<ErrorBoundary><RechnungsuebersichtEditor /></ErrorBoundary>} />
                 <Route path="/belege-kasse" element={<ErrorBoundary><BelegeKasseEditor /></ErrorBoundary>} />
                 <Route path="/dokumentuebersicht" element={<ErrorBoundary><DokumentUebersichtEditor /></ErrorBoundary>} />
