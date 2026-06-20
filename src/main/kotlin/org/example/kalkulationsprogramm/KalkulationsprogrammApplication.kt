@@ -2,6 +2,7 @@ package org.example.kalkulationsprogramm
 
 import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
+import org.springframework.boot.autoconfigure.task.TaskExecutionAutoConfiguration
 import org.springframework.scheduling.annotation.EnableAsync
 import org.springframework.scheduling.annotation.EnableScheduling
 import java.io.File
@@ -9,6 +10,7 @@ import java.io.File
 @EnableScheduling
 @EnableAsync
 @SpringBootApplication(
+    exclude = [TaskExecutionAutoConfiguration::class],
     scanBasePackages = [
         "org.example.kalkulationsprogramm",
         "org.example.email"

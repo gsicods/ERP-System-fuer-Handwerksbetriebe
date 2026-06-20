@@ -1,9 +1,11 @@
 package org.example.kalkulationsprogramm.config;
 
+import java.util.concurrent.Executor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -27,9 +29,9 @@ public class AsyncConfig {
      * Verhindert, dass Spring auf SimpleAsyncTaskExecutor zurückfällt
      * (der pro Aufruf einen neuen Thread spawnt) oder den taskScheduler belastet.
      */
-    @Bean(name = "taskExecutor")
+    @Bean(name = "defaultTaskExecutor")
     @Primary
-    public TaskExecutor taskExecutor() {
+    public ThreadPoolTaskExecutor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(4);
         executor.setMaxPoolSize(16);
@@ -39,6 +41,11 @@ public class AsyncConfig {
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();
         return executor;
+    }
+
+    @Bean(name = "applicationTaskExecutor")
+    public Executor applicationTaskExecutor(@Qualifier("defaultTaskExecutor") ThreadPoolTaskExecutor executor) {
+        return executor.getThreadPoolExecutor();
     }
 
     /**
