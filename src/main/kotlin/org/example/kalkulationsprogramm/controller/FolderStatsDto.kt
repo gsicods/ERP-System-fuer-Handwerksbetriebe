@@ -1,0 +1,25 @@
+package org.example.kalkulationsprogramm.controller
+
+data class FolderStatsDto(
+    var inboxCount: Long = 0,
+    var sentCount: Long = 0,
+    var trashCount: Long = 0,
+    var unassignedCount: Long = 0,
+    var inquiriesCount: Long = 0,
+    var spamCount: Long = 0,
+    var newsletterCount: Long = 0,
+    var projectCount: Long = 0,
+    var offerCount: Long = 0,
+    var supplierCount: Long = 0,
+    var starredCount: Long = 0,
+    var inboxTotal: Long = 0,
+    var sentTotal: Long = 0,
+    var trashTotal: Long = 0,
+    var unassignedTotal: Long = 0,
+    var spamTotal: Long = 0,
+    var newsletterTotal: Long = 0,
+    var projectTotal: Long = 0,
+    var offerTotal: Long = 0,
+    var supplierTotal: Long = 0,
+    var starredTotal: Long = 0,
+)

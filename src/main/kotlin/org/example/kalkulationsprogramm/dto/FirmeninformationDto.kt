@@ -1,0 +1,37 @@
+package org.example.kalkulationsprogramm.dto
+
+import java.math.BigDecimal
+
+data class FirmeninformationDto(
+    var id: Long? = null,
+    var firmenname: String? = null,
+    var strasse: String? = null,
+    var plz: String? = null,
+    var ort: String? = null,
+    var telefon: String? = null,
+    var fax: String? = null,
+    var email: String? = null,
+    var website: String? = null,
+    var steuernummer: String? = null,
+    var ustIdNr: String? = null,
+    var handelsregister: String? = null,
+    var handelsregisterNummer: String? = null,
+    var bankName: String? = null,
+    var iban: String? = null,
+    var bic: String? = null,
+    var logoDateiname: String? = null,
+    var geschaeftsfuehrer: String? = null,
+    var fusszeileText: String? = null,
+    var googleBewertungsLink: String? = null,
+    var isMahnverfahrenAktiv: Boolean = false,
+    var tageBisZahlungserinnerung: Int = 0,
+    var tageBisErsteMahnung: Int = 0,
+    var tageBisZweiteMahnung: Int = 0,
+    var mahnverfahrenNeuesZahlungszielTage: Int = 0,
+    var gewerkId: Long? = null,
+    var gewerkName: String? = null,
+    var bgName: String? = null,
+    var bgSatzVorschlag: BigDecimal? = null,
+    var bgSatzOverride: BigDecimal? = null,
+    var bgSatzEffektiv: BigDecimal? = null,
+)
