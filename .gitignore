@@ -63,6 +63,11 @@ src/main/resources/application-local.properties
 src/main/resources/keystore.p12
 
 ### Misc ###
+.DS_Store
+**/.DS_Store
+/\\server\share/
+*server*share*/
+*server*share*/*
 package-lock.json
 .claude/fix_zeitbuchungen.py
 .claude/scheduled_tasks.lock
@@ -79,4 +84,3 @@ package-lock.json
 react-pc-frontend/graphify-out/
 react-zeiterfassung/graphify-out/
 .claude/settings.local.json
-
