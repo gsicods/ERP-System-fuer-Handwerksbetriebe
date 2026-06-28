@@ -25,10 +25,10 @@ class SmtpHtmlMailSender(
 
     @Throws(MessagingException::class)
     override fun send(
-        fromAddress: String,
-        toAddress: String,
-        subject: String,
-        htmlBody: String,
+        fromAddress: String?,
+        toAddress: String?,
+        subject: String?,
+        htmlBody: String?,
         inlineAttachments: Map<String, File>,
     ) {
         if (toAddress.isNullOrBlank()) {
@@ -57,7 +57,7 @@ class SmtpHtmlMailSender(
         val message = MimeMessage(session)
         message.setFrom(InternetAddress(if (fromAddress.isNullOrBlank()) smtpUsername else fromAddress))
         message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(toAddress))
-        message.setSubject(subject, StandardCharsets.UTF_8.name())
+        message.setSubject(subject ?: "", StandardCharsets.UTF_8.name())
 
         val mixed = MimeMultipart("mixed")
         val relatedHolder = MimeBodyPart()
