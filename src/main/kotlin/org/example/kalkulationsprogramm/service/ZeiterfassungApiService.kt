@@ -2,10 +2,13 @@ package org.example.kalkulationsprogramm.service
 
 import org.example.kalkulationsprogramm.dto.Arbeitsgang.ArbeitsgangResponseDto
 import org.example.kalkulationsprogramm.mapper.ArbeitsgangMapper
+import org.example.kalkulationsprogramm.domain.AbwesenheitsTyp
 import org.example.kalkulationsprogramm.domain.BuchungsTyp
 import org.example.kalkulationsprogramm.domain.DokumentGruppe
 import org.example.kalkulationsprogramm.domain.ErfassungsQuelle
+import org.example.kalkulationsprogramm.domain.Zeitkonto
 import org.example.kalkulationsprogramm.domain.Zeitbuchung
+import org.example.kalkulationsprogramm.repository.AbwesenheitRepository
 import org.example.kalkulationsprogramm.repository.ArbeitsgangStundensatzRepository
 import org.example.kalkulationsprogramm.repository.ArbeitsgangRepository
 import org.example.kalkulationsprogramm.repository.FeiertagRepository
@@ -20,6 +23,10 @@ import java.math.RoundingMode
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.Month
+import java.time.YearMonth
+import java.time.format.TextStyle
+import java.util.Locale
 import java.util.Optional
 
 @Service
@@ -36,6 +43,11 @@ class ZeiterfassungApiService(
     private val arbeitsgangStundensatzRepository: ArbeitsgangStundensatzRepository,
     private val auditService: ZeitbuchungAuditService,
     private val monatsSaldoService: MonatsSaldoService,
+    private val abwesenheitRepository: AbwesenheitRepository,
+    private val zeitkontoService: ZeitkontoService,
+    private val urlaubsverfallService: UrlaubsverfallService,
+    private val zeitkontoKorrekturService: ZeitkontoKorrekturService,
+    private val feiertagService: FeiertagService,
 ) {
     fun getOpenProjekte(limit: Int?, search: String?): List<Map<String, Any>> {
         val max = (limit ?: 100).coerceIn(1, 1000)
@@ -273,12 +285,119 @@ class ZeiterfassungApiService(
                 )
             }
 
-    fun getSaldo(token: String, jahr: Int?, monat: Int?, gesamtBisHeute: Boolean?): Map<String, Any> =
-        mapOf("saldoMinuten" to 0)
+    fun getSaldo(token: String, jahr: Int?, monat: Int?, gesamtBisHeute: Boolean?): Map<String, Any> {
+        val result = linkedMapOf<String, Any>()
+        val mitarbeiter = mitarbeiterRepository.findByLoginTokenAndAktivTrue(token.trim()).orElse(null)
+            ?: return linkedMapOf("error" to "Mitarbeiter nicht gefunden")
 
-    fun getUrlaubsverfallWarnung(token: String): Map<String, Any> = emptyMap()
+        val currentYear = jahr ?: LocalDate.now().year
+        val currentMonth = monat ?: LocalDate.now().monthValue
+        val heute = LocalDate.now()
+        val jahresanfang = LocalDate.of(currentYear, 1, 1)
+        val jahresende = LocalDate.of(currentYear, 12, 31)
 
-    fun getBuchungszeitfenster(token: String): Map<String, Any> = emptyMap()
+        val jahresUrlaub = mitarbeiter.jahresUrlaub ?: 30
+        val abwesenheitenImJahr = abwesenheitRepository.findByMitarbeiterIdAndDatumBetween(
+            mitarbeiter.id,
+            jahresanfang,
+            jahresende,
+        )
+        val urlaubstagGenommen = abwesenheitenImJahr.count {
+            it.typ == AbwesenheitsTyp.URLAUB && it.datum?.isBefore(heute) == true
+        }.toLong()
+        val urlaubstagGeplant = abwesenheitenImJahr.count {
+            it.typ == AbwesenheitsTyp.URLAUB && it.datum?.isBefore(heute) != true
+        }.toLong()
+        val krankheitsTage = abwesenheitenImJahr.count { it.typ == AbwesenheitsTyp.KRANKHEIT }.toLong()
+        val fortbildungsTage = abwesenheitenImJahr.count { it.typ == AbwesenheitsTyp.FORTBILDUNG }.toLong()
+        val manuellKorrekturTage = zeitkontoKorrekturService
+            .summiereAktiveUrlaubsKorrekturen(mitarbeiter.id!!, currentYear)
+            .toInt()
+
+        result["urlaub"] = linkedMapOf<String, Any>(
+            "jahresanspruch" to jahresUrlaub,
+            "genommen" to urlaubstagGenommen,
+            "geplant" to urlaubstagGeplant,
+            "korrektur" to manuellKorrekturTage,
+            "verbleibend" to (jahresUrlaub - urlaubstagGenommen - urlaubstagGeplant + manuellKorrekturTage).coerceAtLeast(0),
+            "krankheitsTage" to krankheitsTage,
+            "fortbildungsTage" to fortbildungsTage,
+        )
+
+        val monatsSaldo = monatsSaldoService.getOrBerechne(mitarbeiter.id!!, currentYear, currentMonth)
+        val sollStundenMonat = monatsSaldo.sollStunden
+        val monatsDifferenz = monatsSaldo.getGesamtIst().subtract(sollStundenMonat)
+        result["monat"] = linkedMapOf<String, Any>(
+            "name" to Month.of(currentMonth).getDisplayName(TextStyle.FULL, Locale.GERMAN),
+            "monatNummer" to currentMonth,
+            "sollStunden" to sollStundenMonat,
+            "istStunden" to monatsSaldo.getGesamtIst(),
+            "differenz" to monatsDifferenz,
+        )
+
+        var startDatum = mitarbeiter.eintrittsdatum
+        if (startDatum == null) {
+            startDatum = zeitbuchungRepository.findFirstByMitarbeiterIdOrderByStartZeitAsc(mitarbeiter.id)
+                .map { it.startZeit?.toLocalDate() ?: LocalDate.of(currentYear, 1, 1) }
+                .orElse(LocalDate.of(currentYear, 1, 1))
+        }
+
+        val endDatum = when {
+            gesamtBisHeute == true -> heute
+            currentYear == heute.year -> heute
+            else -> LocalDate.of(currentYear, 12, 31)
+        }
+
+        var gesamtIst = BigDecimal.ZERO
+        var gesamtSoll = BigDecimal.ZERO
+        var ym = YearMonth.from(startDatum)
+        val endYm = YearMonth.from(endDatum)
+        while (!ym.isAfter(endYm)) {
+            val ms = monatsSaldoService.getOrBerechne(mitarbeiter.id!!, ym.year, ym.monthValue)
+            val istErsterMonat = ym == YearMonth.from(startDatum) && startDatum.dayOfMonth > 1
+            val istLetzterMonat = ym == endYm && endDatum.dayOfMonth < ym.lengthOfMonth()
+            if (istErsterMonat || istLetzterMonat) {
+                val monatVon = if (istErsterMonat) startDatum else ym.atDay(1)
+                val monatBis = if (istLetzterMonat) endDatum else ym.atEndOfMonth()
+                gesamtIst = gesamtIst.add(berechneAnteiligenMonatIst(mitarbeiter.id!!, monatVon, monatBis))
+                gesamtSoll = gesamtSoll.add(
+                    zeitkontoService.berechneSollstundenFuerZeitraum(
+                        zeitkontoService.getOrCreateZeitkonto(mitarbeiter.id),
+                        monatVon,
+                        monatBis,
+                    )
+                )
+            } else {
+                gesamtIst = gesamtIst.add(ms.getGesamtIst())
+                gesamtSoll = gesamtSoll.add(ms.sollStunden)
+            }
+            ym = ym.plusMonths(1)
+        }
+
+        result["gesamt"] = linkedMapOf<String, Any>(
+            "istStunden" to gesamtIst,
+            "sollStunden" to gesamtSoll,
+            "saldo" to gesamtIst.subtract(gesamtSoll),
+            "startDatum" to startDatum.toString(),
+            "endDatum" to endDatum.toString(),
+        )
+        result["mitarbeiterName"] = "${mitarbeiter.vorname} ${mitarbeiter.nachname}"
+        result["jahr"] = currentYear
+        return result
+    }
+
+    fun getUrlaubsverfallWarnung(token: String): Map<String, Any> =
+        urlaubsverfallService.pruefeVerfallWarnungByToken(token.trim()).orElse(emptyMap())
+
+    fun getBuchungszeitfenster(token: String): Map<String, Any> {
+        val mitarbeiter = mitarbeiterRepository.findByLoginTokenAndAktivTrue(token.trim())
+            .orElseThrow { RuntimeException("Mitarbeiter nicht gefunden") }
+        val konto = zeitkontoService.getOrCreateZeitkonto(mitarbeiter.id)
+        return linkedMapOf<String, Any>().apply {
+            konto.buchungStartZeit?.let { put("buchungStartZeit", it.toString()) }
+            konto.buchungEndeZeit?.let { put("buchungEndeZeit", it.toString()) }
+        }
+    }
 
     private fun buildKategoriePfad(kategorie: org.example.kalkulationsprogramm.domain.Produktkategorie): String {
         val parts = ArrayDeque<String>()
@@ -323,6 +442,40 @@ class ZeiterfassungApiService(
         buchung.notiz?.let { entry["kommentar"] = it }
         entry["typ"] = buchung.typ?.name ?: BuchungsTyp.ARBEIT.name
         return entry
+    }
+
+    private fun berechneFeiertagsStunden(zeitkonto: Zeitkonto, von: LocalDate, bis: LocalDate): BigDecimal {
+        var summe = BigDecimal.ZERO
+        var tag = von
+        while (!tag.isAfter(bis)) {
+            val tagesSoll = zeitkonto.getSollstundenFuerTag(tag.dayOfWeek.value)
+            if (tagesSoll > BigDecimal.ZERO && feiertagService.istFeiertag(tag)) {
+                summe = summe.add(
+                    if (feiertagService.istHalberFeiertag(tag)) {
+                        tagesSoll.divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP)
+                    } else {
+                        tagesSoll
+                    }
+                )
+            }
+            tag = tag.plusDays(1)
+        }
+        return summe
+    }
+
+    private fun berechneAnteiligenMonatIst(mitarbeiterId: Long, von: LocalDate, bis: LocalDate): BigDecimal {
+        val vonDateTime = von.atStartOfDay()
+        val bisDateTime = bis.atTime(23, 59, 59)
+        val istStunden = zeitbuchungRepository.findByMitarbeiterIdAndStartZeitBetween(mitarbeiterId, vonDateTime, bisDateTime)
+            .asSequence()
+            .filter { it.typ != BuchungsTyp.PAUSE }
+            .mapNotNull { it.anzahlInStunden }
+            .fold(BigDecimal.ZERO, BigDecimal::add)
+        val abwesenheitsStunden = abwesenheitRepository.sumStundenByMitarbeiterIdAndDatumBetween(mitarbeiterId, von, bis)
+        val zeitkonto = zeitkontoService.getOrCreateZeitkonto(mitarbeiterId)
+        val feiertagsStunden = berechneFeiertagsStunden(zeitkonto, von, bis)
+        val korrekturStunden = zeitkontoKorrekturService.summiereAktiveKorrekturenImZeitraum(mitarbeiterId, von, bis)
+        return istStunden.add(abwesenheitsStunden).add(feiertagsStunden).add(korrekturStunden)
     }
 
     private fun stopAktiveBuchung(
