@@ -41,6 +41,7 @@ class UnifiedEmailController(
     private val anfrageRepository: AnfrageRepository,
     private val lieferantenRepository: LieferantenRepository,
     private val emailImportService: EmailImportService,
+    private val emailAutoAssignmentService: EmailAutoAssignmentService,
     private val contactService: ContactService,
     private val emailThreadService: EmailThreadService,
     private val spamFilterService: SpamFilterService,
@@ -223,23 +224,49 @@ class UnifiedEmailController(
             starredTotal = emailRepository.findStarred().size.toLong(),
         )
 
-    @PostMapping("/admin/scan-spam")
-    fun scanSpamRetroactive(): SpamFilterService.ScanResult = SpamFilterService.ScanResult(0, 0, 0)
+    @PostMapping("/admin/scan-spam", "/scan-spam")
+    @Transactional
+    fun scanSpamRetroactive(): SpamFilterService.ScanResult {
+        val unanalyzed = emailRepository.findUnanalyzedForSpam()
+        var spamFound = 0
+        var notSpam = 0
+        unanalyzed.forEach { email ->
+            spamFilterService.analyzeAndMarkSpam(email)
+            if (email.isSpam) spamFound++ else notSpam++
+            emailRepository.save(email)
+        }
+        return SpamFilterService.ScanResult(unanalyzed.size, spamFound, notSpam)
+    }
 
-    @PostMapping("/admin/scan-inquiries")
-    fun scanInquiriesRetroactive(): InquiryDetectionService.ScanResult = InquiryDetectionService.ScanResult(0, 0, 0)
+    @PostMapping("/admin/scan-inquiries", "/scan-inquiries")
+    @Transactional
+    fun scanInquiriesRetroactive(): InquiryDetectionService.ScanResult {
+        val unanalyzed = emailRepository.findUnanalyzedForInquiry()
+        var inquiriesFound = 0
+        var notInquiries = 0
+        unanalyzed.forEach { email ->
+            inquiryDetectionService.analyzeAndMarkInquiry(email)
+            if (email.isPotentialInquiry) inquiriesFound++ else notInquiries++
+            emailRepository.save(email)
+        }
+        return InquiryDetectionService.ScanResult(unanalyzed.size, inquiriesFound, notInquiries)
+    }
 
     @GetMapping("/contacts")
     fun searchContacts(@RequestParam("q") query: String): List<ContactDto> = contactService.searchContacts(query)
 
     @GetMapping("/{id}/possible-assignments")
     fun getPossibleAssignments(@PathVariable id: Long): ResponseEntity<EmailAutoAssignmentService.PossibleAssignments> =
-        ResponseEntity.notFound().build()
+        emailRepository.findById(id)
+            .map { ResponseEntity.ok(emailAutoAssignmentService.findPossibleAssignments(it)) }
+            .orElseGet { ResponseEntity.notFound().build() }
 
     data class MoveToFolderRequest(val ids: List<Long>?, val targetFolder: String?)
 
     @PostMapping("/move")
-    fun moveToFolder(@RequestBody request: MoveToFolderRequest): ResponseEntity<Void> = ResponseEntity.noContent().build()
+    @Transactional
+    fun moveToFolder(@RequestBody request: MoveToFolderRequest): ResponseEntity<Map<String, Int>> =
+        applyMoveToFolder(request)
 
     @PostMapping("/{id}/mark-read")
     @Transactional
@@ -359,31 +386,44 @@ class UnifiedEmailController(
 
     @PostMapping("/bulk/move-to-folder")
     @Transactional
-    fun bulkMoveToFolder(@RequestBody request: MoveToFolderRequest): ResponseEntity<Void> {
+    fun bulkMoveToFolder(@RequestBody request: MoveToFolderRequest): ResponseEntity<Map<String, Int>> =
+        applyMoveToFolder(request)
+
+    private fun applyMoveToFolder(request: MoveToFolderRequest): ResponseEntity<Map<String, Int>> {
         val target = request.targetFolder?.trim().orEmpty()
-        request.ids.orEmpty().forEach { id ->
-            emailRepository.findById(id).ifPresent { email ->
-                when (target) {
-                    "trash" -> email.deletedAt = LocalDateTime.now()
-                    "spam" -> {
-                        email.isSpam = true
-                        email.isNewsletter = false
-                    }
-                    "newsletter" -> {
-                        email.isNewsletter = true
-                        email.isSpam = false
-                    }
-                    "inbox" -> {
-                        email.deletedAt = null
-                        email.isSpam = false
-                        email.isNewsletter = false
-                        email.clearAssignment()
-                    }
-                }
-                emailRepository.save(email)
-            }
+        if (target !in setOf("inbox", "trash", "spam", "newsletter")) {
+            return ResponseEntity.badRequest().body(mapOf("moved" to 0))
         }
-        return ResponseEntity.noContent().build()
+        val emails = emailRepository.findAllById(request.ids.orEmpty())
+        var moved = 0
+        emails.forEach { email ->
+            when (target) {
+                "trash" -> email.deletedAt = LocalDateTime.now()
+                "spam" -> {
+                    email.deletedAt = null
+                    email.isSpam = true
+                    email.isNewsletter = false
+                    email.userSpamVerdict = "SPAM"
+                    email.spamScore = 100
+                }
+                "newsletter" -> {
+                    email.deletedAt = null
+                    email.isNewsletter = true
+                    email.isSpam = false
+                }
+                "inbox" -> {
+                    email.deletedAt = null
+                    email.isSpam = false
+                    email.isNewsletter = false
+                    email.userSpamVerdict = "HAM"
+                }
+            }
+            moved++
+        }
+        if (moved > 0) {
+            emailRepository.saveAll(emails)
+        }
+        return ResponseEntity.ok(mapOf("moved" to moved))
     }
 
     @PostMapping("/mark-all-read")
