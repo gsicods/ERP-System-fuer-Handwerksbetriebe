@@ -4,7 +4,9 @@ import org.example.kalkulationsprogramm.dto.Arbeitsgang.ArbeitsgangResponseDto
 import org.example.kalkulationsprogramm.mapper.ArbeitsgangMapper
 import org.example.kalkulationsprogramm.domain.BuchungsTyp
 import org.example.kalkulationsprogramm.domain.DokumentGruppe
+import org.example.kalkulationsprogramm.domain.ErfassungsQuelle
 import org.example.kalkulationsprogramm.domain.Zeitbuchung
+import org.example.kalkulationsprogramm.repository.ArbeitsgangStundensatzRepository
 import org.example.kalkulationsprogramm.repository.ArbeitsgangRepository
 import org.example.kalkulationsprogramm.repository.FeiertagRepository
 import org.example.kalkulationsprogramm.repository.LieferantenRepository
@@ -14,6 +16,7 @@ import org.example.kalkulationsprogramm.repository.ProjektRepository
 import org.example.kalkulationsprogramm.repository.ZeitbuchungRepository
 import org.springframework.stereotype.Service
 import java.math.BigDecimal
+import java.math.RoundingMode
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -30,6 +33,9 @@ class ZeiterfassungApiService(
     private val mitarbeiterRepository: MitarbeiterRepository,
     private val zeitbuchungRepository: ZeitbuchungRepository,
     private val dateiSpeicherService: DateiSpeicherService,
+    private val arbeitsgangStundensatzRepository: ArbeitsgangStundensatzRepository,
+    private val auditService: ZeitbuchungAuditService,
+    private val monatsSaldoService: MonatsSaldoService,
 ) {
     fun getOpenProjekte(limit: Int?, search: String?): List<Map<String, Any>> {
         val max = (limit ?: 100).coerceIn(1, 1000)
@@ -116,17 +122,116 @@ class ZeiterfassungApiService(
         produktkategorieId: Long?,
         originalStartZeit: LocalDateTime?,
         idempotencyKey: String?,
-    ): Map<String, Any> = mapOf("started" to false)
+    ): Map<String, Any> {
+        findExistingStart(idempotencyKey, produktkategorieId)?.let { return it }
+        val mitarbeiter = mitarbeiterRepository.findByLoginTokenAndAktivTrueForUpdate(token.trim())
+            .orElseThrow { RuntimeException("Mitarbeiter nicht gefunden") }
+        findExistingStart(idempotencyKey, produktkategorieId)?.let { return it }
+        if (zeitbuchungRepository.findByMitarbeiterIdAndEndeZeitIsNull(mitarbeiter.id).isNotEmpty()) {
+            throw RuntimeException("Es läuft bereits eine Buchung. Bitte erst stoppen.")
+        }
+        val projekt = projektRepository.findById(projektId).orElseThrow { RuntimeException("Projekt nicht gefunden") }
+        val arbeitsgang = arbeitsgangRepository.findById(arbeitsgangId).orElseThrow { RuntimeException("Arbeitsgang nicht gefunden") }
+        val startZeit = originalStartZeit ?: LocalDateTime.now()
+        val buchung = Zeitbuchung().apply {
+            this.mitarbeiter = mitarbeiter
+            this.projekt = projekt
+            this.arbeitsgang = arbeitsgang
+            this.startZeit = startZeit
+            typ = BuchungsTyp.ARBEIT
+            erfasstVon = mitarbeiter
+            erfasstAm = LocalDateTime.now()
+            erfasstVia = ErfassungsQuelle.MOBILE_APP
+            version = 1
+            if (!idempotencyKey.isNullOrBlank()) this.idempotencyKey = idempotencyKey
+            projektProduktkategorie = produktkategorieId?.let { id ->
+                projekt.projektProduktkategorien.firstOrNull { it.produktkategorie?.id == id }
+            }
+            arbeitsgangStundensatz = resolveStundensatz(arbeitsgangId, startZeit.year, arbeitsgang.beschreibung)
+        }
+        val gespeichert = zeitbuchungRepository.save(buchung)
+        auditService.protokolliereErstellung(gespeichert, mitarbeiter, ErfassungsQuelle.MOBILE_APP)
+        monatsSaldoService.invalidiereFuerDateTime(mitarbeiter.id!!, gespeichert.startZeit)
+        return linkedMapOf<String, Any>().apply {
+            gespeichert.id?.let { put("id", it) }
+            put("projektId", projektId)
+            projekt.bauvorhaben?.let { put("projektName", it) }
+            put("arbeitsgangId", arbeitsgangId)
+            arbeitsgang.beschreibung?.let { put("arbeitsgangName", it) }
+            produktkategorieId?.let { put("produktkategorieId", it) }
+            put("startZeit", gespeichert.startZeit.toString())
+            put("status", "gestartet")
+        }
+    }
 
     fun stopZeiterfassung(token: String, originalEndeZeit: LocalDateTime?, idempotencyKey: String?): Map<String, Any> =
-        mapOf("stopped" to false)
+        stopAktiveBuchung(token, originalEndeZeit, idempotencyKey, "Zeiterfassung beendet (Stop-Button am Handy)")
 
-    fun startPause(token: String, originalZeit: LocalDateTime?, idempotencyKey: String?): Map<String, Any> =
-        mapOf("paused" to false)
+    fun startPause(token: String, originalZeit: LocalDateTime?, idempotencyKey: String?): Map<String, Any> {
+        findExistingPause(idempotencyKey)?.let { return it }
+        val mitarbeiter = mitarbeiterRepository.findByLoginTokenAndAktivTrueForUpdate(token.trim())
+            .orElseThrow { RuntimeException("Mitarbeiter nicht gefunden") }
+        findExistingPause(idempotencyKey)?.let { return it }
+        val pauseStart = originalZeit ?: LocalDateTime.now()
+        zeitbuchungRepository.findByMitarbeiterIdAndEndeZeitIsNull(mitarbeiter.id)
+            .sortedBy { it.startZeit }
+            .forEach { buchung ->
+                closeBuchung(buchung, mitarbeiter, pauseStart, "Beendet beim Anstechen einer Pause am Handy")
+                zeitbuchungRepository.saveAndFlush(buchung)
+                monatsSaldoService.invalidiereFuerDateTime(mitarbeiter.id!!, buchung.startZeit)
+            }
+        val pause = Zeitbuchung().apply {
+            this.mitarbeiter = mitarbeiter
+            projekt = null
+            startZeit = pauseStart
+            typ = BuchungsTyp.PAUSE
+            notiz = "Pausenbuchung"
+            erfasstVon = mitarbeiter
+            erfasstAm = LocalDateTime.now()
+            erfasstVia = ErfassungsQuelle.MOBILE_APP
+            version = 1
+            if (!idempotencyKey.isNullOrBlank()) this.idempotencyKey = idempotencyKey
+        }
+        val gespeichert = zeitbuchungRepository.save(pause)
+        auditService.protokolliereErstellung(gespeichert, mitarbeiter, ErfassungsQuelle.MOBILE_APP)
+        monatsSaldoService.invalidiereFuerDateTime(mitarbeiter.id!!, gespeichert.startZeit)
+        return pauseResponse(gespeichert, "gestartet", false)
+    }
 
-    fun getAktiveBuchung(token: String): Optional<Map<String, Any>> = Optional.empty()
+    fun getAktiveBuchung(token: String): Optional<Map<String, Any>> =
+        mitarbeiterRepository.findByLoginTokenAndAktivTrue(token.trim())
+            .flatMap { mitarbeiter ->
+                zeitbuchungRepository.findFirstByMitarbeiterIdAndEndeZeitIsNullOrderByStartZeitDesc(mitarbeiter.id)
+            }
+            .map(::aktiveBuchungToMap)
 
-    fun getHeuteGearbeitet(token: String): Map<String, Any> = mapOf("minuten" to 0)
+    fun getHeuteGearbeitet(token: String): Map<String, Any> {
+        val result = linkedMapOf<String, Any>(
+            "stunden" to 0,
+            "minuten" to 0,
+            "buchungenAnzahl" to 0,
+        )
+        val mitarbeiter = mitarbeiterRepository.findByLoginTokenAndAktivTrue(token.trim()).orElse(null) ?: return result
+        val heute = LocalDate.now().atStartOfDay()
+        var totalMinuten = 0L
+        var anzahlArbeitsBuchungen = 0
+        var aktiveBuchungStartZeit: String? = null
+        zeitbuchungRepository.findByMitarbeiterIdAndStartZeitAfter(mitarbeiter.id, heute).forEach { buchung ->
+            if (buchung.typ == BuchungsTyp.PAUSE) return@forEach
+            val stunden = buchung.anzahlInStunden
+            if (stunden != null) {
+                anzahlArbeitsBuchungen++
+                totalMinuten += stunden.multiply(BigDecimal.valueOf(60)).toLong()
+            } else if (buchung.endeZeit == null && buchung.startZeit != null) {
+                aktiveBuchungStartZeit = buchung.startZeit.toString()
+            }
+        }
+        result["stunden"] = (totalMinuten / 60).toInt()
+        result["minuten"] = (totalMinuten % 60).toInt()
+        result["buchungenAnzahl"] = anzahlArbeitsBuchungen
+        aktiveBuchungStartZeit?.let { result["aktiveBuchungStartZeit"] = it }
+        return result
+    }
 
     fun getBuchungenByDatum(token: String, datum: LocalDate): List<Map<String, Any>> {
         val mitarbeiter = mitarbeiterRepository.findByLoginTokenAndAktivTrue(token.trim()).orElse(null) ?: return emptyList()
@@ -219,4 +324,111 @@ class ZeiterfassungApiService(
         entry["typ"] = buchung.typ?.name ?: BuchungsTyp.ARBEIT.name
         return entry
     }
+
+    private fun stopAktiveBuchung(
+        token: String,
+        originalEndeZeit: LocalDateTime?,
+        idempotencyKey: String?,
+        grund: String,
+    ): Map<String, Any> {
+        findExistingStop(idempotencyKey)?.let { return it }
+        val mitarbeiter = mitarbeiterRepository.findByLoginTokenAndAktivTrueForUpdate(token.trim())
+            .orElseThrow { RuntimeException("Mitarbeiter nicht gefunden") }
+        findExistingStop(idempotencyKey)?.let { return it }
+        val buchung = zeitbuchungRepository.findFirstByMitarbeiterIdAndEndeZeitIsNullOrderByStartZeitDesc(mitarbeiter.id)
+            .orElseThrow { RuntimeException("Keine aktive Buchung gefunden") }
+        closeBuchung(buchung, mitarbeiter, originalEndeZeit ?: LocalDateTime.now(), grund)
+        if (!idempotencyKey.isNullOrBlank()) buchung.stopIdempotencyKey = idempotencyKey
+        val gespeichert = zeitbuchungRepository.save(buchung)
+        monatsSaldoService.invalidiereFuerDateTime(mitarbeiter.id!!, gespeichert.startZeit)
+        return stopResponse(gespeichert, "gestoppt", false)
+    }
+
+    private fun closeBuchung(buchung: Zeitbuchung, mitarbeiter: org.example.kalkulationsprogramm.domain.Mitarbeiter, requestedEnde: LocalDateTime, grund: String) {
+        val start = buchung.startZeit ?: requestedEnde.minusMinutes(1)
+        val ende = if (requestedEnde.isAfter(start)) requestedEnde else start.plusMinutes(1)
+        buchung.endeZeit = ende
+        buchung.anzahlInStunden = BigDecimal.valueOf(Duration.between(start, ende).toMinutes())
+            .divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP)
+        buchung.markiereAlsGeaendert(mitarbeiter)
+        auditService.protokolliereAenderung(buchung, mitarbeiter, ErfassungsQuelle.MOBILE_APP, grund)
+    }
+
+    private fun findExistingStart(idempotencyKey: String?, produktkategorieId: Long?): Map<String, Any>? =
+        idempotencyKey?.takeIf { it.isNotBlank() }
+            ?.let { zeitbuchungRepository.findByIdempotencyKey(it).orElse(null) }
+            ?.let { buildIdempotentStartResponse(it, produktkategorieId) }
+
+    private fun findExistingStop(idempotencyKey: String?): Map<String, Any>? =
+        idempotencyKey?.takeIf { it.isNotBlank() }
+            ?.let { zeitbuchungRepository.findByStopIdempotencyKey(it).orElse(null) }
+            ?.let { stopResponse(it, "already_exists", true) }
+
+    private fun findExistingPause(idempotencyKey: String?): Map<String, Any>? =
+        idempotencyKey?.takeIf { it.isNotBlank() }
+            ?.let { zeitbuchungRepository.findByIdempotencyKey(it).orElse(null) }
+            ?.let { pauseResponse(it, "already_exists", true) }
+
+    private fun buildIdempotentStartResponse(buchung: Zeitbuchung, produktkategorieId: Long?): Map<String, Any> =
+        linkedMapOf<String, Any>().apply {
+            buchung.id?.let { put("id", it) }
+            buchung.projekt?.id?.let { put("projektId", it) }
+            buchung.projekt?.bauvorhaben?.let { put("projektName", it) }
+            buchung.arbeitsgang?.id?.let { put("arbeitsgangId", it) }
+            buchung.arbeitsgang?.beschreibung?.let { put("arbeitsgangName", it) }
+            produktkategorieId?.let { put("produktkategorieId", it) }
+            buchung.startZeit?.let { put("startZeit", it.toString()) }
+            put("status", "already_exists")
+            put("idempotent", true)
+        }
+
+    private fun stopResponse(buchung: Zeitbuchung, status: String, idempotent: Boolean): Map<String, Any> =
+        linkedMapOf<String, Any>().apply {
+            buchung.id?.let { put("id", it) }
+            buchung.projekt?.bauvorhaben?.let { put("projektName", it) }
+            buchung.arbeitsgang?.beschreibung?.let { put("arbeitsgangName", it) }
+            buchung.startZeit?.let { put("startZeit", it.toString()) }
+            buchung.endeZeit?.let { put("endeZeit", it.toString()) }
+            buchung.anzahlInStunden?.let { put("stunden", it) }
+            put("typ", buchung.typ?.name ?: BuchungsTyp.ARBEIT.name)
+            put("status", status)
+            if (idempotent) put("idempotent", true)
+        }
+
+    private fun pauseResponse(buchung: Zeitbuchung, status: String, idempotent: Boolean): Map<String, Any> =
+        linkedMapOf<String, Any>().apply {
+            buchung.id?.let { put("id", it) }
+            buchung.startZeit?.let { put("startZeit", it.toString()) }
+            put("typ", buchung.typ?.name ?: BuchungsTyp.PAUSE.name)
+            put("status", status)
+            if (idempotent) put("idempotent", true)
+        }
+
+    private fun aktiveBuchungToMap(buchung: Zeitbuchung): Map<String, Any> =
+        linkedMapOf<String, Any>().apply {
+            buchung.id?.let { put("id", it) }
+            val projekt = buchung.projekt
+            if (projekt != null) {
+                projekt.id?.let { put("projektId", it) }
+                projekt.bauvorhaben?.let { put("projektName", it) }
+                projekt.getKunde()?.let { put("kundenName", it) }
+                projekt.auftragsnummer?.let { put("auftragsnummer", it) }
+            } else if (buchung.typ == BuchungsTyp.PAUSE) {
+                put("projektName", "Pause")
+            }
+            buchung.arbeitsgang?.id?.let { put("arbeitsgangId", it) }
+            buchung.arbeitsgang?.beschreibung?.let { put("arbeitsgangName", it) }
+            buchung.projektProduktkategorie?.produktkategorie?.let {
+                it.id?.let { id -> put("produktkategorieId", id) }
+                it.bezeichnung?.let { name -> put("produktkategorieName", name) }
+            }
+            buchung.typ?.name?.let { put("typ", it) }
+            buchung.startZeit?.let { put("startZeit", it.toString()) }
+        }
+
+    private fun resolveStundensatz(arbeitsgangId: Long, jahr: Int, arbeitsgangName: String?) =
+        arbeitsgangStundensatzRepository.findTopByArbeitsgangIdAndJahrOrderByIdDesc(arbeitsgangId, jahr)
+            .or { arbeitsgangStundensatzRepository.findTopByArbeitsgangIdAndJahrGreaterThanEqualOrderByJahrAsc(arbeitsgangId, jahr) }
+            .or { arbeitsgangStundensatzRepository.findTopByArbeitsgangIdOrderByJahrDesc(arbeitsgangId) }
+            .orElseThrow { RuntimeException("Kein Stundensatz für Arbeitsgang '${arbeitsgangName.orEmpty()}' gefunden") }
 }
