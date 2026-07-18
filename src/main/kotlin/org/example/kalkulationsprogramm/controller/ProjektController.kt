@@ -2,13 +2,16 @@ package org.example.kalkulationsprogramm.controller
 
 import org.example.kalkulationsprogramm.domain.ProjektDokument
 import org.example.kalkulationsprogramm.domain.ProjektGeschaeftsdokument
+import org.example.kalkulationsprogramm.dto.Freigabe.FreigabeStatusKurzDto
 import org.example.kalkulationsprogramm.dto.Projekt.ProjektResponseDto
 import org.example.kalkulationsprogramm.dto.Projekt.ProjektErstellenDto
 import org.example.kalkulationsprogramm.dto.Projekt.ProjektDokumentResponseDto
 import org.example.kalkulationsprogramm.mapper.ProjektMapper
+import org.example.kalkulationsprogramm.repository.LieferantDokumentProjektAnteilRepository
 import org.example.kalkulationsprogramm.repository.ProjektNotizRepository
 import org.example.kalkulationsprogramm.repository.ProjektRepository
 import org.example.kalkulationsprogramm.service.DateiSpeicherService
+import org.example.kalkulationsprogramm.service.DokumentFreigabeService
 import org.example.kalkulationsprogramm.service.ProjektManagementService
 import org.springframework.format.annotation.DateTimeFormat
 import org.springframework.data.domain.Page
@@ -37,6 +40,8 @@ class ProjektController(
     private val projektManagementService: ProjektManagementService,
     private val dateiSpeicherService: DateiSpeicherService,
     private val projektNotizRepository: ProjektNotizRepository,
+    private val dokumentFreigabeService: DokumentFreigabeService,
+    private val lieferantDokumentProjektAnteilRepository: LieferantDokumentProjektAnteilRepository,
 ) {
     @GetMapping
     fun getProjekte(
@@ -105,7 +110,21 @@ class ProjektController(
     }
 
     @GetMapping("/freigabe-status")
-    fun getFreigabeStatus(@RequestParam ids: String?): Map<Long, Any> = emptyMap()
+    fun getFreigabeStatus(@RequestParam ids: String?): Map<Long, FreigabeStatusKurzDto> {
+        val projektIds = parseIds(ids)
+        if (projektIds.isEmpty()) return emptyMap()
+        return dokumentFreigabeService.findJuengsteProProjekt(projektIds)
+            .mapValues { (_, freigabe) ->
+                FreigabeStatusKurzDto.builder()
+                    .status(freigabe.status?.name)
+                    .dokumentArt(freigabe.dokumentArt)
+                    .dokumentNummer(freigabe.dokumentNummer)
+                    .akzeptiertAm(freigabe.akzeptiertAm)
+                    .ablaufDatum(freigabe.ablaufDatum)
+                    .erstelltAm(freigabe.erstelltAm)
+                    .build()
+            }
+    }
 
     @GetMapping("/{id}/dokumente")
     fun getProjektDokumente(
@@ -119,7 +138,37 @@ class ProjektController(
             .toList()
 
     @GetMapping("/{id}/eingangsrechnungen")
-    fun getEingangsrechnungen(@PathVariable id: Long): List<EingangsrechnungDto> = emptyList()
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    fun getEingangsrechnungen(@PathVariable id: Long): List<EingangsrechnungDto> =
+        lieferantDokumentProjektAnteilRepository.findByProjektIdEager(id)
+            .filter { it.dokument?.geschaeftsdaten != null }
+            .sortedByDescending { it.dokument?.geschaeftsdaten?.dokumentDatum ?: LocalDate.MIN }
+            .map { anteil ->
+                val dokument = anteil.dokument
+                val gd = dokument?.geschaeftsdaten
+                EingangsrechnungDto().apply {
+                    this.id = anteil.id
+                    dokumentId = dokument?.id
+                    geschaeftsdokumentId = gd?.id
+                    dokumentNummer = gd?.dokumentNummer
+                    dateiname = dokument?.getEffektiverDateiname()
+                    dokumentDatum = gd?.dokumentDatum
+                    gesamtbetrag = gd?.betragBrutto ?: gd?.betragNetto
+                    prozent = anteil.prozent
+                    berechneterBetrag = anteil.berechneterBetrag ?: anteil.absoluterBetrag
+                    beschreibung = anteil.beschreibung
+                    lieferantId = dokument?.lieferant?.id
+                    lieferantName = dokument?.lieferant?.lieferantenname
+                    pdfUrl = dokument?.id?.let { "/api/lieferanten/dokumente/$it/datei" }
+                    zugeordnetVonName = anteil.zugeordnetVon?.displayName
+                    zugeordnetAm = anteil.zugeordnetAm
+                    alleZuordnungen = dokument?.id
+                        ?.let { lieferantDokumentProjektAnteilRepository.findByDokumentIdEager(it) }
+                        ?.map { it.toAnteilDto() }
+                        ?: emptyList()
+                    dokumentenKette = dokument?.let { buildDokumentenKette(it) } ?: emptyList()
+                }
+            }
 
     @GetMapping("/{id}/notizen")
     fun getNotizen(@PathVariable id: Long): List<ProjektNotizDto> =
@@ -224,6 +273,49 @@ class ProjektController(
                 isBezahlt = dokument.bezahlt
             }
         }
+
+    private fun parseIds(ids: String?): List<Long> =
+        ids.orEmpty()
+            .split(',')
+            .mapNotNull { it.trim().toLongOrNull() }
+            .distinct()
+
+    private fun org.example.kalkulationsprogramm.domain.LieferantDokumentProjektAnteil.toAnteilDto(): AnteilDto =
+        AnteilDto().apply {
+            projektId = projekt?.id
+            projektName = projekt?.bauvorhaben
+            projektNummer = projekt?.auftragsnummer
+            kostenstelleId = kostenstelle?.id
+            kostenstelleName = kostenstelle?.bezeichnung
+            prozent = this@toAnteilDto.prozent
+            berechneterBetrag = this@toAnteilDto.berechneterBetrag ?: absoluterBetrag
+            beschreibung = this@toAnteilDto.beschreibung
+            zugeordnetVonName = zugeordnetVon?.displayName
+            zugeordnetAm = this@toAnteilDto.zugeordnetAm
+        }
+
+    private fun buildDokumentenKette(
+        dokument: org.example.kalkulationsprogramm.domain.LieferantDokument,
+    ): List<DokumentKetteRefDto> {
+        val refs = linkedMapOf<Long, DokumentKetteRefDto>()
+        fun add(doc: org.example.kalkulationsprogramm.domain.LieferantDokument?) {
+            val id = doc?.id ?: return
+            if (refs.containsKey(id)) return
+            val gd = doc.geschaeftsdaten
+            refs[id] = DokumentKetteRefDto().apply {
+                this.id = id
+                typ = doc.typ?.name
+                dokumentNummer = gd?.dokumentNummer
+                dokumentDatum = gd?.dokumentDatum
+                betragNetto = gd?.betragNetto
+                pdfUrl = "/api/lieferanten/dokumente/$id/datei"
+            }
+        }
+        add(dokument)
+        dokument.verknuepfteDokumente.forEach(::add)
+        dokument.verknuepftVon.forEach(::add)
+        return refs.values.sortedBy { it.dokumentDatum ?: LocalDate.MIN }
+    }
 
     data class NaechsteAuftragsnummerResponse(val auftragsnummer: String?, val prefix: String?, val zaehler: Long)
 
