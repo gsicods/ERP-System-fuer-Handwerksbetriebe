@@ -7,23 +7,41 @@ import org.example.kalkulationsprogramm.domain.Lieferanten
 import org.example.kalkulationsprogramm.dto.LieferantDokumentDto
 import org.example.kalkulationsprogramm.dto.Zugferd.ZugferdDaten
 import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository
+import org.example.kalkulationsprogramm.repository.LieferantGeschaeftsdokumentRepository
 import org.example.kalkulationsprogramm.repository.LieferantenRepository
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.multipart.MultipartFile
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.LocalDateTime
 import java.util.Optional
 
 @Service
 open class GeminiDokumentAnalyseService(
     private val lieferantenRepository: LieferantenRepository,
     private val dokumentRepository: LieferantDokumentRepository,
+    private val lieferantGeschaeftsdokumentRepository: LieferantGeschaeftsdokumentRepository,
     private val zugferdExtractorService: ZugferdExtractorService,
+    @Value("\${upload.path:uploads}")
+    private val uploadPath: String,
 ) {
-    fun analysiereDokument(dokument: LieferantDokument): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
-    fun reanalysiereDokumentById(dokumentId: Long): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
+    @Transactional
+    open fun analysiereDokument(dokument: LieferantDokument): LieferantGeschaeftsdokument? =
+        analysiereDokument(dokument, null)
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    open fun reanalysiereDokumentById(dokumentId: Long): LieferantGeschaeftsdokument? {
+        val dokument = dokumentRepository.findById(dokumentId).orElse(null) ?: run {
+            log.warn("Dokument {} nicht gefunden fuer Re-Analyse", dokumentId)
+            return null
+        }
+        return analysiereDokument(dokument, null)
+    }
+
     fun analyzeAsync(dokumentId: Long) {}
     fun analyzeFile(file: MultipartFile): LieferantDokumentDto.AnalyzeResponse = analyzeFile(file, null)
 
@@ -50,7 +68,45 @@ open class GeminiDokumentAnalyseService(
     fun rufGeminiApiMitPrompt(bytes: ByteArray, mimeType: String?, customPrompt: String?): String =
         rufGeminiApiMitPrompt(bytes, mimeType, customPrompt, false)
     fun rufGeminiApiMitPrompt(bytes: ByteArray, mimeType: String?, customPrompt: String?, useProModel: Boolean): String = ""
-    fun analysiereDokument(dokument: LieferantDokument, explicitPath: Path): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    open fun analysiereDokument(dokument: LieferantDokument, explicitPath: Path?): LieferantGeschaeftsdokument? {
+        val dokumentId = dokument.id ?: return null
+        val freshDokument = dokumentRepository.findById(dokumentId).orElse(null) ?: run {
+            log.warn("Dokument {} nicht gefunden fuer Analyse", dokumentId)
+            return null
+        }
+
+        val dateiPfad = explicitPath?.let { validiereAnalyseDateiPfad(it, true) } ?: getDateiPfad(freshDokument)
+        if (dateiPfad == null) {
+            log.warn("Konnte Datei nicht finden fuer Dokument {}", freshDokument.id)
+            return null
+        }
+
+        val geschaeftsdaten = analyzeAndReturnData(dateiPfad, freshDokument.getEffektiverDateiname()) ?: run {
+            log.warn("Konnte keine strukturierten Metadaten extrahieren fuer Dokument {}", freshDokument.id)
+            return null
+        }
+
+        geschaeftsdaten.dokument = freshDokument
+        geschaeftsdaten.id = freshDokument.id
+        geschaeftsdaten.analysiertAm = LocalDateTime.now()
+
+        val typ = geschaeftsdaten.detectedTyp ?: erkenneTypAusNummer(geschaeftsdaten.dokumentNummer)
+        if (typ != null && (freshDokument.typ == null || freshDokument.typ == LieferantDokumentTyp.SONSTIG)) {
+            freshDokument.typ = typ
+        }
+
+        automatischeVerknuepfung(freshDokument, geschaeftsdaten)
+
+        val saved = lieferantGeschaeftsdokumentRepository.saveAndFlush(geschaeftsdaten)
+        freshDokument.geschaeftsdaten = saved
+        dokumentRepository.saveAndFlush(freshDokument)
+        performRelink(freshDokument)
+
+        log.info("Dokument {} erfolgreich strukturiert analysiert: {}", freshDokument.id, saved.dokumentNummer)
+        return saved
+    }
+
     fun analyzeAndReturnData(dateiPfad: Path, originalDateiname: String?): LieferantGeschaeftsdokument? {
         val name = originalDateiname ?: dateiPfad.fileName?.toString()
         if (!name.orEmpty().lowercase().endsWith(".pdf")) {
@@ -70,6 +126,45 @@ open class GeminiDokumentAnalyseService(
 
         return toGeschaeftsdokument(zugferdDaten)
     }
+
+    private fun getDateiPfad(dokument: LieferantDokument): Path? {
+        val dateiname = dokument.getEffektiverGespeicherterDateiname() ?: return null
+        val lieferantId = dokument.lieferant?.id
+
+        val kandidaten = listOfNotNull(
+            Path.of(uploadPath, "attachments", dateiname),
+            lieferantId?.let { Path.of(uploadPath, "attachments", "lieferanten", it.toString(), dateiname) },
+            lieferantId?.let { Path.of(uploadPath, "lieferanten", it.toString(), dateiname) },
+            Path.of(uploadPath, "attachments", "vendor-invoices", dateiname),
+            Path.of(uploadPath, "lieferant-emails", dateiname),
+            Path.of(uploadPath, "email", dateiname),
+            Path.of(uploadPath, dateiname),
+        )
+
+        return kandidaten.firstNotNullOfOrNull(::pruefeUploadDateiPfad)
+    }
+
+    private fun pruefeUploadDateiPfad(pfad: Path): Path? {
+        val normalizedPath = pfad.toAbsolutePath().normalize()
+        val uploadRoot = uploadRootPath()
+        if (!normalizedPath.startsWith(uploadRoot) || !Files.isRegularFile(normalizedPath)) {
+            return null
+        }
+        return normalizedPath
+    }
+
+    private fun validiereAnalyseDateiPfad(dateiPfad: Path, tempDateienErlaubt: Boolean): Path {
+        val normalizedPath = dateiPfad.toAbsolutePath().normalize()
+        val uploadRoot = uploadRootPath()
+        val tempRoot = Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize()
+        val erlaubterPfad = normalizedPath.startsWith(uploadRoot) || (tempDateienErlaubt && normalizedPath.startsWith(tempRoot))
+        require(erlaubterPfad) { "Dateizugriff ausserhalb der erlaubten Verzeichnisse: $normalizedPath" }
+        require(Files.isRegularFile(normalizedPath)) { "Datei ist nicht lesbar oder existiert nicht: $normalizedPath" }
+        return normalizedPath
+    }
+
+    private fun uploadRootPath(): Path =
+        Path.of(uploadPath.ifBlank { "uploads" }).toAbsolutePath().normalize()
     fun findeLieferantByEmailDomain(emailAddress: String?): Optional<Lieferanten> {
         if (emailAddress.isNullOrBlank() || !emailAddress.contains("@")) {
             return Optional.empty()
