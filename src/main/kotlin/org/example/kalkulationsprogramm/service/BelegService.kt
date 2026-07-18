@@ -16,6 +16,7 @@ import org.example.kalkulationsprogramm.repository.FrontendUserProfileRepository
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository
 import org.springframework.security.core.Authentication
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.multipart.MultipartFile
 import java.io.IOException
 import java.math.BigDecimal
@@ -110,7 +111,13 @@ open class BelegService(
     fun setzePositionsAuswahl(belegId: Long, firmaPositionIds: List<Long>?): BelegDto.Response =
         BelegDto.Response.builder().id(belegId).build()
 
-    fun deleteBeleg(id: Long): Boolean = false
+    @Transactional
+    open fun deleteBeleg(id: Long): Boolean {
+        val beleg = belegRepository.findById(id).orElse(null) ?: return false
+        beleg.status = BelegStatus.VERWORFEN
+        belegRepository.save(beleg)
+        return true
+    }
 
     fun createUmbuchung(req: BelegDto.UmbuchungCreateRequest, ersteller: Mitarbeiter?): Beleg =
         Beleg().apply { uploadedBy = ersteller }
