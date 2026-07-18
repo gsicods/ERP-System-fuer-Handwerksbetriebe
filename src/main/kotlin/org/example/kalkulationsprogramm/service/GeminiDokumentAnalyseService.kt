@@ -1,11 +1,15 @@
 package org.example.kalkulationsprogramm.service
 
 import org.example.kalkulationsprogramm.domain.LieferantDokument
+import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp
 import org.example.kalkulationsprogramm.domain.LieferantGeschaeftsdokument
 import org.example.kalkulationsprogramm.domain.Lieferanten
 import org.example.kalkulationsprogramm.dto.LieferantDokumentDto
+import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository
 import org.example.kalkulationsprogramm.repository.LieferantenRepository
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.multipart.MultipartFile
 import java.nio.file.Path
 import java.util.Optional
@@ -13,6 +17,7 @@ import java.util.Optional
 @Service
 open class GeminiDokumentAnalyseService(
     private val lieferantenRepository: LieferantenRepository,
+    private val dokumentRepository: LieferantDokumentRepository,
 ) {
     fun analysiereDokument(dokument: LieferantDokument): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
     fun reanalysiereDokumentById(dokumentId: Long): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
@@ -40,10 +45,151 @@ open class GeminiDokumentAnalyseService(
         return lieferantenRepository.findByEmailDomain(domain).firstOrNull()?.let { Optional.of(it) }
             ?: Optional.empty()
     }
-    fun performRelink(dokument: LieferantDokument) {}
-    fun performRelink(dokument: LieferantDokument, alleDokumente: List<LieferantDokument>?) {}
-    fun relinkAlleDokumente(): Int = 0
-    fun relinkDokumenteByLieferant(lieferantId: Long): Int = 0
+    fun performRelink(dokument: LieferantDokument) {
+        val lieferantId = dokument.lieferant?.id ?: return
+        val alleDokumente = dokumentRepository.findByLieferantIdOrderByUploadDatumDesc(lieferantId)
+        performRelink(dokument, alleDokumente)
+    }
+
+    fun performRelink(dokument: LieferantDokument, alleDokumente: List<LieferantDokument>?) {
+        val geschaeftsdaten = dokument.geschaeftsdaten ?: return
+        if (dokument.lieferant == null) return
+
+        automatischeVerknuepfung(dokument, geschaeftsdaten, alleDokumente)
+
+        val meineDokumentNummer = geschaeftsdaten.dokumentNummer?.trim()?.takeIf { it.isNotBlank() } ?: return
+        alleDokumente.orEmpty()
+            .asSequence()
+            .filter {
+                it.id != dokument.id &&
+                    it.geschaeftsdaten != null &&
+                    it.lieferant?.id == dokument.lieferant?.id
+            }
+            .forEach { anderes ->
+                val fremdReferenz = anderes.geschaeftsdaten?.referenzNummer?.trim()
+                if (fremdReferenz != null && fremdReferenz.equals(meineDokumentNummer, ignoreCase = true)) {
+                    if (anderes.verknuepfteDokumente.add(dokument)) {
+                        dokumentRepository.save(anderes)
+                        log.info("[Relink] Dokument {} verweist auf {} (Ref: {})", anderes.id, dokument.id, fremdReferenz)
+                    }
+                }
+            }
+    }
+
+    @Transactional
+    open fun relinkAlleDokumente(): Int {
+        val alleDokumente = dokumentRepository.findAll()
+        var verknuepft = 0
+
+        alleDokumente
+            .filter { it.geschaeftsdaten != null }
+            .forEach { dokument ->
+                val vorher = dokument.verknuepfteDokumente.size
+                dokument.verknuepfteDokumente.clear()
+                performRelink(dokument, alleDokumente)
+                dokumentRepository.save(dokument)
+                if (dokument.verknuepfteDokumente.size > vorher) {
+                    verknuepft++
+                }
+            }
+
+        log.info("[Relink] Fertig! {} von {} Dokumenten neu verknuepft.", verknuepft, alleDokumente.size)
+        return verknuepft
+    }
+
+    @Transactional
+    open fun relinkDokumenteByLieferant(lieferantId: Long): Int {
+        val dokumente = dokumentRepository.findByLieferantIdOrderByUploadDatumDesc(lieferantId)
+        var verknuepft = 0
+
+        dokumente
+            .filter { it.geschaeftsdaten != null }
+            .forEach { dokument ->
+                val vorher = dokument.verknuepfteDokumente.size
+                dokument.verknuepfteDokumente.clear()
+                performRelink(dokument, dokumente)
+                dokumentRepository.save(dokument)
+                if (dokument.verknuepfteDokumente.size > vorher) {
+                    verknuepft++
+                }
+            }
+
+        log.info("[Relink] Fertig fuer Lieferant {}! {} von {} Dokumenten neu verknuepft.", lieferantId, verknuepft, dokumente.size)
+        return verknuepft
+    }
+
+    private fun automatischeVerknuepfung(
+        dokument: LieferantDokument,
+        geschaeftsdaten: LieferantGeschaeftsdokument,
+        vorhandeneKandidaten: List<LieferantDokument>? = null,
+    ) {
+        val lieferantId = dokument.lieferant?.id ?: return
+        val referenzNummer = geschaeftsdaten.referenzNummer?.trim()?.takeIf { it.isNotBlank() }
+        if (referenzNummer == null && geschaeftsdaten.betragBrutto == null) return
+
+        val vorgaengerTypen = vorgaengerTypenFuer(dokument.typ)
+        if (vorgaengerTypen.isEmpty()) return
+
+        val kandidaten = (vorhandeneKandidaten
+            ?.filter { it.lieferant?.id == lieferantId && it.typ in vorgaengerTypen }
+            ?: dokumentRepository.findByLieferantIdAndTypIn(lieferantId, vorgaengerTypen))
+            .filter { it.id != dokument.id && it.geschaeftsdaten != null }
+
+        if (referenzNummer != null) {
+            for (kandidat in kandidaten) {
+                val kandidatNummer = kandidat.geschaeftsdaten?.dokumentNummer ?: continue
+                val exakt = kandidatNummer.trim().equals(referenzNummer, ignoreCase = true)
+                val normalisiert = normalizeNummer(kandidatNummer)?.let { it == normalizeNummer(referenzNummer) } == true
+                if (exakt || normalisiert) {
+                    dokument.verknuepfteDokumente.add(kandidat)
+                    log.info("[Verknuepfung] Dokument {} -> {} (Referenz: {})", dokument.id, kandidat.id, referenzNummer)
+                    break
+                }
+            }
+        }
+
+        val meinBrutto = geschaeftsdaten.betragBrutto ?: return
+        if (dokument.verknuepfteDokumente.isNotEmpty()) return
+
+        val meinDatum = geschaeftsdaten.dokumentDatum
+        for (kandidat in kandidaten) {
+            val kandidatDaten = kandidat.geschaeftsdaten ?: continue
+            val kandidatBrutto = kandidatDaten.betragBrutto ?: continue
+            if (meinBrutto.compareTo(kandidatBrutto) != 0) continue
+
+            val kandidatDatum = kandidatDaten.dokumentDatum
+            if (meinDatum != null && kandidatDatum != null) {
+                val minDate = meinDatum.minusMonths(1)
+                val maxDate = meinDatum.plusMonths(1)
+                if (kandidatDatum.isBefore(minDate) || kandidatDatum.isAfter(maxDate)) continue
+            }
+
+            dokument.verknuepfteDokumente.add(kandidat)
+            log.info("[Verknuepfung] Fallback-Match Dokument {} -> {}", dokument.id, kandidat.id)
+            break
+        }
+    }
+
+    private fun vorgaengerTypenFuer(typ: LieferantDokumentTyp?): List<LieferantDokumentTyp> =
+        when (typ) {
+            LieferantDokumentTyp.RECHNUNG -> listOf(LieferantDokumentTyp.AUFTRAGSBESTAETIGUNG, LieferantDokumentTyp.LIEFERSCHEIN)
+            LieferantDokumentTyp.GUTSCHRIFT -> listOf(LieferantDokumentTyp.RECHNUNG)
+            LieferantDokumentTyp.LIEFERSCHEIN -> listOf(LieferantDokumentTyp.AUFTRAGSBESTAETIGUNG)
+            LieferantDokumentTyp.AUFTRAGSBESTAETIGUNG -> listOf(LieferantDokumentTyp.ANGEBOT)
+            else -> emptyList()
+        }
+
+    private fun normalizeNummer(nummer: String?): String? {
+        val normalized = nummer
+            ?.takeIf { it.isNotBlank() }
+            ?.replace(Regex("[^a-zA-Z0-9]"), "")
+            ?.uppercase()
+        return normalized?.takeIf { it.isNotEmpty() }
+    }
+
+    companion object {
+        private val log = LoggerFactory.getLogger(GeminiDokumentAnalyseService::class.java)
+    }
 
 }
 
