@@ -4,13 +4,16 @@ import org.example.kalkulationsprogramm.domain.LieferantDokument
 import org.example.kalkulationsprogramm.domain.LieferantGeschaeftsdokument
 import org.example.kalkulationsprogramm.domain.Lieferanten
 import org.example.kalkulationsprogramm.dto.LieferantDokumentDto
+import org.example.kalkulationsprogramm.repository.LieferantenRepository
 import org.springframework.stereotype.Service
 import org.springframework.web.multipart.MultipartFile
 import java.nio.file.Path
 import java.util.Optional
 
 @Service
-open class GeminiDokumentAnalyseService {
+open class GeminiDokumentAnalyseService(
+    private val lieferantenRepository: LieferantenRepository,
+) {
     fun analysiereDokument(dokument: LieferantDokument): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
     fun reanalysiereDokumentById(dokumentId: Long): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
     fun analyzeAsync(dokumentId: Long) {}
@@ -26,7 +29,17 @@ open class GeminiDokumentAnalyseService {
     fun rufGeminiApiMitPrompt(bytes: ByteArray, mimeType: String?, customPrompt: String?, useProModel: Boolean): String = ""
     fun analysiereDokument(dokument: LieferantDokument, explicitPath: Path): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
     fun analyzeAndReturnData(dateiPfad: Path, originalDateiname: String?): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
-    fun findeLieferantByEmailDomain(emailAddress: String?): Optional<Lieferanten> = Optional.empty()
+    fun findeLieferantByEmailDomain(emailAddress: String?): Optional<Lieferanten> {
+        if (emailAddress.isNullOrBlank() || !emailAddress.contains("@")) {
+            return Optional.empty()
+        }
+        val domain = emailAddress.substringAfterLast("@").trim().lowercase()
+        if (domain.isBlank()) {
+            return Optional.empty()
+        }
+        return lieferantenRepository.findByEmailDomain(domain).firstOrNull()?.let { Optional.of(it) }
+            ?: Optional.empty()
+    }
     fun performRelink(dokument: LieferantDokument) {}
     fun performRelink(dokument: LieferantDokument, alleDokumente: List<LieferantDokument>?) {}
     fun relinkAlleDokumente(): Int = 0
