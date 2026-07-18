@@ -2,13 +2,19 @@ package org.example.kalkulationsprogramm.service
 
 import org.example.kalkulationsprogramm.dto.Arbeitsgang.ArbeitsgangResponseDto
 import org.example.kalkulationsprogramm.mapper.ArbeitsgangMapper
+import org.example.kalkulationsprogramm.domain.BuchungsTyp
+import org.example.kalkulationsprogramm.domain.DokumentGruppe
+import org.example.kalkulationsprogramm.domain.Zeitbuchung
 import org.example.kalkulationsprogramm.repository.ArbeitsgangRepository
 import org.example.kalkulationsprogramm.repository.FeiertagRepository
 import org.example.kalkulationsprogramm.repository.LieferantenRepository
 import org.example.kalkulationsprogramm.repository.MitarbeiterRepository
 import org.example.kalkulationsprogramm.repository.ProduktkategorieRepository
 import org.example.kalkulationsprogramm.repository.ProjektRepository
+import org.example.kalkulationsprogramm.repository.ZeitbuchungRepository
 import org.springframework.stereotype.Service
+import java.math.BigDecimal
+import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.util.Optional
@@ -22,6 +28,8 @@ class ZeiterfassungApiService(
     private val lieferantenRepository: LieferantenRepository,
     private val feiertagRepository: FeiertagRepository,
     private val mitarbeiterRepository: MitarbeiterRepository,
+    private val zeitbuchungRepository: ZeitbuchungRepository,
+    private val dateiSpeicherService: DateiSpeicherService,
 ) {
     fun getOpenProjekte(limit: Int?, search: String?): List<Map<String, Any>> {
         val max = (limit ?: 100).coerceIn(1, 1000)
@@ -120,9 +128,32 @@ class ZeiterfassungApiService(
 
     fun getHeuteGearbeitet(token: String): Map<String, Any> = mapOf("minuten" to 0)
 
-    fun getBuchungenByDatum(token: String, datum: LocalDate): List<Map<String, Any>> = emptyList()
+    fun getBuchungenByDatum(token: String, datum: LocalDate): List<Map<String, Any>> {
+        val mitarbeiter = mitarbeiterRepository.findByLoginTokenAndAktivTrue(token.trim()).orElse(null) ?: return emptyList()
+        val startOfDay = datum.atStartOfDay()
+        val endOfDay = datum.plusDays(1).atStartOfDay()
+        return zeitbuchungRepository.findByMitarbeiterIdAndStartZeitBetween(mitarbeiter.id, startOfDay, endOfDay)
+            .map(::zeitbuchungToMobileMap)
+    }
 
-    fun getProjektBilder(projektId: Long): List<Map<String, Any>> = emptyList()
+    fun getProjektBilder(projektId: Long): List<Map<String, Any>> =
+        dateiSpeicherService.holeDokumenteZuProjekt(projektId)
+            .asSequence()
+            .filter { it.dokumentGruppe == DokumentGruppe.BILDER }
+            .map { dok ->
+                linkedMapOf<String, Any>().apply {
+                    dok.id?.let { put("id", it) }
+                    dok.originalDateiname?.let { put("name", it) }
+                    dok.gespeicherterDateiname?.let {
+                        put("url", "/api/dokumente/$it")
+                        put("thumbnailUrl", "/api/dokumente/$it/thumbnail")
+                    }
+                    dok.uploadDatum?.let { put("uploadDatum", it) }
+                    dok.uploadedBy?.vorname?.let { put("uploadedByVorname", it) }
+                    dok.uploadedBy?.nachname?.let { put("uploadedByNachname", it) }
+                }
+            }
+            .toList()
 
     fun getFeiertage(jahr: Int): List<Map<String, Any>> =
         feiertagRepository.findByJahr(jahr)
@@ -152,5 +183,40 @@ class ZeiterfassungApiService(
             current = current.uebergeordneteKategorie
         }
         return parts.joinToString(" / ")
+    }
+
+    private fun zeitbuchungToMobileMap(buchung: Zeitbuchung): Map<String, Any> {
+        val entry = linkedMapOf<String, Any>()
+        buchung.id?.let { entry["id"] = it }
+        buchung.startZeit?.let { entry["startMinuten"] = it.hour * 60 + it.minute }
+        buchung.endeZeit?.let { entry["endeMinuten"] = it.hour * 60 + it.minute }
+        val stunden = buchung.anzahlInStunden
+        when {
+            stunden != null -> entry["dauerMinuten"] = stunden.multiply(BigDecimal.valueOf(60)).toInt()
+            buchung.startZeit != null && buchung.endeZeit != null ->
+                entry["dauerMinuten"] = Duration.between(buchung.startZeit, buchung.endeZeit).toMinutes().toInt()
+        }
+
+        val projekt = buchung.projekt
+        if (projekt != null) {
+            projekt.id?.let { entry["projektId"] = it }
+            projekt.auftragsnummer?.let { entry["projektNummer"] = it }
+            projekt.bauvorhaben?.let { entry["projektName"] = it }
+            projekt.getKunde()?.let { entry["kundenName"] = it }
+        } else if (buchung.typ == BuchungsTyp.PAUSE) {
+            entry["projektName"] = "Pause"
+        }
+
+        buchung.arbeitsgang?.let {
+            it.id?.let { id -> entry["arbeitsgangId"] = id }
+            it.beschreibung?.let { beschreibung -> entry["taetigkeit"] = beschreibung }
+        }
+        buchung.projektProduktkategorie?.produktkategorie?.let {
+            it.id?.let { id -> entry["kategorieId"] = id }
+            entry["kategorieName"] = buildKategoriePfad(it)
+        }
+        buchung.notiz?.let { entry["kommentar"] = it }
+        entry["typ"] = buchung.typ?.name ?: BuchungsTyp.ARBEIT.name
+        return entry
     }
 }
