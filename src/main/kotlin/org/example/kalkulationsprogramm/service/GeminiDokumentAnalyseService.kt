@@ -5,12 +5,14 @@ import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp
 import org.example.kalkulationsprogramm.domain.LieferantGeschaeftsdokument
 import org.example.kalkulationsprogramm.domain.Lieferanten
 import org.example.kalkulationsprogramm.dto.LieferantDokumentDto
+import org.example.kalkulationsprogramm.dto.Zugferd.ZugferdDaten
 import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository
 import org.example.kalkulationsprogramm.repository.LieferantenRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.multipart.MultipartFile
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Optional
 
@@ -18,14 +20,30 @@ import java.util.Optional
 open class GeminiDokumentAnalyseService(
     private val lieferantenRepository: LieferantenRepository,
     private val dokumentRepository: LieferantDokumentRepository,
+    private val zugferdExtractorService: ZugferdExtractorService,
 ) {
     fun analysiereDokument(dokument: LieferantDokument): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
     fun reanalysiereDokumentById(dokumentId: Long): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
     fun analyzeAsync(dokumentId: Long) {}
-    fun analyzeFile(file: MultipartFile): LieferantDokumentDto.AnalyzeResponse = LieferantDokumentDto.AnalyzeResponse()
-    fun analyzeFile(file: MultipartFile, customPrompt: String?): LieferantDokumentDto.AnalyzeResponse = LieferantDokumentDto.AnalyzeResponse()
-    fun analyzeFile(file: Path, originalDateiname: String?): LieferantDokumentDto.AnalyzeResponse = LieferantDokumentDto.AnalyzeResponse()
-    fun analyzeFile(file: Path, originalDateiname: String?, useProModel: Boolean): LieferantDokumentDto.AnalyzeResponse = LieferantDokumentDto.AnalyzeResponse()
+    fun analyzeFile(file: MultipartFile): LieferantDokumentDto.AnalyzeResponse = analyzeFile(file, null)
+
+    fun analyzeFile(file: MultipartFile, customPrompt: String?): LieferantDokumentDto.AnalyzeResponse {
+        val suffix = file.originalFilename?.substringAfterLast('.', "")?.takeIf { it.isNotBlank() }?.let { ".$it" } ?: ".tmp"
+        val tempFile = Files.createTempFile("lieferant-analyse-", suffix)
+        return try {
+            file.inputStream.use { input -> Files.copy(input, tempFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING) }
+            analyzeFile(tempFile, file.originalFilename)
+        } finally {
+            runCatching { Files.deleteIfExists(tempFile) }
+        }
+    }
+
+    fun analyzeFile(file: Path, originalDateiname: String?): LieferantDokumentDto.AnalyzeResponse =
+        analyzeFile(file, originalDateiname, false)
+
+    fun analyzeFile(file: Path, originalDateiname: String?, useProModel: Boolean): LieferantDokumentDto.AnalyzeResponse =
+        analyzeAndReturnData(file, originalDateiname)?.let(::toAnalyzeResponse)
+            ?: LieferantDokumentDto.AnalyzeResponse()
 
     fun analyzeFileForMultipleInvoices(file: MultipartFile): MutableList<LieferantDokumentDto.MultiInvoiceAnalyzeResponse> = mutableListOf()
     fun analyzeFileForMultipleInvoices(file: Path, originalDateiname: String?): MutableList<LieferantDokumentDto.MultiInvoiceAnalyzeResponse> = mutableListOf()
@@ -33,7 +51,25 @@ open class GeminiDokumentAnalyseService(
         rufGeminiApiMitPrompt(bytes, mimeType, customPrompt, false)
     fun rufGeminiApiMitPrompt(bytes: ByteArray, mimeType: String?, customPrompt: String?, useProModel: Boolean): String = ""
     fun analysiereDokument(dokument: LieferantDokument, explicitPath: Path): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
-    fun analyzeAndReturnData(dateiPfad: Path, originalDateiname: String?): LieferantGeschaeftsdokument = LieferantGeschaeftsdokument()
+    fun analyzeAndReturnData(dateiPfad: Path, originalDateiname: String?): LieferantGeschaeftsdokument? {
+        val name = originalDateiname ?: dateiPfad.fileName?.toString()
+        if (!name.orEmpty().lowercase().endsWith(".pdf")) {
+            log.info("Analyse ohne KI uebersprungen fuer Nicht-PDF: {}", name)
+            return null
+        }
+
+        val zugferdDaten = runCatching {
+            zugferdExtractorService.extract(dateiPfad.toString(), name)
+        }.onFailure {
+            log.info("ZUGFeRD-Analyse fehlgeschlagen fuer {}: {}", name, it.message)
+        }.getOrNull() ?: return null
+
+        if (!zugferdDaten.hasUsefulData()) {
+            return null
+        }
+
+        return toGeschaeftsdokument(zugferdDaten)
+    }
     fun findeLieferantByEmailDomain(emailAddress: String?): Optional<Lieferanten> {
         if (emailAddress.isNullOrBlank() || !emailAddress.contains("@")) {
             return Optional.empty()
@@ -185,6 +221,77 @@ open class GeminiDokumentAnalyseService(
             ?.replace(Regex("[^a-zA-Z0-9]"), "")
             ?.uppercase()
         return normalized?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun ZugferdDaten.hasUsefulData(): Boolean =
+        !rechnungsnummer.isNullOrBlank() ||
+            rechnungsdatum != null ||
+            betrag != null ||
+            betragNetto != null ||
+            faelligkeitsdatum != null ||
+            !bestellnummer.isNullOrBlank() ||
+            !referenzNummer.isNullOrBlank()
+
+    private fun toGeschaeftsdokument(daten: ZugferdDaten): LieferantGeschaeftsdokument =
+        LieferantGeschaeftsdokument().apply {
+            dokumentNummer = daten.rechnungsnummer
+            dokumentDatum = daten.rechnungsdatum
+            betragNetto = daten.betragNetto
+            betragBrutto = daten.betrag
+            mwstSatz = daten.mwstSatz
+            zahlungsziel = daten.faelligkeitsdatum
+            bestellnummer = daten.bestellnummer
+            referenzNummer = daten.referenzNummer
+            bereitsGezahlt = daten.bereitsGezahlt
+            skontoTage = daten.skontoTage
+            skontoProzent = daten.skontoProzent
+            nettoTage = daten.nettoTage
+            aiConfidence = 1.0
+            datenquelle = "ZUGFeRD/XML"
+            detectedTyp = dokumentTypAusZugferdArt(daten.geschaeftsdokumentart)
+        }
+
+    private fun toAnalyzeResponse(daten: LieferantGeschaeftsdokument): LieferantDokumentDto.AnalyzeResponse =
+        LieferantDokumentDto.AnalyzeResponse.builder()
+            .dokumentTyp(daten.detectedTyp ?: erkenneTypAusNummer(daten.dokumentNummer))
+            .dokumentNummer(daten.dokumentNummer)
+            .dokumentDatum(daten.dokumentDatum)
+            .betragNetto(daten.betragNetto)
+            .betragBrutto(daten.betragBrutto)
+            .mwstSatz(daten.mwstSatz)
+            .liefertermin(daten.liefertermin)
+            .zahlungsziel(daten.zahlungsziel)
+            .bestellnummer(daten.bestellnummer)
+            .referenzNummer(daten.referenzNummer)
+            .skontoTage(daten.skontoTage)
+            .skontoProzent(daten.skontoProzent)
+            .nettoTage(daten.nettoTage)
+            .bereitsGezahlt(daten.bereitsGezahlt)
+            .zahlungsart(daten.zahlungsart)
+            .aiConfidence(daten.aiConfidence)
+            .analyseQuelle(daten.datenquelle)
+            .build()
+
+    private fun dokumentTypAusZugferdArt(art: String?): LieferantDokumentTyp? =
+        when (art?.lowercase()) {
+            "rechnung" -> LieferantDokumentTyp.RECHNUNG
+            "gutschrift" -> LieferantDokumentTyp.GUTSCHRIFT
+            "angebot" -> LieferantDokumentTyp.ANGEBOT
+            "auftragsbestätigung", "auftragsbestaetigung" -> LieferantDokumentTyp.AUFTRAGSBESTAETIGUNG
+            "lieferschein" -> LieferantDokumentTyp.LIEFERSCHEIN
+            else -> null
+        }
+
+    private fun erkenneTypAusNummer(nummer: String?): LieferantDokumentTyp? {
+        val normalized = nummer?.trim()?.uppercase() ?: return null
+        return when {
+            normalized.startsWith("RE") || normalized.startsWith("RG") || normalized.startsWith("R-") -> LieferantDokumentTyp.RECHNUNG
+            normalized.startsWith("AB") || normalized.startsWith("AUF") -> LieferantDokumentTyp.AUFTRAGSBESTAETIGUNG
+            normalized.startsWith("LS") || normalized.startsWith("L-") -> LieferantDokumentTyp.LIEFERSCHEIN
+            normalized.startsWith("AN") || normalized.startsWith("AG") -> LieferantDokumentTyp.ANGEBOT
+            normalized.startsWith("GS") || normalized.startsWith("GU") -> LieferantDokumentTyp.GUTSCHRIFT
+            else -> null
+        }
     }
 
     companion object {
