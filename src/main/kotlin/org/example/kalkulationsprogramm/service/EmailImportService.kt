@@ -16,6 +16,8 @@ import jakarta.mail.internet.MimeUtility
 import org.example.kalkulationsprogramm.domain.Email
 import org.example.kalkulationsprogramm.domain.EmailAttachment
 import org.example.kalkulationsprogramm.domain.EmailDirection
+import org.example.kalkulationsprogramm.domain.EmailZuordnungTyp
+import org.example.kalkulationsprogramm.repository.EmailAttachmentRepository
 import org.example.kalkulationsprogramm.repository.EmailBlacklistRepository
 import org.example.kalkulationsprogramm.repository.EmailRepository
 import org.slf4j.LoggerFactory
@@ -34,6 +36,7 @@ import java.util.UUID
 @Service
 open class EmailImportService(
     private val emailRepository: EmailRepository,
+    private val attachmentRepository: EmailAttachmentRepository,
     private val emailAutoAssignmentService: EmailAutoAssignmentService,
     private val emailAttachmentProcessingService: EmailAttachmentProcessingService,
     private val spamFilterService: SpamFilterService,
@@ -162,7 +165,24 @@ open class EmailImportService(
         return true
     }
 
-    fun backfillAttachmentFilenames(): Int = 0
+    @Transactional
+    open fun backfillAttachmentFilenames(): Int {
+        var updated = 0
+        attachmentRepository.findAll().forEach { attachment ->
+            val raw = attachment.originalFilename
+            if (!raw.isNullOrBlank() && raw.contains("=?")) {
+                val decoded = decodeHeader(raw)
+                if (!decoded.isNullOrBlank() && decoded != raw) {
+                    attachment.originalFilename = decoded
+                    attachmentRepository.save(attachment)
+                    updated++
+                    log.debug("Backfill attachment filename: '{}' -> '{}'", raw, decoded)
+                }
+            }
+        }
+        log.info("Backfill attachment filenames: {} Eintraege aktualisiert", updated)
+        return updated
+    }
 
     fun postProcessEmail(email: Email) {
         log.debug("Post-processing email {}", email.id)
@@ -194,7 +214,52 @@ open class EmailImportService(
         return processed
     }
 
-    fun backfillParentEmails(): Int = 0
+    @Transactional
+    open fun backfillParentEmails(): Int {
+        log.info("[Backfill] Starte Parent-Email Backfill...")
+        var updated = 0
+        val allEmails = emailRepository.findAll()
+        val byNormalizedSubject = allEmails
+            .asSequence()
+            .map { it to normalizeSubject(it.subject) }
+            .filter { (_, normalized) -> normalized.isNotBlank() }
+            .groupBy({ it.second }, { it.first })
+
+        allEmails.forEach { email ->
+            if (email.parentEmail != null || !isReplyOrForward(email.subject)) {
+                return@forEach
+            }
+            val normalized = normalizeSubject(email.subject)
+            if (normalized.isBlank()) {
+                return@forEach
+            }
+            val candidates = byNormalizedSubject[normalized].orEmpty()
+            if (candidates.size < 2) {
+                return@forEach
+            }
+            val sentAt = email.sentAt ?: return@forEach
+            val bestParent = candidates
+                .asSequence()
+                .filter { it.id != email.id }
+                .filter { candidate -> candidate.sentAt?.isBefore(sentAt) == true }
+                .maxByOrNull { it.sentAt!! }
+                ?: return@forEach
+
+            email.parentEmail = bestParent
+            if (email.zuordnungTyp == EmailZuordnungTyp.KEINE) {
+                when {
+                    bestParent.projekt != null -> email.assignToProjekt(bestParent.projekt)
+                    bestParent.anfrage != null -> email.assignToAnfrage(bestParent.anfrage)
+                    bestParent.lieferant != null -> email.assignToLieferant(bestParent.lieferant)
+                }
+            }
+            emailRepository.save(email)
+            updated++
+        }
+
+        log.info("[Backfill] {} Emails mit Parent verknuepft", updated)
+        return updated
+    }
 
     fun deleteEmailFromServer(email: Email) {
         log.debug("Server-side delete not implemented for email {}", email.id)
@@ -278,6 +343,27 @@ open class EmailImportService(
     private fun decodeHeader(value: String?): String? =
         value?.let { runCatching { MimeUtility.decodeText(it) }.getOrDefault(it) }
 
+    private fun isReplyOrForward(subject: String?): Boolean {
+        var value = subject?.trim() ?: return false
+        while (value.startsWith("[")) {
+            val end = value.indexOf(']')
+            if (end < 0) break
+            value = value.substring(end + 1).trim()
+        }
+        return Regex("^$REPLY_FWD_DETECT_REGEX.*", RegexOption.DOT_MATCHES_ALL).matches(value)
+    }
+
+    private fun normalizeSubject(subject: String?): String {
+        var value = subject?.trim() ?: return ""
+        var previous: String
+        do {
+            previous = value
+            value = value.replaceFirst(Regex("^$REPLY_FWD_STRIP_REGEX"), "").trim()
+            value = value.replaceFirst(Regex("^($BRACKET_PREFIX_REGEX)$REPLY_FWD_STRIP_REGEX"), "$1").trim()
+        } while (value != previous)
+        return value.lowercase()
+    }
+
     private class ExtractedContent {
         var text: String? = null
         var html: String? = null
@@ -295,6 +381,9 @@ open class EmailImportService(
             "INBOX.Archives (2).Werkstoffzeugnisse",
         )
         private val OUTGOING_FOLDERS = listOf("INBOX.Sent", "INBOX.Sent Items")
+        private const val REPLY_FWD_DETECT_REGEX = "(?i)(aw|re|fwd|fw|wg|antw|antwort):\\s+"
+        private const val REPLY_FWD_STRIP_REGEX = "(?i)(aw|re|fwd|fw|wg|antw|antwort):\\s*"
+        private const val BRACKET_PREFIX_REGEX = "\\[[^\\]]+\\]\\s*"
 
         @JvmStatic
         fun extractFirstEmailAddress(raw: String?): String? {
