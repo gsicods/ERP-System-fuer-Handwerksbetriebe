@@ -1,14 +1,18 @@
 package org.example.kalkulationsprogramm.controller
 
 import org.example.kalkulationsprogramm.domain.Beleg
+import org.example.kalkulationsprogramm.domain.BelegKostenstellenAnteil
+import org.example.kalkulationsprogramm.domain.LieferantDokumentProjektAnteil
 import org.example.kalkulationsprogramm.domain.LieferantDokumentTyp
 import org.example.kalkulationsprogramm.domain.LieferantGeschaeftsdokument
 import org.example.kalkulationsprogramm.repository.BelegKostenstellenAnteilRepository
 import org.example.kalkulationsprogramm.repository.BelegRepository
+import org.example.kalkulationsprogramm.repository.FrontendUserProfileRepository
 import org.example.kalkulationsprogramm.repository.KostenstelleRepository
 import org.example.kalkulationsprogramm.repository.LieferantDokumentProjektAnteilRepository
 import org.example.kalkulationsprogramm.repository.LieferantDokumentRepository
 import org.example.kalkulationsprogramm.repository.LieferantGeschaeftsdokumentRepository
+import org.example.kalkulationsprogramm.repository.ProjektRepository
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -32,6 +36,8 @@ class BestellungsUebersichtController(
     private val projektAnteilRepository: LieferantDokumentProjektAnteilRepository,
     private val belegRepository: BelegRepository,
     private val belegKostenstellenAnteilRepository: BelegKostenstellenAnteilRepository,
+    private val projektRepository: ProjektRepository? = null,
+    private val frontendUserProfileRepository: FrontendUserProfileRepository? = null,
 ) {
     @GetMapping
     @Transactional(readOnly = true)
@@ -119,14 +125,59 @@ class BestellungsUebersichtController(
     }
 
     @PostMapping("/zuordnen")
+    @Transactional
     fun zuordnen(@RequestBody request: ZuordnungRequest): ResponseEntity<Void> {
-        if (request.geschaeftsdokumentId == null) return ResponseEntity.badRequest().build()
+        val geschaeftsdokumentId = request.geschaeftsdokumentId ?: return ResponseEntity.badRequest().build()
+        val gd = geschaeftsdokumentRepository.findById(geschaeftsdokumentId).orElse(null)
+            ?: return ResponseEntity.notFound().build()
+        val dokument = gd.dokument ?: return ResponseEntity.badRequest().build()
+        projektAnteilRepository.deleteAll(projektAnteilRepository.findByDokumentId(dokument.id))
+        val user = request.frontendUserProfileId?.let { frontendUserProfileRepository?.findById(it)?.orElse(null) }
+        request.projektAnteile.orEmpty()
+            .filter { (it.projektId != null || it.kostenstelleId != null) && (it.prozentanteil != null || it.betrag != null) }
+            .forEach { anteilRequest ->
+                val anteil = LieferantDokumentProjektAnteil().apply {
+                    this.dokument = dokument
+                    projekt = anteilRequest.projektId?.let { projektRepository?.findById(it)?.orElse(null) }
+                    kostenstelle = anteilRequest.kostenstelleId?.let { kostenstelleRepository.findById(it).orElse(null) }
+                    absoluterBetrag = anteilRequest.betrag
+                    prozent = if (absoluterBetrag == null) anteilRequest.prozentanteil?.toInt() else null
+                    beschreibung = anteilRequest.beschreibung
+                    zugeordnetVon = user
+                    zugeordnetAm = LocalDateTime.now()
+                    streckungJahre = anteilRequest.streckungJahre?.coerceAtLeast(1) ?: 1
+                    streckungStartJahr = gd.dokumentDatum?.year ?: LocalDate.now().year
+                }
+                anteil.berechneAnteil(gd.betragNetto, gd.betragBrutto)
+                projektAnteilRepository.save(anteil)
+            }
         return ResponseEntity.noContent().build()
     }
 
     @PostMapping("/beleg-zuordnen")
+    @Transactional
     fun belegZuordnen(@RequestBody request: BelegZuordnungRequest): ResponseEntity<Void> {
-        if (request.belegId == null) return ResponseEntity.badRequest().build()
+        val belegId = request.belegId ?: return ResponseEntity.badRequest().build()
+        val beleg = belegRepository.findById(belegId).orElse(null) ?: return ResponseEntity.notFound().build()
+        belegKostenstellenAnteilRepository.deleteByBelegId(belegId)
+        val user = request.frontendUserProfileId?.let { frontendUserProfileRepository?.findById(it)?.orElse(null) }
+        request.projektAnteile.orEmpty()
+            .filter { it.kostenstelleId != null && (it.prozentanteil != null || it.betrag != null) }
+            .forEach { anteilRequest ->
+                val anteil = BelegKostenstellenAnteil().apply {
+                    this.beleg = beleg
+                    kostenstelle = anteilRequest.kostenstelleId?.let { kostenstelleRepository.findById(it).orElse(null) }
+                    absoluterBetrag = anteilRequest.betrag
+                    prozent = if (absoluterBetrag == null) anteilRequest.prozentanteil?.toInt() else null
+                    beschreibung = anteilRequest.beschreibung
+                    zugeordnetVon = user
+                    zugeordnetAm = LocalDateTime.now()
+                    streckungJahre = anteilRequest.streckungJahre?.coerceAtLeast(1) ?: 1
+                    streckungStartJahr = beleg.belegDatum?.year ?: LocalDate.now().year
+                }
+                anteil.berechneAnteil(beleg.betragNetto, beleg.betragBrutto)
+                belegKostenstellenAnteilRepository.save(anteil)
+            }
         return ResponseEntity.noContent().build()
     }
 
