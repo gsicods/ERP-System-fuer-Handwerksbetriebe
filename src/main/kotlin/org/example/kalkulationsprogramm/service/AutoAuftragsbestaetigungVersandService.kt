@@ -2,34 +2,55 @@ package org.example.kalkulationsprogramm.service
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.example.email.EmailService
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokument
 import org.example.kalkulationsprogramm.domain.AusgangsGeschaeftsDokumentTyp
 import org.example.kalkulationsprogramm.domain.DokumentFreigabe
+import org.example.kalkulationsprogramm.domain.Kunde
+import org.example.kalkulationsprogramm.domain.Textbaustein
 import org.example.kalkulationsprogramm.repository.AusgangsGeschaeftsDokumentRepository
 import org.example.kalkulationsprogramm.repository.DokumentFreigabeRepository
+import org.example.kalkulationsprogramm.service.RechnungPdfService.ContentBlockDto
 import org.example.kalkulationsprogramm.service.RechnungPdfService.FormBlockDto
+import org.example.kalkulationsprogramm.service.RechnungPdfService.KopfdatenDto
+import org.example.kalkulationsprogramm.service.RechnungPdfService.RechnungDto
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.nio.file.Files
+import java.nio.file.Path
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.io.IOException
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import java.util.Optional
 
 @Service
 open class AutoAuftragsbestaetigungVersandService(
-    private val ausgangsGeschaeftsDokumentRepository: AusgangsGeschaeftsDokumentRepository? = null,
-    private val dokumentFreigabeRepository: DokumentFreigabeRepository? = null,
-    private val projektEmailArchivService: ProjektEmailArchivService? = null,
+    private val rechnungPdfService: RechnungPdfService,
+    private val systemSettingsService: SystemSettingsService,
+    private val emailTextTemplateService: EmailTextTemplateService,
+    private val ausgangsGeschaeftsDokumentRepository: AusgangsGeschaeftsDokumentRepository,
+    private val formularTemplateService: FormularTemplateService,
+    private val formularTextbausteinDefaultService: FormularTextbausteinDefaultService,
+    private val emailSignatureService: EmailSignatureService,
+    private val projektEmailArchivService: ProjektEmailArchivService,
+    private val dokumentFreigabeRepository: DokumentFreigabeRepository,
 ) {
     @Transactional
     open fun versendeNachAnnahme(abId: Long?, empfaenger: String?, freigabeUuid: String?): Boolean {
         val id = abId ?: return false
-        val ab = ausgangsGeschaeftsDokumentRepository?.findById(id)?.orElse(null) ?: return false
-        val freigabe = freigabeUuid?.let { dokumentFreigabeRepository?.findByUuid(it)?.orElse(null) }
+        val ab = ausgangsGeschaeftsDokumentRepository.findById(id).orElse(null) ?: run {
+            log.warn("Auto-AB-Versand uebersprungen: Dokument {} nicht mehr vorhanden", id)
+            return false
+        }
+        val freigabe = freigabeUuid?.let { dokumentFreigabeRepository.findByUuid(it).orElse(null) }
         return versende(ab, empfaenger, freigabe)
     }
 
@@ -46,17 +67,259 @@ open class AutoAuftragsbestaetigungVersandService(
             log.warn("Auto-AB-Versand uebersprungen: kein Empfaenger fuer AB {}", ab.dokumentNummer)
             return false
         }
-        markiereAlsVersendet(ab)
-        log.info("Auto-AB {} als versendet markiert", ab.dokumentNummer)
-        return true
+
+        var tempPdf: Path? = null
+        return try {
+            val pdfBytes = generierePdfFuerAb(ab)
+            val filename = "Auftragsbestaetigung_${sanitizeForFilename(ab.dokumentNummer)}.pdf"
+            tempPdf = Files.createTempFile("auto-ab-", ".pdf")
+            Files.write(tempPdf, pdfBytes)
+
+            var content = baueEmailInhalt(ab)
+            if (freigabe != null) {
+                content = mitAnnahmeBeleg(content, freigabe)
+            }
+
+            if (!systemSettingsService.isSmtpConfigured()) {
+                log.warn("Auto-AB-Versand uebersprungen: SMTP ist nicht konfiguriert")
+                return false
+            }
+
+            val absender = ermittleAbsenderAdresse()
+            val htmlMitSignatur = emailSignatureService.appendSystemSignatureIfConfigured(content.htmlBody())
+            val messageId = EmailService(
+                systemSettingsService.smtpHost,
+                systemSettingsService.smtpPort,
+                systemSettingsService.smtpUsername,
+                systemSettingsService.smtpPassword,
+            ).sendEmailAndReturnMessageId(
+                empfaenger,
+                null,
+                absender,
+                content.subject(),
+                htmlMitSignatur,
+                tempPdf.toString(),
+                filename,
+            )
+
+            archiviereAlsProjektEmail(ab, empfaenger, absender, content.subject(), htmlMitSignatur, messageId, tempPdf, filename)
+            markiereAlsVersendet(ab)
+            log.info("Auto-AB {} per Mail versendet", ab.dokumentNummer)
+            true
+        } catch (ex: Exception) {
+            log.error("Auto-AB-Versand fuer {} fehlgeschlagen: {}", ab.dokumentNummer, ex.message, ex)
+            false
+        } finally {
+            tempPdf?.let { runCatching { Files.deleteIfExists(it) } }
+        }
+    }
+
+    internal var archivRetryPauseMillis: Long = 2_000L
+
+    internal open fun archiviereAlsProjektEmail(
+        ab: AusgangsGeschaeftsDokument,
+        empfaenger: String?,
+        absender: String?,
+        subject: String?,
+        htmlBody: String?,
+        messageId: String?,
+        pdf: Path,
+        dateiname: String?,
+    ) {
+        val projekt = ab.projekt ?: run {
+            log.warn("Auto-AB {} versendet, aber ohne Projekt - Mail kann nicht im E-Mail-Center archiviert werden", ab.dokumentNummer)
+            return
+        }
+        for (versuch in 1..MAX_ARCHIV_VERSUCHE) {
+            try {
+                projektEmailArchivService.archiviereVersandteEmail(projekt, empfaenger, absender, subject, htmlBody, messageId, pdf, dateiname)
+                return
+            } catch (ex: Exception) {
+                if (versuch == MAX_ARCHIV_VERSUCHE) {
+                    log.error(
+                        "Auto-AB {} versendet, aber Archivierung im E-Mail-Center nach {} Versuchen fehlgeschlagen: {}",
+                        ab.dokumentNummer,
+                        versuch,
+                        ex.message,
+                        ex,
+                    )
+                    return
+                }
+                val pause = archivRetryPauseMillis * versuch
+                log.warn(
+                    "Auto-AB {} Archivierung fehlgeschlagen (Versuch {}/{}): {} - neuer Versuch in {}ms",
+                    ab.dokumentNummer,
+                    versuch,
+                    MAX_ARCHIV_VERSUCHE,
+                    ex.message,
+                    pause,
+                )
+                try {
+                    Thread.sleep(pause)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return
+                }
+            }
+        }
     }
 
     @Transactional
     protected open fun markiereAlsVersendet(ab: AusgangsGeschaeftsDokument) {
         val id = ab.id ?: return
-        val frisch = ausgangsGeschaeftsDokumentRepository?.findById(id)?.orElse(null) ?: return
+        val frisch = ausgangsGeschaeftsDokumentRepository.findById(id).orElse(null) ?: return
         frisch.versandDatum = LocalDate.now()
         ausgangsGeschaeftsDokumentRepository.save(frisch)
+    }
+
+    private fun generierePdfFuerAb(ab: AusgangsGeschaeftsDokument): ByteArray {
+        val kopfdaten = buildKopfdaten(ab)
+        val templateName = ladeTemplateName(ab).orElse(null)
+        val contentBlocks = baueContentBlocks(ab, templateName)
+        val vorlage = ladeVorlagenDaten(templateName)
+        val layout = if (vorlage.formBlocks.isEmpty()) {
+            RechnungPdfService.getDefaultLayout()
+        } else {
+            RechnungPdfService.createLayoutFromFormBlocks(vorlage.formBlocks, 595f, 842f)
+        }
+        return rechnungPdfService.generatePdfBytes(
+            RechnungDto(
+                layout = layout,
+                kopfdaten = kopfdaten,
+                contentBlocks = contentBlocks,
+                formBlocks = vorlage.formBlocks,
+                schlusstext = null,
+                backgroundImagePage1 = vorlage.backgroundImagePage1,
+                backgroundImagePage2 = vorlage.backgroundImagePage2,
+                globalRabattProzent = null,
+                abrechnungsverlauf = null,
+                betragNetto = ab.betragNetto,
+                abschlagInfo = null,
+            ),
+        )
+    }
+
+    private fun baueContentBlocks(ab: AusgangsGeschaeftsDokument, templateName: String?): List<ContentBlockDto> {
+        val kern = parsePositionenJsonZuContentBlocks(ab.positionenJson)
+        if (templateName.isNullOrBlank()) return kern
+
+        val defaults = try {
+            formularTextbausteinDefaultService.loadForDokumenttyp(templateName, "Auftragsbestätigung")
+        } catch (ex: Exception) {
+            log.warn("Standard-Textbausteine fuer AB konnten nicht geladen werden: {}", ex.message)
+            return kern
+        }
+
+        val ctx = bauePlatzhalterKontext(ab)
+        return buildList {
+            defaults.vortexte.forEach { add(textbausteinAlsBlock(it, ctx)) }
+            kern.forEach { add(loeseBlockAuf(it, ctx)) }
+            defaults.nachtexte.forEach { add(textbausteinAlsBlock(it, ctx)) }
+        }
+    }
+
+    private fun buildKopfdaten(ab: AusgangsGeschaeftsDokument): KopfdatenDto {
+        val kunde = effektiverKunde(ab)
+        val vorgaenger = ab.vorgaenger
+        return KopfdatenDto(
+            rechnungsnummer = ab.dokumentNummer,
+            rechnungsDatum = ab.datum,
+            leistungsDatum = ab.datum,
+            kundenName = kunde?.name,
+            kundenAdresse = kunde?.let(::baueAdresseAusKunde),
+            betreff = ab.betreff,
+            kundennummer = kunde?.kundennummer,
+            dokumentTyp = "Auftragsbestätigung",
+            bezugsdokument = vorgaenger?.dokumentNummer,
+            projektnummer = ermittleProjektnummer(ab),
+            bauvorhaben = ermittleBauvorhaben(ab),
+            bezugsdokumentTyp = vorgaenger?.typ?.let(::typLabel),
+            bezugsdokumentDatum = vorgaenger?.datum?.format(DATUM_FORMAT),
+            zahlungszielTage = ab.zahlungszielTage,
+        )
+    }
+
+    internal open fun ladeTemplateName(ab: AusgangsGeschaeftsDokument?): Optional<String> {
+        val direkt = ladeTemplateNameFuer("Auftragsbestätigung")
+        if (direkt.isPresent) return direkt
+        val vorgaengerTyp = ab?.vorgaenger?.typ ?: return Optional.empty()
+        return ladeTemplateNameFuer(typLabel(vorgaengerTyp))
+    }
+
+    private fun ladeTemplateNameFuer(dokumenttypLabel: String): Optional<String> =
+        try {
+            formularTemplateService.getPreferredTemplateForDokumenttyp(dokumenttypLabel, null)
+        } catch (ex: Exception) {
+            log.warn("Vorlagenzuordnung fuer '{}' konnte nicht ermittelt werden: {}", dokumenttypLabel, ex.message)
+            Optional.empty()
+        }
+
+    private fun ladeVorlagenDaten(templateName: String?): VorlagenDaten {
+        if (templateName.isNullOrBlank()) return VorlagenDaten.leer()
+        return try {
+            parseVorlagenHtml(formularTemplateService.loadNamedTemplate(templateName).html())
+        } catch (ex: Exception) {
+            log.warn("Vorlage '{}' konnte nicht geladen werden, fallback auf Standard-Briefkopf: {}", templateName, ex.message)
+            VorlagenDaten.leer()
+        }
+    }
+
+    private fun baueEmailInhalt(ab: AusgangsGeschaeftsDokument): EmailService.EmailContent {
+        val ctx = bauePlatzhalterKontext(ab)
+        val templateContent = runCatching { emailTextTemplateService.render("Auftragsbestätigung", ctx) }.getOrNull()
+        if (templateContent != null && !templateContent.subject().isNullOrBlank()) {
+            return templateContent
+        }
+        val nummer = ab.dokumentNummer ?: ""
+        val subject = if (nummer.isBlank()) "Ihre Auftragsbestätigung" else "Ihre Auftragsbestätigung $nummer"
+        val body = "<p>${ctx["ANREDE"] ?: "Sehr geehrte Damen und Herren"},</p>" +
+            "<p>anbei erhalten Sie Ihre Auftragsbestätigung.</p>" +
+            "<p>Mit freundlichen Grüßen</p>"
+        return EmailService.EmailContent(subject, body)
+    }
+
+    private fun mitAnnahmeBeleg(content: EmailService.EmailContent, freigabe: DokumentFreigabe): EmailService.EmailContent {
+        val angenommen = freigabe.akzeptiertAm?.format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")) ?: ""
+        val beleg = "<div style=\"margin:20px 0;padding:14px 16px;border-left:3px solid #500010;background:#fafafa;font-family:Arial,Helvetica,sans-serif;\">" +
+            "<p style=\"margin:0 0 6px 0;font-weight:600;color:#1e293b;\">Angebot digital angenommen - diese Auftragsbestätigung wurde automatisch erstellt.</p>" +
+            "<p style=\"margin:0;color:#475569;line-height:1.45;\">Angenommen am: $angenommen</p>" +
+            "<p style=\"margin:6px 0 0 0;color:#64748b;font-size:12px;\">Audit-Hash: ${freigabe.hashAcceptance ?: ""}</p>" +
+            "</div>"
+        return EmailService.EmailContent(content.subject(), beleg + (content.htmlBody() ?: ""))
+    }
+
+    private fun ermittleAbsenderAdresse(): String? =
+        systemSettingsService.mailFromAddress.takeIf { !it.isNullOrBlank() } ?: systemSettingsService.smtpUsername
+
+    private fun bauePlatzhalterKontext(ab: AusgangsGeschaeftsDokument): Map<String, String> {
+        val kunde = effektiverKunde(ab)
+        val vorgaenger = ab.vorgaenger
+        val ctx = mutableMapOf<String, String>()
+        ctx["DOKUMENTNUMMER"] = nullSafe(ab.dokumentNummer)
+        ctx["RECHNUNGSNUMMER"] = nullSafe(ab.dokumentNummer)
+        ctx["DOKUMENTTYP"] = "Auftragsbestätigung"
+        ctx["DATUM"] = ab.datum?.format(DATUM_FORMAT) ?: ""
+        ctx["BETREFF"] = nullSafe(ab.betreff)
+        ctx["BAUVORHABEN"] = nullSafe(ermittleBauvorhaben(ab))
+        ctx["PROJEKTNUMMER"] = nullSafe(ermittleProjektnummer(ab))
+        ctx["ZAHLUNGSZIEL_TAGE"] = ab.zahlungszielTage?.toString() ?: "8"
+        ctx["ZAHLUNGSZIEL"] = berechneZahlungszielDatum(ab)
+        if (kunde != null) {
+            ctx["KUNDENNAME"] = nullSafe(kunde.name)
+            ctx["KUNDENNUMMER"] = nullSafe(kunde.kundennummer)
+            ctx["KUNDENADRESSE"] = nullSafe(baueAdresseAusKunde(kunde))
+            ctx["ANSPRECHPARTNER"] = nullSafe(kunde.ansprechspartner)
+            ctx["ANREDE"] = kunde.anrede?.toAnredeText() ?: "Sehr geehrte Damen und Herren"
+        } else {
+            ctx["ANREDE"] = "Sehr geehrte Damen und Herren"
+        }
+        if (vorgaenger != null) {
+            ctx["BEZUGSDOKUMENT"] = nullSafe(vorgaenger.dokumentNummer)
+            ctx["BEZUGSDOKUMENTNUMMER"] = nullSafe(vorgaenger.dokumentNummer)
+            ctx["BEZUGSDOKUMENTTYP"] = vorgaenger.typ?.let(::typLabel).orEmpty()
+            ctx["BEZUGSDOKUMENTDATUM"] = vorgaenger.datum?.format(DATUM_FORMAT) ?: ""
+        }
+        return ctx
     }
 
     data class VorlagenDaten(
@@ -77,13 +340,99 @@ open class AutoAuftragsbestaetigungVersandService(
     companion object {
         private val log = LoggerFactory.getLogger(AutoAuftragsbestaetigungVersandService::class.java)
         private val objectMapper = ObjectMapper()
+        private val DATUM_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+        private const val MAX_ARCHIV_VERSUCHE = 3
 
         @JvmStatic
         fun aufloesePlatzhalter(text: String?, ctx: Map<String, String>): String =
-            ctx.entries.fold(text.orEmpty()) { acc, (key, value) ->
-                acc.replace("{{${key.uppercase()}}}", value)
-                    .replace("{{${key.lowercase()}}}", value)
+            if (text.isNullOrEmpty()) {
+                text.orEmpty()
+            } else {
+                Regex("\\{\\{\\s*([a-zA-Z0-9_äöüÄÖÜß]+)\\s*}}").replace(text) { match ->
+                    ctx[match.groupValues[1].uppercase(Locale.GERMAN)] ?: match.value
+                }
             }
+
+        private fun loeseBlockAuf(block: ContentBlockDto, ctx: Map<String, String>): ContentBlockDto =
+            ContentBlockDto(
+                block.type,
+                aufloesePlatzhalter(block.text, ctx),
+                block.fett,
+                block.fontSize,
+                block.pos,
+                aufloesePlatzhalter(block.beschreibung, ctx),
+                aufloesePlatzhalter(block.beschreibungHtml, ctx),
+                block.menge,
+                block.einheit,
+                block.einzelpreis,
+                block.gesamt,
+                block.optional,
+                aufloesePlatzhalter(block.sectionLabel, ctx),
+                block.rabattProzent,
+            )
+
+        private fun textbausteinAlsBlock(textbaustein: Textbaustein, ctx: Map<String, String>): ContentBlockDto =
+            ContentBlockDto(
+                "TEXT",
+                aufloesePlatzhalter(textbaustein.html ?: "", ctx),
+                false,
+                10,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
+                null,
+                null,
+            )
+
+        private fun typLabel(typ: AusgangsGeschaeftsDokumentTyp): String =
+            when (typ) {
+                AusgangsGeschaeftsDokumentTyp.ANGEBOT -> "Angebot"
+                AusgangsGeschaeftsDokumentTyp.NACHTRAGSANGEBOT -> "Nachtragsangebot"
+                AusgangsGeschaeftsDokumentTyp.AUFTRAGSBESTAETIGUNG -> "Auftragsbestätigung"
+                AusgangsGeschaeftsDokumentTyp.RECHNUNG -> "Rechnung"
+                AusgangsGeschaeftsDokumentTyp.TEILRECHNUNG -> "Teilrechnung"
+                AusgangsGeschaeftsDokumentTyp.ABSCHLAGSRECHNUNG -> "Abschlagsrechnung"
+                AusgangsGeschaeftsDokumentTyp.SCHLUSSRECHNUNG -> "Schlussrechnung"
+                AusgangsGeschaeftsDokumentTyp.GUTSCHRIFT -> "Gutschrift"
+                AusgangsGeschaeftsDokumentTyp.STORNO -> "Stornorechnung"
+                AusgangsGeschaeftsDokumentTyp.ZAHLUNGSERINNERUNG -> "Zahlungserinnerung"
+                AusgangsGeschaeftsDokumentTyp.ERSTE_MAHNUNG -> "1. Mahnung"
+                AusgangsGeschaeftsDokumentTyp.ZWEITE_MAHNUNG -> "2. Mahnung"
+            }
+
+        private fun berechneZahlungszielDatum(ab: AusgangsGeschaeftsDokument): String {
+            val tage = ab.zahlungszielTage ?: 8
+            val basis = ab.datum ?: LocalDate.now()
+            return basis.plusDays(tage.toLong()).format(DATUM_FORMAT)
+        }
+
+        private fun effektiverKunde(ab: AusgangsGeschaeftsDokument): Kunde? =
+            ab.kunde ?: ab.projekt?.kundenId ?: ab.anfrage?.kunde
+
+        private fun ermittleBauvorhaben(ab: AusgangsGeschaeftsDokument): String? =
+            ab.projekt?.bauvorhaben ?: ab.anfrage?.bauvorhaben ?: ab.betreff
+
+        private fun ermittleProjektnummer(ab: AusgangsGeschaeftsDokument): String =
+            ab.projekt?.auftragsnummer ?: if (ab.anfrage != null) "-" else ""
+
+        private fun baueAdresseAusKunde(kunde: Kunde): String =
+            listOfNotNull(
+                kunde.name,
+                kunde.strasse,
+                listOfNotNull(kunde.plz, kunde.ort).joinToString(" ").takeIf { it.isNotBlank() },
+            ).joinToString("\n")
+
+        private fun sanitizeForFilename(input: String?): String =
+            input.orEmpty()
+                .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                .ifBlank { "ohne_nummer" }
+
+        private fun nullSafe(value: String?): String = value?.trim().orEmpty()
 
         @JvmStatic
         fun parseVorlagenHtml(html: String?): VorlagenDaten {
