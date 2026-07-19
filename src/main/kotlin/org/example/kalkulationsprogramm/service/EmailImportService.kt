@@ -262,7 +262,50 @@ open class EmailImportService(
     }
 
     fun deleteEmailFromServer(email: Email) {
-        log.debug("Server-side delete not implemented for email {}", email.id)
+        val folderName = email.imapFolder?.takeIf { it.isNotBlank() } ?: run {
+            log.debug("Server-side delete uebersprungen fuer Email {}: kein IMAP-Ordner", email.id)
+            return
+        }
+        val uid = email.imapUid ?: run {
+            log.debug("Server-side delete uebersprungen fuer Email {}: keine IMAP-UID", email.id)
+            return
+        }
+        if (!systemSettingsService.isImapConfigured) {
+            log.debug("Server-side delete uebersprungen fuer Email {}: IMAP nicht konfiguriert", email.id)
+            return
+        }
+
+        val props = Properties().apply {
+            put("mail.store.protocol", "imaps")
+            put("mail.mime.address.strict", "false")
+            put("mail.imaps.ssl.enable", "true")
+            put("mail.imaps.connectiontimeout", "15000")
+            put("mail.imaps.timeout", "30000")
+        }
+        val session = Session.getInstance(props)
+        runCatching {
+            session.getStore("imaps").use { store ->
+                store.connect(
+                    systemSettingsService.imapHost,
+                    systemSettingsService.imapPort,
+                    systemSettingsService.imapUsername,
+                    systemSettingsService.imapPassword,
+                )
+                val folder = store.getFolder(folderName) as? IMAPFolder
+                    ?: throw MessagingException("Folder ist kein IMAPFolder: $folderName")
+                folder.open(Folder.READ_WRITE)
+                try {
+                    val message = folder.getMessageByUID(uid)
+                        ?: throw MessagingException("Message UID $uid nicht gefunden in $folderName")
+                    message.setFlag(Flags.Flag.DELETED, true)
+                    log.info("Email {} serverseitig als geloescht markiert (folder={}, uid={})", email.id, folderName, uid)
+                } finally {
+                    folder.close(true)
+                }
+            }
+        }.onFailure {
+            log.warn("Server-side delete fehlgeschlagen fuer Email {}: {}", email.id, it.message)
+        }
     }
 
     private fun extractContent(part: Part): ExtractedContent {
