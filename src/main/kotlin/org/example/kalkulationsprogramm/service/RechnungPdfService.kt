@@ -1,15 +1,26 @@
 package org.example.kalkulationsprogramm.service
 
+import com.lowagie.text.Element
+import com.lowagie.text.Font
+import com.lowagie.text.FontFactory
 import com.lowagie.text.Document
 import com.lowagie.text.PageSize
 import com.lowagie.text.Paragraph
+import com.lowagie.text.Phrase
 import com.lowagie.text.Rectangle
+import com.lowagie.text.pdf.PdfPCell
+import com.lowagie.text.pdf.PdfPTable
 import com.lowagie.text.pdf.PdfWriter
 import org.springframework.stereotype.Service
+import java.awt.Color
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.math.BigDecimal
+import java.math.RoundingMode
+import java.text.NumberFormat
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Service
 open class RechnungPdfService {
@@ -194,18 +205,22 @@ open class RechnungPdfService {
     }
 
     open fun generatePdf(data: RechnungDto, out: OutputStream) {
-        val document = Document(PageSize.A4)
-        PdfWriter.getInstance(document, out)
-        document.open()
-        document.add(Paragraph(data.kopfdaten.dokumentTyp ?: "Dokument"))
-        data.kopfdaten.rechnungsnummer?.let { document.add(Paragraph(it)) }
-        data.kopfdaten.kundenName?.let { document.add(Paragraph(it)) }
-        data.contentBlocks.orEmpty().forEach { block ->
-            val text = block.text ?: block.beschreibung ?: block.sectionLabel
-            if (!text.isNullOrBlank()) document.add(Paragraph(text.replace(Regex("<[^>]+>"), " ")))
+        val document = Document(PageSize.A4, 42f, 42f, 48f, 44f)
+        try {
+            PdfWriter.getInstance(document, out)
+            document.open()
+            addHeader(document, data.kopfdaten)
+            addContentBlocks(document, data.contentBlocks.orEmpty())
+            addTotals(document, data)
+            data.schlusstext?.takeIf { it.isNotBlank() }?.let {
+                document.add(Paragraph(stripHtml(it), FONT_NORMAL).apply { spacingBefore = 12f })
+            }
+            addFooter(document, data.kopfdaten)
+        } finally {
+            if (document.isOpen) {
+                document.close()
+            }
         }
-        data.schlusstext?.takeIf { it.isNotBlank() }?.let { document.add(Paragraph(it.replace(Regex("<[^>]+>"), " "))) }
-        document.close()
     }
 
     open fun generatePdfBytes(data: RechnungDto): ByteArray =
@@ -214,7 +229,210 @@ open class RechnungPdfService {
             it.toByteArray()
         }
 
+    private fun addHeader(document: Document, kopf: KopfdatenDto) {
+        val title = kopf.dokumentTyp?.takeIf { it.isNotBlank() } ?: "Dokument"
+        document.add(Paragraph(title, FONT_TITLE).apply {
+            alignment = Element.ALIGN_RIGHT
+            spacingAfter = 10f
+        })
+
+        val meta = PdfPTable(floatArrayOf(1.2f, 1f)).apply {
+            widthPercentage = 100f
+            setSpacingAfter(16f)
+        }
+        meta.addCell(noBorderCell(kopf.kundenName.orEmpty() + "\n" + kopf.kundenAdresse.orEmpty(), FONT_NORMAL, Element.ALIGN_LEFT))
+        meta.addCell(
+            noBorderCell(
+                listOfNotNull(
+                    kopf.rechnungsnummer?.let { "Nr.: $it" },
+                    kopf.rechnungsDatum?.format(DATE_DE)?.let { "Datum: $it" },
+                    kopf.kundennummer?.let { "Kundennr.: $it" },
+                    kopf.projektnummer?.takeIf { it.isNotBlank() }?.let { "Projekt: $it" },
+                    kopf.bezugsdokument?.takeIf { it.isNotBlank() }?.let { "Bezug: $it" },
+                ).joinToString("\n"),
+                FONT_NORMAL,
+                Element.ALIGN_RIGHT,
+            ),
+        )
+        document.add(meta)
+
+        kopf.betreff?.takeIf { it.isNotBlank() }?.let {
+            document.add(Paragraph(stripHtml(it), FONT_BOLD).apply { spacingAfter = 8f })
+        }
+        kopf.bauvorhaben?.takeIf { it.isNotBlank() }?.let {
+            document.add(Paragraph("Bauvorhaben: ${stripHtml(it)}", FONT_NORMAL).apply { spacingAfter = 8f })
+        }
+    }
+
+    private fun addContentBlocks(document: Document, blocks: List<ContentBlockDto>) {
+        var table: PdfPTable? = null
+        blocks.forEach { block ->
+            when {
+                block.isText() -> {
+                    table = flushTable(document, table)
+                    block.text?.takeIf { it.isNotBlank() }?.let {
+                        document.add(Paragraph(stripHtml(it), if (block.fett) FONT_BOLD else FONT_NORMAL).apply {
+                            spacingBefore = 6f
+                            spacingAfter = 6f
+                        })
+                    }
+                }
+                block.isSectionHeader() -> {
+                    table = flushTable(document, table)
+                    document.add(Paragraph(block.sectionLabel ?: "", FONT_HEADER).apply {
+                        spacingBefore = 10f
+                        spacingAfter = 4f
+                    })
+                }
+                block.isSeparator() -> {
+                    table = flushTable(document, table)
+                    document.add(Paragraph(" ").apply { spacingAfter = 4f })
+                }
+                block.isService() -> {
+                    if (table == null) table = createPositionTable()
+                    addServiceRow(requireNotNull(table), block)
+                }
+            }
+        }
+        flushTable(document, table)
+    }
+
+    private fun addTotals(document: Document, data: RechnungDto) {
+        val netto = data.betragNetto ?: sumNetto(data.contentBlocks.orEmpty())
+        val rabatt = data.globalRabattProzent?.takeIf { it.signum() > 0 } ?: BigDecimal.ZERO
+        val nettoNachRabatt = if (rabatt.signum() > 0) {
+            netto.multiply(BigDecimal.ONE.subtract(rabatt.divide(BigDecimal("100"), 4, RoundingMode.HALF_UP)))
+        } else {
+            netto
+        }.setScale(2, RoundingMode.HALF_UP)
+        val mwstSatz = BigDecimal("0.19")
+        val mwst = nettoNachRabatt.multiply(mwstSatz).setScale(2, RoundingMode.HALF_UP)
+        val brutto = nettoNachRabatt.add(mwst).setScale(2, RoundingMode.HALF_UP)
+
+        val table = PdfPTable(floatArrayOf(1f, 0.35f)).apply {
+            widthPercentage = 48f
+            horizontalAlignment = Element.ALIGN_RIGHT
+            setSpacingBefore(12f)
+        }
+        addTotalRow(table, "Netto", netto)
+        if (rabatt.signum() > 0) {
+            addTotalRow(table, "Rabatt ${rabatt.stripTrailingZeros().toPlainString()}%", netto.subtract(nettoNachRabatt).negate())
+            addTotalRow(table, "Netto nach Rabatt", nettoNachRabatt)
+        }
+        data.abrechnungsverlauf?.positionen.orEmpty()
+            .filter { it.betragNetto != null }
+            .forEach { addTotalRow(table, "abzgl. ${it.typ ?: "Abschlag"} ${it.dokumentNummer ?: ""}".trim(), it.betragNetto!!.negate()) }
+        addTotalRow(table, "MwSt. 19%", mwst)
+        addTotalRow(table, "Brutto", brutto, FONT_BOLD)
+        document.add(table)
+    }
+
+    private fun addFooter(document: Document, kopf: KopfdatenDto) {
+        val zahlungsziel = kopf.zahlungszielTage
+        if (zahlungsziel != null && zahlungsziel > 0) {
+            document.add(Paragraph("Zahlungsziel: $zahlungsziel Tage", FONT_SMALL).apply {
+                spacingBefore = 14f
+            })
+        }
+    }
+
+    private fun createPositionTable(): PdfPTable =
+        PdfPTable(floatArrayOf(0.14f, 0.42f, 0.12f, 0.12f, 0.16f, 0.16f)).apply {
+            widthPercentage = 100f
+            setSpacingBefore(6f)
+            setSpacingAfter(8f)
+            listOf("Pos.", "Beschreibung", "Menge", "Einheit", "Einzel", "Gesamt").forEach {
+                addCell(headerCell(it))
+            }
+        }
+
+    private fun addServiceRow(table: PdfPTable, block: ContentBlockDto) {
+        val beschreibung = listOfNotNull(block.beschreibung, block.beschreibungHtml?.let(::stripHtml))
+            .joinToString("\n")
+            .ifBlank { "-" }
+        table.addCell(simpleCell(block.pos.orEmpty()))
+        table.addCell(simpleCell(beschreibung))
+        table.addCell(simpleCell(formatNumber(block.menge), Element.ALIGN_RIGHT))
+        table.addCell(simpleCell(block.einheit.orEmpty()))
+        table.addCell(simpleCell(formatCurrency(block.einzelpreis), Element.ALIGN_RIGHT))
+        table.addCell(simpleCell(formatCurrency(block.gesamt ?: berechneGesamt(block)), Element.ALIGN_RIGHT))
+    }
+
+    private fun flushTable(document: Document, table: PdfPTable?): PdfPTable? {
+        if (table != null && table.rows.size > 1) {
+            document.add(table)
+        }
+        return null
+    }
+
+    private fun addTotalRow(table: PdfPTable, label: String, value: BigDecimal, font: Font = FONT_NORMAL) {
+        table.addCell(noBorderCell(label, font, Element.ALIGN_RIGHT))
+        table.addCell(noBorderCell(formatCurrency(value), font, Element.ALIGN_RIGHT))
+    }
+
+    private fun sumNetto(blocks: List<ContentBlockDto>): BigDecimal =
+        blocks.filter { it.isService() && !it.optional }
+            .fold(BigDecimal.ZERO) { acc, block -> acc.add(block.gesamt ?: berechneGesamt(block)) }
+            .setScale(2, RoundingMode.HALF_UP)
+
+    private fun berechneGesamt(block: ContentBlockDto): BigDecimal {
+        val menge = block.menge ?: BigDecimal.ONE
+        val preis = block.einzelpreis ?: BigDecimal.ZERO
+        val rabatt = block.rabattProzent ?: BigDecimal.ZERO
+        val basis = menge.multiply(preis)
+        return if (rabatt.signum() > 0) {
+            basis.multiply(BigDecimal.ONE.subtract(rabatt.divide(BigDecimal("100"), 4, RoundingMode.HALF_UP)))
+        } else {
+            basis
+        }.setScale(2, RoundingMode.HALF_UP)
+    }
+
+    private fun headerCell(text: String): PdfPCell =
+        PdfPCell(Phrase(text, FONT_BOLD)).apply {
+            backgroundColor = Color(235, 235, 235)
+            horizontalAlignment = Element.ALIGN_CENTER
+            setPadding(5f)
+        }
+
+    private fun simpleCell(text: String?, alignment: Int = Element.ALIGN_LEFT): PdfPCell =
+        PdfPCell(Phrase(text.orEmpty(), FONT_NORMAL)).apply {
+            horizontalAlignment = alignment
+            verticalAlignment = Element.ALIGN_TOP
+            setPadding(5f)
+        }
+
+    private fun noBorderCell(text: String?, font: Font, alignment: Int): PdfPCell =
+        PdfPCell(Phrase(text.orEmpty(), font)).apply {
+            border = Rectangle.NO_BORDER
+            horizontalAlignment = alignment
+            setPadding(3f)
+        }
+
+    private fun stripHtml(value: String): String =
+        value.replace(Regex("(?i)<br\\s*/?>"), "\n")
+            .replace(Regex("<[^>]+>"), " ")
+            .replace(Regex("[ \\t]+"), " ")
+            .trim()
+
+    private fun formatCurrency(value: BigDecimal?): String =
+        CURRENCY.format(value ?: BigDecimal.ZERO)
+
+    private fun formatNumber(value: BigDecimal?): String =
+        if (value == null) "" else NUMBER.format(value)
+
     companion object {
+        private val FONT_NORMAL: Font = FontFactory.getFont(FontFactory.TIMES_ROMAN, 10f)
+        private val FONT_BOLD: Font = FontFactory.getFont(FontFactory.TIMES_BOLD, 10f)
+        private val FONT_SMALL: Font = FontFactory.getFont(FontFactory.TIMES_ROMAN, 8f)
+        private val FONT_HEADER: Font = FontFactory.getFont(FontFactory.TIMES_BOLD, 11f)
+        private val FONT_TITLE: Font = FontFactory.getFont(FontFactory.TIMES_BOLD, 16f)
+        private val DATE_DE: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+        private val CURRENCY: NumberFormat = NumberFormat.getCurrencyInstance(Locale.GERMANY)
+        private val NUMBER: NumberFormat = NumberFormat.getNumberInstance(Locale.GERMANY).apply {
+            minimumFractionDigits = 0
+            maximumFractionDigits = 3
+        }
+
         @JvmStatic
         fun getDefaultLayout(): LayoutDto =
             LayoutDto(
